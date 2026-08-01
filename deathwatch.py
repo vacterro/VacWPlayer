@@ -155,6 +155,7 @@ def handle_death(hwnd, cfg, templates):
 
 def main(replace=False):
     single_instance.ensure_single_instance("deathwatch", replace=replace)
+    single_instance.start_parent_watchdog()
     window_ctl.set_dpi_aware()
     cfg_path = os.path.join(BASE, "deathwatch_config.json")
     cfg = load_config()

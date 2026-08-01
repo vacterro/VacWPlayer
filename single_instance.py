@@ -1,10 +1,55 @@
 import os
 import sys
+import threading
+import time
 
 import win32api
 import win32con
 import win32event
+import win32process
 import winerror
+
+def _parent_alive(pid):
+    """Pure win32 liveness probe for a parent PID - no subprocess spawns."""
+    if pid <= 0:
+        return False
+    try:
+        handle = win32api.OpenProcess(win32con.PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    except Exception:
+        return False
+    try:
+        # STATUS_PROCESS_IS_TERMINATING / invalid handle both mean gone.
+        # STILL_ACTIVE = 259 (winerror has no STILL_ACTIVE attribute).
+        code = win32process.GetExitCodeProcess(handle)
+        return code == 259
+    except Exception:
+        return False
+    finally:
+        win32api.CloseHandle(handle)
+
+
+def start_parent_watchdog(interval_sec=2.0):
+    """Exit when the process that spawned us dies.
+
+    Engines are children of the GUI: if the GUI is killed or crashes, an
+    orphaned engine would keep holding its single-instance mutex and keep
+    firing clicks into BlueStacks. This watchdog makes the engine follow
+    its parent into death, so a fresh GUI launch always gets a clean set
+    of engines - one instance, always.
+    """
+    parent = os.getppid()
+
+    def _watch():
+        while True:
+            time.sleep(interval_sec)
+            if not _parent_alive(parent):
+                print(f"parent {parent} gone - exiting")
+                os._exit(0)
+
+    t = threading.Thread(target=_watch, daemon=True)
+    t.start()
+    return t
+
 
 _handles = []  # kept alive for the process lifetime; Windows won't let the
                # mutex go stale even on a hard crash, unlike a PID lock file
@@ -62,7 +107,10 @@ def ensure_single_instance(name, replace=False):
     """
     mutex_name = f"WildRiftTool_{name}"
     handle = win32event.CreateMutex(None, False, mutex_name)
-    already_running = win32api.GetLastError() == winerror.ERROR_ALREADY_EXISTS
+    err = win32api.GetLastError()
+    # ERROR_ACCESS_DENIED means the name exists but we may not open it -
+    # still "someone else holds the lock", treat it as busy either way.
+    already_running = err in (winerror.ERROR_ALREADY_EXISTS, winerror.ERROR_ACCESS_DENIED)
     _handles.append(handle)
 
     if already_running and replace:
@@ -71,7 +119,8 @@ def ensure_single_instance(name, replace=False):
         win32api.CloseHandle(handle)
         _kill_previous_holder(name)
         handle = win32event.CreateMutex(None, False, mutex_name)
-        already_running = win32api.GetLastError() == winerror.ERROR_ALREADY_EXISTS
+        err = win32api.GetLastError()
+        already_running = err in (winerror.ERROR_ALREADY_EXISTS, winerror.ERROR_ACCESS_DENIED)
         _handles.append(handle)
 
     if already_running:

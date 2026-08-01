@@ -4,6 +4,9 @@
 ## Setup
 
 - Windows + Python 3.11; project venv at `../venv` (sibling of project dir).
+- Launcher prefers system Python 3.11 (`%LOCALAPPDATA%\Programs\Python\Python3*\pythonw.exe`)
+  over the venv — the venv `pythonw.exe` is a stub wrapper that re-spawns the
+  system interpreter and creates duplicate GUI/engine processes.
 - `pip install -r requirements.txt` — mss, opencv-python, numpy, pywin32,
   pystray, pillow, pytest.
 - AutoHotkey v1: `AutoHotkeyU64.exe` next to the app if present, else the
@@ -15,13 +18,16 @@
 ## Run
 
 ```
-..\venv\Scripts\pythonw.exe main.pyw
+WildRiftAssistant.bat   (or: pythonw.exe main.pyw with system Python 3.11)
 ```
 
 - Single instance enforced (`single_instance.ensure_single_instance("wr_assistant", replace=True)`) —
   a second launch kills the previous one.
 - Ryze assist auto-starts 100ms after launch; engine watchdog auto-restarts the
   AHK runtime every 3s if it died.
+- Engines (deathwatch/autocontinue/accept) run a parent watchdog
+  (`single_instance.start_parent_watchdog`, 2s interval): they exit when the
+  GUI process dies, so no orphan engines linger.
 - Run engines standalone: `python deathwatch.py --replace` (or autocontinue/accept).
 - Logs: unhandled exceptions → `crash.log` in project root.
 

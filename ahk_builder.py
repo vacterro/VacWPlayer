@@ -169,6 +169,7 @@ def _gen_header(a, target_exe, combos, afk):
             a.append("global P_afk_WasDead := false")
             a.append("global P_afk_DeathCheck := 0")
             a.append("global P_afk_PosIndex := 0")
+            a.append("global P_afk_LastMove := 0")
     a.append("")
     a.append("global ParentPID := %1%")
     a.append('ahkPid := DllCall("GetCurrentProcessId")')
@@ -375,7 +376,6 @@ def _gen_hotkeys(a, target_exe, toggles, combos, minimap, afk_k):
 def _gen_master_spammer(a, target_exe, toggles, combos):
     """MasterSpammer timer: guards, anti-afk, space spam, combo step logic."""
     a.append("MasterSpammer:")
-    a.append("    Critical")
     cond_list = ["LMB_Held", "StopActive", "SpaceActive"]
     for c in combos:
         cond_list.append("P_" + c["tag"] + "_Held")
@@ -576,7 +576,11 @@ def _gen_afk_farm(a, target_exe, config, afk, afk_k):
     a.append("        else")
     a.append("            MouseMove, -1, 0, 0, R")
     a.append("    }")
-    a.append("    SendEvent {Blind}{RButton}")
+    a.append("    ; --- re-issue move order every 300ms (was every 15ms tick) ---")
+    a.append("    if (currentTime - P_afk_LastMove >= 300) {")
+    a.append("        P_afk_LastMove := currentTime")
+    a.append("        SendEvent {Blind}{RButton}")
+    a.append("    }")
     a.append("    ; fire combo")
     a.append("    if (currentTime - P_afk_LastCombo >= P_afk_NextDelay) {")
     a.append("        P_afk_LastCombo := currentTime")
@@ -590,7 +594,7 @@ def _gen_afk_farm(a, target_exe, config, afk, afk_k):
     a.append("return")
     a.append("")
 
-def _gen_helper_funcs(a, combos, afk_k):
+def _gen_helper_funcs(a, combos, afk_k, target_exe):
     """CheckMovement, ResetState helper functions."""
     a.append("CheckMovement() {")
     a.append("    global LMB_Held, StopActive")
@@ -614,7 +618,8 @@ def _gen_helper_funcs(a, combos, afk_k):
         a.append("    P_" + c["tag"] + "_Held := false")
     if afk_k:
         a.append("    P_afk_Active := false")
-    a.append("    SendEvent {Blind}{LButton up}{RButton up}{Shift up}{Ctrl up}{Alt up}")
+    a.append('    if (WinActive("ahk_exe ' + target_exe + '"))')
+    a.append("        SendEvent {Blind}{LButton up}{RButton up}{Shift up}{Ctrl up}{Alt up}")
     a.append("}")
     a.append("")
 
@@ -634,7 +639,7 @@ def generate_script(config):
     _gen_hotkeys(a, target_exe, toggles, combos, minimap, afk_k)
     _gen_master_spammer(a, target_exe, toggles, combos)
     _gen_afk_farm(a, target_exe, config, afk, afk_k)
-    _gen_helper_funcs(a, combos, afk_k)
+    _gen_helper_funcs(a, combos, afk_k, target_exe)
     a.append("~^!+R:: ExitApp")
     a.append("")
     return "\n".join(a), dropped

@@ -54,6 +54,7 @@ def build_buttons(cfg):
 
 def main(replace=False):
     single_instance.ensure_single_instance("autocontinue", replace=replace)
+    single_instance.start_parent_watchdog()
     window_ctl.set_dpi_aware()
 
     cfg_last_mtime = os.path.getmtime(CONFIG_PATH)
