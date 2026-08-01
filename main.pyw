@@ -11,6 +11,8 @@ import shutil
 from datetime import datetime
 from tkinterdnd2 import TkinterDnD
 
+VERSION = "0.0.2"
+
 BASE = os.path.dirname(os.path.abspath(__file__))
 PARENT = os.path.dirname(BASE)
 
@@ -171,7 +173,6 @@ class WildRiftAssistant:
 
         self.notebook = VintageNotebook(self.root)
         self.notebook.pack(fill="both", expand=True, padx=2, pady=2)
-        self.notebook.bind("<<NotebookTabChanged>>", self._on_tab_change)
 
         self._tab_specs = [
             ("tab_main", "General", lambda: MainTab(self.notebook, self.config)),
@@ -186,14 +187,7 @@ class WildRiftAssistant:
             ("tab_afkfarm", "Farm", lambda: AFKFarmTab(self.notebook, self.config.get("afkfarm"))),
             ("tab_accept", "Accept", lambda: AcceptTab(self.notebook)),
         ]
-        self._tab_loaded = set()
-        for attr, text, _ in self._tab_specs:
-            setattr(self, attr, None)
-        for attr, text, _ in self._tab_specs:
-            placeholder = tk.Frame(self.notebook, bg=TOKENS["background"])
-            self.notebook.add(placeholder, text=text)
-
-        self._lazy_load_tab(0)
+        self._build_all_tabs()
         self._restore_active_tab()
 
         self._bar_locale_widgets = []
@@ -247,23 +241,12 @@ class WildRiftAssistant:
 
         self.root.after(3000, self._engine_watchdog)
 
-    # --- lazy tab loading ----------------------------------------------------
-    def _lazy_load_tab(self, idx):
-        if idx in self._tab_loaded:
-            return
-        attr, text, factory = self._tab_specs[idx]
-        tab = factory()
-        self.notebook.insert(idx, tab, text=text)
-        self._tab_loaded.add(idx)
-        self.notebook.forget(self.notebook.tabs()[idx + 1])
-        setattr(self, attr, tab)
-
-    def _on_tab_change(self, event=None):
-        sel = self.notebook.select()
-        if not sel:
-            return
-        idx = self.notebook.index(sel)
-        self._lazy_load_tab(idx)
+    # --- tabs ------------------------------------------------------------------
+    def _build_all_tabs(self):
+        for attr, text, factory in self._tab_specs:
+            tab = factory()
+            self.notebook.add(tab, text=text)
+            setattr(self, attr, tab)
 
     # --- locale ---------------------------------------------------------------
     def _toggle_lang(self):
@@ -285,11 +268,15 @@ class WildRiftAssistant:
 
     # --- champion tab ---------------------------------------------------------
     def _on_champ_select(self, key):
+        if not hasattr(self, "var_mode"):
+            return
         name = display_name(key, self.config["champions"].get(key, {}))
         self.var_mode.set(name)
         self.config["mode"] = key
 
     def _on_champ_remove(self, key):
+        if not hasattr(self, "var_mode") or not hasattr(self, "mode_box"):
+            return
         mode_key = self.config.get("mode", "general")
         if mode_key == key:
             names = self.mode_box["values"]
@@ -454,13 +441,7 @@ class WildRiftAssistant:
             self.notebook.forget(tab)
             w.destroy()
 
-        self._tab_loaded.clear()
-        for attr, text, _ in self._tab_specs:
-            placeholder = tk.Frame(self.notebook, bg=TOKENS["background"])
-            self.notebook.add(placeholder, text=text)
-            setattr(self, attr, None)
-
-        self._lazy_load_tab(0)
+        self._build_all_tabs()
         self._refresh_mode_box()
 
     def _update_ahk_dot(self, running):
@@ -579,7 +560,6 @@ class WildRiftAssistant:
 
     def _browser_apply(self, name):
         key = champions.slug(name)
-        self._lazy_load_tab(2)  # ensure Champions tab loaded
         if key in self.config["champions"]:
             names = self.mode_box["values"]
             for n in names:

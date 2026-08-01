@@ -156,6 +156,5 @@ def stop_ahk():
     _stop_pids(orphans)
     try:
         os.remove(PID_PATH)
-    except OSError as e:
-        print(f"ahk_generator: failed to remove PID file during stop: {e}", file=sys.stderr)
+    except OSError:
         pass  # PID file already gone

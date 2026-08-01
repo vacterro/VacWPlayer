@@ -254,6 +254,7 @@
         ]
     },
     "afkfarm": {
+        "enabled": true,
         "toggle_key": "F4",
         "move_duration": 5000,
         "follow_cursor": true,
@@ -271,7 +272,7 @@
     "lang": "ru",
     "window": {
         "active_tab": 0,
-        "position": "-727,541"
+        "position": "632,471"
     },
     "auto_accept": {
         "enabled": false

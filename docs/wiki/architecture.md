@@ -14,7 +14,7 @@ subprocesses driven by their own config files.
 
 ```
 main.pyw  (TkinterDnD root, single instance via single_instance.py)
- ├── tabs/            UI layer — 9 lazy-loaded tabs
+ ├── tabs/            UI layer — 9 tabs, all built at startup
  ├── theme.py / vintage_widgets.py   vintage look + pickers
  ├── locales.py       RU/EN strings
  ├── config.json      <-> main config (autosave debounce 300ms)
@@ -33,7 +33,7 @@ main.pyw  (TkinterDnD root, single instance via single_instance.py)
 - Entry: `main.pyw` → `single_instance.ensure_single_instance("wr_assistant", replace=True)`
   (kills previous holder PID); `atexit` registers `stop_everything()`.
 - `WildRiftAssistant.__init__`: loads config, builds theme, creates `VintageNotebook`
-  with 9 placeholder frames, lazy-loads tab 0, restores last active tab, sets up tray.
+  with all 9 tabs, restores last active tab, sets up tray.
 - 100ms after start: `apply_and_start()` auto-runs (Ryze assist auto-starts).
 - `_engine_watchdog` every 3000ms: if engine was supposed to run and
   `ahk_generator.is_running()` is false → regenerate + relaunch (auto-restart).
@@ -46,9 +46,8 @@ main.pyw  (TkinterDnD root, single instance via single_instance.py)
   General (`main_tab`), Combos (`combo_tab`), Champions (`champion_tab`), Death
   (`death_tab`), Buy (`buy_tab`), Continue (`auto_tab`), Minimap (`minimap_tab`),
   Farm (`afkfarm_tab`), Accept (`accept_tab`).
-- Lazy loading: placeholders until first switch (`_lazy_load_tab`); guards in
-  `collect_config` / `stop_everything` for unloaded tabs. `_rebuild_ui` (config
-  import) destroys all tabs, stops engines, reloads.
+- All tabs built upfront in `_build_all_tabs()` (no lazy loading); `_rebuild_ui`
+  (config import) destroys all tabs, stops engines, reloads.
 - Bottom bar: lang toggle, mode combobox (General + per-champion), export/import/
   backup config, hotkeys viewer, combo browser, status label, AHK running dot,
   Apply & Start / Stop.

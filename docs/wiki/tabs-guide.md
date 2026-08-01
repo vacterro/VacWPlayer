@@ -1,9 +1,9 @@
 ﻿# WildRiftAssistant — Tabs Guide
 
 
-The main window: 9-tab `VintageNotebook` + bottom bar. Tabs load lazily on first
-switch; each tab auto-saves its settings (debounced 300ms) into `config.json` or
-its engine config.
+The main window: 9-tab `VintageNotebook` + bottom bar. All tabs are built at
+startup (no lazy loading); each tab auto-saves its settings (debounced 300ms)
+into `config.json` or its engine config.
 
 ## General (tabs/main_tab.py) — global input + auto-accept
 
