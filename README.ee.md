@@ -13,11 +13,12 @@
 - **Tšempioni režiim** (General / Ryze / Xin valikunupud) valib täpselt ühe aktiivse kombokomplekti, et F13–F15 ei satuks kunagi kangelaste vahel konflikti.
 - **Sammupõhised viivitused** – süntaks `klahv:ms`, nt `q,e:120,{Space}:200`.
 - **Süsteemisalve ikoon** – X peidab salve, mootor jätkab tööd; Quit peatab kõik.
+- **Wiki** – arhitektuur, seadete referents, tabide juhend: `docs/wiki/`.
 
 ## Nõuded
 
 - Windows, Python 3.11, projekti virtuaalne keskkond (`../venv`).
-- AutoHotkey v1 komplektis nimega `AutoHotkeyU64.exe` – eraldi installimist pole vaja.
+- AutoHotkey v1: `AutoHotkeyU64.exe` rakenduse kõrval, kui olemas, muidu standardpaigaldus `C:\Program Files\AutoHotkey\`.
 - `pip install -r requirements.txt`.
 
 ## Käivitamine

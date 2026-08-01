@@ -5,5 +5,6 @@ numpy
 pywin32
 pystray
 pillow
+tkinterdnd2
 # Runtime dependency (not pip): AutoHotkey v1 - https://www.autohotkey.com/
 pytest

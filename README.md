@@ -21,11 +21,12 @@ AHK" with a UI, no hand-editing scripts.
   F13–F15 never collide between heroes.
 - **Per-step delays** — `key:ms` syntax, e.g. `q,e:120,{Space}:200`.
 - **Tray icon** — X hides to tray, engine keeps running; Quit stops everything.
+- **Wiki** — architecture, config reference, tabs guide: `docs/wiki/`.
 
 ## Requirements
 
 - Windows, Python 3.11, the project venv (`../venv`).
-- AutoHotkey v1 bundled as `AutoHotkeyU64.exe` — no separate install needed.
+- AutoHotkey v1: `AutoHotkeyU64.exe` next to the app if present, else the standard install under `C:\Program Files\AutoHotkey\`.
 - `pip install -r requirements.txt`.
 
 ## Run

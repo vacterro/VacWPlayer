@@ -1,0 +1,88 @@
+﻿# WildRiftAssistant — Developer Guide
+
+
+## Setup
+
+- Windows + Python 3.11; project venv at `../venv` (sibling of project dir).
+- `pip install -r requirements.txt` — mss, opencv-python, numpy, pywin32,
+  pystray, pillow, pytest.
+- AutoHotkey v1: `AutoHotkeyU64.exe` next to the app if present, else the
+  standard install under `C:\Program Files\AutoHotkey\` — runtime dependency,
+  never pip-installable. See `ahk_generator.find_ahk_exe()`.
+- Git repo: `github.com/vacterro/WildRiftAssistant`, branch `main`, tagged
+  releases (`v0.1.0`+).
+
+## Run
+
+```
+..\venv\Scripts\pythonw.exe main.pyw
+```
+
+- Single instance enforced (`single_instance.ensure_single_instance("wr_assistant", replace=True)`) —
+  a second launch kills the previous one.
+- Ryze assist auto-starts 100ms after launch; engine watchdog auto-restarts the
+  AHK runtime every 3s if it died.
+- Run engines standalone: `python deathwatch.py --replace` (or autocontinue/accept).
+- Logs: unhandled exceptions → `crash.log` in project root.
+
+## Tests
+
+```
+python -m pytest tests/ -v
+```
+
+- `tests/conftest.py` adds project root to `sys.path`.
+- `test_imports.py`: imports non-GUI modules (`ahk_builder`, `champions`,
+  `digit_reader`, `locales`, `process_runner`) and py_compiles every `.py`
+  under the tree (skipping `.saipen/` and `.git/`).
+- GUI modules (`capture`, `window_ctl`, `key_blocker`, `single_instance`,
+  `theme`, `accept`, `autocontinue`, `deathwatch`, `ahk_generator`) are
+  compile-checked only — they need Windows/pywin32 at import time.
+
+## Code conventions
+
+- **UI**: vintage theme via `theme.py` (`TOKENS`, `apply_base_theme`,
+  `VintageButton/Label/Entry/Notebook/Sunken`); never raw ttk styling.
+  `vintage_widgets.py` adds pickers: region editor, template picker, window
+  picker, image popup, capture preview.
+- **Locale**: every user-facing string through `Locale.tr()` (`locales.py`);
+  RU/EN only (`Locale.set_lang`, toggle from bottom bar). Tabs with dynamic
+  labels implement `apply_locale()`.
+- **Lazy tabs**: tab factories in `main.pyw._tab_specs`; new tabs registered
+  there. Never assume a tab is loaded — guard `collect_config`,
+  `stop_everything`, `_apply_locale` against `self.tab_x is None`.
+- **Threading**: workers never touch tkinter directly — marshal via
+  `root.after(0, ...)` (`_apply_worker`, `_watchdog_worker`).
+- **Config**: tab `get_data()`/`get_toggles()` → `collect_config()` →
+  `save_config()`; debounced auto-save via `<<AutoSave>>` event (300ms).
+- **Combo syntax**: comma-separated keys, `{Space}` braces, `key:ms` per-step
+  delay; q/w/e/r shift-cast unless `use_shift` false; `qwer_as_uiop` maps to
+  BlueStacks keybind layout.
+- **AHK**: never hand-edit `wr_runtime.ahk` (generated); the old `wr.ahk` is
+  retired automatically on start. SendInput + `CoordMode Client` + per-window
+  `WinActive` guards — strict BlueStacks-only input.
+- **Engines**: standalone `main(replace=False)` + `load_config()` with
+  FATAL+exit on bad config; tab launches with `--replace` for clean takeover.
+
+## Audit tools (`tools/`)
+
+Internal, dev-only scripts (each with its own `main()`):
+
+| Script | Purpose |
+|---|---|
+| `ast_hunt.py` | AST audit, 15 categories: unused vars, uncalled funcs, dead code, except classification, mutable defaults, shadowing, hotspots, deep nesting, etc. |
+| `deep_hunt.py` | Deeper: McCabe complexity, dependency graph, security scan, type coverage, duplicate lines, secrets scan |
+| `meta_hunt.py` | Meta-level sweep (knowledge/minimap architecture etc.) |
+| `exec_hunt.py` | Executable-behavior audit |
+| `runtime_hunt.py` | Runtime behavior audit |
+| `git_hunt.py` | Git-oriented audit |
+| `record_burst.py` | Frame-burst capture of the death screen (`burst_death` output) for template work |
+
+Run any as `python tools/<name>.py`. They are scanners/reporters — they never
+modify project files.
+
+## Docs convention
+
+README has locale variants (`README.ee.md`, `README.ru.md`, `README.ded.md`,
+`README.ja.md` noted in the header). This `docs/wiki/` tree is the detailed
+documentation: architecture, config reference, tabs guide (saiwiki output).

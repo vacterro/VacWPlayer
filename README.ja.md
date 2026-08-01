@@ -13,11 +13,12 @@ Wild Rift ツールキット全体を覆うヴィンテージ風GUI：ペダル�
 - **チャンピオンモード**（General / Ryze / Xin ラジオ）で有効なコンボセットは常に1つ。F13–F15 がヒーロー間で衝突しない。
 - **ステップ毎の遅延** — `キー:ms` 構文、例：`q,e:120,{Space}:200`。
 - **トレイアイコン** — X でトレイに格納、エンジンは稼働継続。Quit で全停止。
+- **Wiki** — アーキテクチャ、設定リファレンス、タブガイド: `docs/wiki/`。
 
 ## 必要環境
 
 - Windows、Python 3.11、プロジェクトvenv（`../venv`）。
-- AutoHotkey v1 を `AutoHotkeyU64.exe` として同梱 — 別途インストール不要。
+- AutoHotkey v1: アプリの隣に `AutoHotkeyU64.exe` があればそれを、なければ標準インストール先（`C:\Program Files\AutoHotkey\`）を使用。
 - `pip install -r requirements.txt`。
 
 ## 起動
