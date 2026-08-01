@@ -5,6 +5,7 @@ from tkinter import messagebox
 from theme import VintageButton, VintageLabel, VintageEntry, TOKENS, FONT_MAIN, FONT_SM
 from vintage_widgets import VintageWindowPicker
 from process_runner import ProcessRunner
+from locales import Locale
 
 
 class ToolTip:
@@ -48,12 +49,15 @@ def save_json(path, data):
 
 def grid_row(parent, row, *fields):
     col = 0
-    for label, var, width in fields:
-        VintageLabel(parent, text=label, font=FONT_SM).grid(
-            row=row, column=col, sticky="w", padx=(0 if col == 0 else 4, 1), pady=0)
+    created = []
+    for key, var, width in fields:
+        lbl = VintageLabel(parent, text=Locale.tr(key), font=FONT_SM)
+        lbl.grid(row=row, column=col, sticky="w", padx=(0 if col == 0 else 4, 1), pady=0)
         VintageEntry(parent, textvariable=var, width=width).grid(
             row=row, column=col + 1, sticky="w", pady=0)
+        created.append(("lbl", lbl, key))
         col += 2
+    return created
 
 
 class DeathWatchTab(tk.Frame):
@@ -81,15 +85,18 @@ class DeathWatchTab(tk.Frame):
         form = tk.Frame(self, bg=TOKENS["background"])
         form.pack(fill="x", padx=4, pady=(2, 1))
 
+        self._locale_widgets = []
+
         mon_enabled = cfg.get("monitor_enabled", True)
         self.monitor_var = tk.BooleanVar(value=mon_enabled)
-        self.chk_monitor = tk.Checkbutton(form, text="Enable Death Watch Monitor", variable=self.monitor_var,
+        self.chk_monitor = tk.Checkbutton(form, text=Locale.tr("enable_death_monitor"), variable=self.monitor_var,
                                           bg=TOKENS["background"], fg=TOKENS["textPrimary"], selectcolor=TOKENS["compareBack"],
                                           command=self.toggle_monitor)
         self.chk_monitor.pack(anchor="w", pady=0)
+        self._locale_widgets.append(("chk", self.chk_monitor, "enable_death_monitor"))
         ToolTip(self.chk_monitor, "Start/stop the death watch loop that detects death and resurrection in-game")
 
-        self.status_var = tk.StringVar(value="Stopped")
+        self.status_var = tk.StringVar(value=Locale.tr("stopped"))
         self.last_line_var = tk.StringVar(value="")
 
         status_frame = tk.Frame(form, bg=TOKENS["background"])
@@ -104,8 +111,9 @@ class DeathWatchTab(tk.Frame):
         config_frame = tk.Frame(self, bg=TOKENS["background"])
         config_frame.pack(fill="x", padx=4)
 
-        self.window_picker = VintageWindowPicker(config_frame, "Window title", cfg["window_title"])
+        self.window_picker = VintageWindowPicker(config_frame, Locale.tr("window_title_lbl"), cfg["window_title"], label_key="window_title_lbl")
         self.window_picker.pack(fill="x", pady=0)
+        self._locale_widgets.append(("picker", self.window_picker, "window_title_lbl"))
         ToolTip(self.window_picker, "Which game window title to monitor for death/revive events")
 
         params_frame1 = tk.Frame(config_frame, bg=TOKENS["background"])
@@ -118,10 +126,10 @@ class DeathWatchTab(tk.Frame):
         self.restore_buffer.trace_add("write", self._auto_save)
         self.match_threshold = tk.StringVar(value=cfg["match_threshold"])
         self.match_threshold.trace_add("write", self._auto_save)
-        grid_row(params_frame1, 0,
-                 ("Poll interval (s)", self.poll_interval, 6),
-                 ("Shop buffer (s)", self.shop_buffer, 6),
-                 ("Restore buffer (s)", self.restore_buffer, 6))
+        self._locale_widgets.extend(grid_row(params_frame1, 0,
+                 ("poll_interval_s", self.poll_interval, 6),
+                 ("shop_buffer_s", self.shop_buffer, 6),
+                 ("restore_buffer_s", self.restore_buffer, 6)))
 
         params_frame2 = tk.Frame(config_frame, bg=TOKENS["background"])
         params_frame2.pack(fill="x", pady=0)
@@ -131,13 +139,13 @@ class DeathWatchTab(tk.Frame):
         self.pedal_block_sec.trace_add("write", self._auto_save)
         self.blocked_keys = tk.StringVar(value=",".join(cfg.get("blocked_keys", ["F13","F14","F15"])))
         self.blocked_keys.trace_add("write", self._auto_save)
-        grid_row(params_frame2, 0,
-                 ("Max wait clamp (s)", self.max_wait, 6),
-                 ("Block keys", self.blocked_keys, 16))
+        self._locale_widgets.extend(grid_row(params_frame2, 0,
+                 ("max_wait_s", self.max_wait, 6),
+                 ("block_keys_lbl", self.blocked_keys, 16)))
         params_frame3 = tk.Frame(config_frame, bg=TOKENS["background"])
         params_frame3.pack(fill="x", pady=0)
-        grid_row(params_frame3, 0,
-                 ("Block duration (s)", self.pedal_block_sec, 6))
+        self._locale_widgets.extend(grid_row(params_frame3, 0,
+                 ("block_duration_s", self.pedal_block_sec, 6)))
 
         sep = tk.Frame(config_frame, bg=TOKENS["borderMuted"], height=1)
         sep.pack(fill="x", pady=3)
@@ -146,39 +154,58 @@ class DeathWatchTab(tk.Frame):
         actions.pack(fill="x", pady=0)
         self.switch_to_work = tk.BooleanVar(value=cfg.get("switch_to_work_window", False))
         self.switch_to_work.trace_add("write", self._auto_save)
-        sw_btn = tk.Checkbutton(actions, text="Switch to work window while dead", variable=self.switch_to_work,
+        sw_btn = tk.Checkbutton(actions, text=Locale.tr("switch_work_lbl"), variable=self.switch_to_work,
                        bg=TOKENS["background"], fg=TOKENS["textPrimary"], selectcolor=TOKENS["compareBack"])
         sw_btn.pack(side="left")
+        self._locale_widgets.append(("chk", sw_btn, "switch_work_lbl"))
         ToolTip(sw_btn, "While dead, auto-switch to the work window (browser/notes) to keep you productive")
 
         self.click_mid = tk.BooleanVar(value=cfg.get("click_mid_on_resurrect", False))
         self.click_mid.trace_add("write", self._auto_save)
-        cm_btn = tk.Checkbutton(actions, text="Click Mid upon resurrecting", variable=self.click_mid,
+        cm_btn = tk.Checkbutton(actions, text=Locale.tr("click_mid_lbl"), variable=self.click_mid,
                        bg=TOKENS["background"], fg=TOKENS["textPrimary"], selectcolor=TOKENS["compareBack"])
         cm_btn.pack(side="left", padx=(6, 0))
+        self._locale_widgets.append(("chk", cm_btn, "click_mid_lbl"))
         ToolTip(cm_btn, "When you resurrect, click the mid lane on minimap to go back to lane immediately")
 
         self.lock_window = tk.BooleanVar(value=cfg.get("lock_window_resurrect", False))
         self.lock_window.trace_add("write", self._auto_save)
-        lw_btn = tk.Checkbutton(actions, text="Lock window (Ctrl+Shift+F8)", variable=self.lock_window,
+        lw_btn = tk.Checkbutton(actions, text=Locale.tr("lock_window_lbl"), variable=self.lock_window,
                        bg=TOKENS["background"], fg=TOKENS["textPrimary"], selectcolor=TOKENS["compareBack"])
         lw_btn.pack(side="left", padx=(6, 0))
+        self._locale_widgets.append(("chk", lw_btn, "lock_window_lbl"))
         ToolTip(lw_btn, "Lock/unlock current game window so minimap clicks don't lose focus (Ctrl+Shift+F8 toggle)")
 
-        self.work_window = VintageWindowPicker(config_frame, "Work Window", cfg.get("work_window_title", ""))
+        self.work_window = VintageWindowPicker(config_frame, Locale.tr("work_window_lbl"), cfg.get("work_window_title", ""), label_key="work_window_lbl")
         self.work_window.pack(fill="x", pady=0)
+        self._locale_widgets.append(("picker", self.work_window, "work_window_lbl"))
         ToolTip(self.work_window, "Window to auto-switch to while dead (e.g. browser, notes, YouTube)")
 
         tk.Frame(config_frame, bg=TOKENS["borderMuted"], height=1).pack(fill="x", pady=3)
 
         btn_frame = tk.Frame(config_frame, bg=TOKENS["background"])
         btn_frame.pack(fill="x", pady=2)
-        VintageButton(btn_frame, text="Apply", command=self._trigger_apply, width=8).pack(side="left")
-        VintageButton(btn_frame, text="Reset", command=self.reset_defaults, width=8).pack(side="left", padx=2)
+        self._btn_apply = VintageButton(btn_frame, text=Locale.tr("apply"), command=self._trigger_apply, width=8)
+        self._btn_apply.pack(side="left")
+        self._locale_widgets.append(("btn", self._btn_apply, "apply"))
+        self._btn_reset = VintageButton(btn_frame, text=Locale.tr("reset_lbl"), command=self.reset_defaults, width=8)
+        self._btn_reset.pack(side="left", padx=2)
+        self._locale_widgets.append(("btn", self._btn_reset, "reset_lbl"))
 
         self._tick()
         if self.monitor_var.get():
             self.runner.start(["--replace"])
+
+    def apply_locale(self):
+        for kind, widget, key in self._locale_widgets:
+            if kind == "lbl":
+                widget.config(text=Locale.tr(key))
+            elif kind == "btn":
+                widget.label.config(text=Locale.tr(key))
+            elif kind == "chk":
+                widget.config(text=Locale.tr(key))
+            elif kind == "picker":
+                widget.apply_locale()
 
     def reset_defaults(self):
         cfg = load_json(self.cfg_path)
@@ -258,6 +285,6 @@ class DeathWatchTab(tk.Frame):
             if silent:
                 print(f"DeathWatch save skipped (invalid input): {e}", file=sys.stderr)
             else:
-                messagebox.showerror("Invalid value", str(e))
+                messagebox.showerror(Locale.tr("invalid_value"), str(e))
             return
         save_json(self.cfg_path, cfg)

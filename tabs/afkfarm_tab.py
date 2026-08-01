@@ -1,6 +1,6 @@
 import tkinter as tk
 
-from theme import VintageButton, VintageLabel, VintageEntry, TOKENS, FONT_SM, FONT_MAIN
+from theme import VintageButton, VintageLabel, VintageEntry, TOKENS, FONT_SM
 from tabs.champ_tab import BindButton
 from locales import Locale
 

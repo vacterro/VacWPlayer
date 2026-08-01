@@ -2,19 +2,20 @@ import tkinter as tk
 import champions
 from theme import (VintageSunken, VintageButton, VintageLabel, VintageEntry,
                    TOKENS, FONT_SM)
+from locales import Locale
 
 
 class ComboBrowser(tk.Toplevel):
     def __init__(self, parent, on_apply=None):
         super().__init__(parent)
         self.on_apply = on_apply
-        self.title("Combo Browser")
+        self.title(Locale.tr("combo_browser_title"))
         self.configure(bg=TOKENS["background"])
         self.resizable(False, False)
 
         top = tk.Frame(self, bg=TOKENS["background"])
         top.pack(fill="x", padx=4, pady=(4, 1))
-        VintageLabel(top, text="Search:", font=FONT_SM).pack(side="left")
+        VintageLabel(top, text=Locale.tr("search_lbl") + ":", font=FONT_SM).pack(side="left")
         self.search_var = tk.StringVar()
         self.search_var.trace_add("write", lambda *a: self._filter())
         VintageEntry(top, textvariable=self.search_var, width=20).pack(side="left", padx=2)
@@ -44,7 +45,7 @@ class ComboBrowser(tk.Toplevel):
 
         btn_row = tk.Frame(self, bg=TOKENS["background"])
         btn_row.pack(fill="x", padx=4, pady=(2, 4))
-        VintageButton(btn_row, text="▶ Apply",
+        VintageButton(btn_row, text=Locale.tr("browse_apply"),
                       command=self._apply, width=8).pack(side="left")
         VintageButton(btn_row, text="✕", command=self.destroy,
                       width=2).pack(side="right")
@@ -88,17 +89,17 @@ class ComboBrowser(tk.Toplevel):
         self.detail_text.config(state="normal")
         self.detail_text.delete("1.0", "end")
 
-        self._append("Champion: %s (%s)\n" % (name, slug))
-        self._append("Source: %s\n\n" % ("Known guide" if sourced else "Placeholder — edit it"))
+        self._append(Locale.tr("browse_champion") + ": %s (%s)\n" % (name, slug))
+        self._append(Locale.tr("browse_source") + ": %s\n\n" % (Locale.tr("browse_known") if sourced else Locale.tr("browse_placeholder")))
 
         for slot in ("wave", "jungle", "pvp"):
             trigger = default.get("trigger_" + slot, "")
             keys = default.get("keys_" + slot, "")
             interval = default.get("interval", 50)
             self._append("[%s]\n" % slot.upper())
-            self._append("  Trigger: %s\n" % (trigger or "(none)"))
-            self._append("  Keys:    %s\n" % keys)
-            self._append("  Step ms: %d\n\n" % interval)
+            self._append("  " + Locale.tr("browse_trigger") + ": %s\n" % (trigger or Locale.tr("browse_none")))
+            self._append("  " + Locale.tr("browse_keys") + ":    %s\n" % keys)
+            self._append("  " + Locale.tr("browse_step") + ": %d\n\n" % interval)
 
         self.detail_text.config(state="disabled")
 

@@ -1,5 +1,6 @@
 import tkinter as tk
 from theme import VintageButton
+from locales import Locale
 
 
 class BindButton(VintageButton):
@@ -7,7 +8,7 @@ class BindButton(VintageButton):
     target StringVar. Covers the F13-F24 pedals."""
 
     def __init__(self, parent, target_var, **kwargs):
-        super().__init__(parent, text="Bind", command=self._arm, width=5, **kwargs)
+        super().__init__(parent, text=Locale.tr("bind"), command=self._arm, width=5, **kwargs)
         self.target_var = target_var
         self._armed = False
 
@@ -16,7 +17,7 @@ class BindButton(VintageButton):
             self._disarm()
             return
         self._armed = True
-        self.label.config(text="press")
+        self.label.config(text=Locale.tr("press_key"))
         top = self.winfo_toplevel()
         self._token = top.bind_all("<KeyPress>", self._capture, add="+")
 
@@ -28,7 +29,7 @@ class BindButton(VintageButton):
                 pass
             self._token = None
         self._armed = False
-        self.label.config(text="Bind")
+        self.label.config(text=Locale.tr("bind"))
 
     def _capture(self, event):
         if not self._armed:

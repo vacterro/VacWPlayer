@@ -8,6 +8,7 @@ import win32con
 import win32gui
 
 from theme import VintageButton, VintageEntry, VintageLabel, TOKENS
+from locales import Locale
 
 def capture_preview_bytes(region=None):
     import cv2
@@ -65,19 +66,26 @@ def pick_window_title_blocking(timeout_sec=15):
     return None
 
 class VintageWindowPicker(tk.Frame):
-    def __init__(self, parent, label, initial_title):
+    def __init__(self, parent, label, initial_title, label_key=None):
         super().__init__(parent, bg=TOKENS["background"])
-        VintageLabel(self, text=label, width=14).pack(side="left")
+        self.label_key = label_key
+        self.label = VintageLabel(self, text=label, width=14)
+        self.label.pack(side="left")
         self.title_var = tk.StringVar(value=initial_title or "")
         VintageEntry(self, textvariable=self.title_var, width=22).pack(side="left", padx=2)
-        self.pick_btn = VintageButton(self, text="Pick...", command=self._start_pick, width=10)
+        self.pick_btn = VintageButton(self, text=Locale.tr("pick_btn"), command=self._start_pick, width=10)
         self.pick_btn.pack(side="left", padx=2)
+
+    def apply_locale(self):
+        if self.label_key:
+            self.label.config(text=Locale.tr(self.label_key))
+        self.pick_btn.label.config(text=Locale.tr("pick_btn"))
 
     def get(self):
         return self.title_var.get()
 
     def _start_pick(self):
-        self.pick_btn.label.config(text="Click any window (15s)")
+        self.pick_btn.label.config(text=Locale.tr("pick_prompt"))
         threading.Thread(target=self._worker, daemon=True).start()
 
     def _worker(self):
@@ -85,11 +93,11 @@ class VintageWindowPicker(tk.Frame):
         self.after(0, lambda: self._finish(title))
 
     def _finish(self, title):
-        self.pick_btn.label.config(text="Pick window...")
+        self.pick_btn.label.config(text=Locale.tr("pick_btn_2"))
         if title:
             self.title_var.set(title)
         else:
-            messagebox.showinfo("Pick window", "No window selected (timed out or nothing under the click).")
+            messagebox.showinfo(Locale.tr("pick_title"), Locale.tr("pick_none"))
 
 class VintageRegionEditor(tk.Frame):
     # label_width/entry_width are tunable: the Auto Continue tab nests this in
@@ -101,7 +109,7 @@ class VintageRegionEditor(tk.Frame):
         VintageLabel(self, text=label, width=label_width).pack(side="left")
         for v in self.vars:
             VintageEntry(self, textvariable=v, width=entry_width).pack(side="left", padx=1)
-        VintageButton(self, text="Preview", command=self._preview, width=8).pack(side="left", padx=4)
+        VintageButton(self, text=Locale.tr("preview"), command=self._preview, width=8).pack(side="left", padx=4)
 
     def get(self):
         return [v.get() for v in self.vars]
@@ -109,6 +117,6 @@ class VintageRegionEditor(tk.Frame):
     def _preview(self):
         data = capture_preview_bytes(self.get())
         if data is None:
-            messagebox.showwarning("Preview", "BlueStacks window not found, minimized, or region is empty.")
+            messagebox.showwarning(Locale.tr("preview"), Locale.tr("preview_warn"))
             return
-        show_image_popup(self, "Region preview", data=data)
+        show_image_popup(self, Locale.tr("region_preview"), data=data)

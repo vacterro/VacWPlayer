@@ -5,6 +5,7 @@ import json
 from theme import VintageSunken, VintageButton, VintageLabel, VintageEntry, TOKENS, FONT_MAIN, FONT_SM
 from vintage_widgets import VintageWindowPicker
 from process_runner import ProcessRunner
+from locales import Locale
 
 BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -19,10 +20,14 @@ def save_json(path, data):
 
 def grid_row(parent, row, *fields):
     col = 0
-    for label, var, width in fields:
-        VintageLabel(parent, text=label, font=FONT_SM).grid(row=row, column=col, sticky="w", padx=(0 if col == 0 else 6, 2), pady=1)
+    created = []
+    for key, var, width in fields:
+        lbl = VintageLabel(parent, text=Locale.tr(key), font=FONT_SM)
+        lbl.grid(row=row, column=col, sticky="w", padx=(0 if col == 0 else 6, 2), pady=1)
         VintageEntry(parent, textvariable=var, width=width).grid(row=row, column=col + 1, sticky="w", pady=1)
+        created.append(("lbl", lbl, key))
         col += 2
+    return created
 
 class AutoContinueTab(tk.Frame):
     CONFIG_NAME = "autocontinue_config.json"
@@ -46,14 +51,17 @@ class AutoContinueTab(tk.Frame):
         form = tk.Frame(self, bg=TOKENS["background"])
         form.pack(fill="x", padx=4, pady=(4, 2))
 
+        self._locale_widgets = []
+
         mon_enabled = cfg.get("monitor_enabled", True)
         self.monitor_var = tk.BooleanVar(value=mon_enabled)
-        self.chk_monitor = tk.Checkbutton(form, text="Enable Auto Continue Monitor", variable=self.monitor_var, 
+        self.chk_monitor = tk.Checkbutton(form, text=Locale.tr("enable_auto_monitor"), variable=self.monitor_var, 
                                           bg=TOKENS["background"], fg=TOKENS["textPrimary"], selectcolor=TOKENS["compareBack"],
                                           command=self.toggle_monitor)
         self.chk_monitor.pack(anchor="w", pady=1)
+        self._locale_widgets.append(("chk", self.chk_monitor, "enable_auto_monitor"))
         
-        self.status_var = tk.StringVar(value="Stopped")
+        self.status_var = tk.StringVar(value=Locale.tr("stopped"))
         self.last_line_var = tk.StringVar(value="")
         
         status_frame = tk.Frame(form, bg=TOKENS["background"])
@@ -68,8 +76,9 @@ class AutoContinueTab(tk.Frame):
         config_frame = tk.Frame(self, bg=TOKENS["background"])
         config_frame.pack(fill="x", padx=4)
 
-        self.window_picker = VintageWindowPicker(config_frame, "Window title", cfg["window_title"])
+        self.window_picker = VintageWindowPicker(config_frame, Locale.tr("window_title_lbl"), cfg["window_title"], label_key="window_title_lbl")
         self.window_picker.pack(fill="x", pady=1)
+        self._locale_widgets.append(("picker", self.window_picker, "window_title_lbl"))
 
         params_frame = tk.Frame(config_frame, bg=TOKENS["background"])
         params_frame.pack(fill="x", pady=1)
@@ -77,14 +86,16 @@ class AutoContinueTab(tk.Frame):
         self.poll_interval.trace_add("write", self._auto_save)
         self.click_cooldown = tk.StringVar(value=cfg["click_cooldown_sec"])
         self.click_cooldown.trace_add("write", self._auto_save)
-        grid_row(params_frame, 0, ("Poll interval (s)", self.poll_interval, 6), ("Click cooldown (s)", self.click_cooldown, 6))
+        self._locale_widgets.extend(grid_row(params_frame, 0, ("poll_interval_s", self.poll_interval, 6), ("click_cooldown_s", self.click_cooldown, 6)))
 
         tk.Frame(config_frame, bg=TOKENS["borderMuted"], height=1).pack(fill="x", pady=3)
 
         body = tk.Frame(self, bg=TOKENS["background"])
         body.pack(fill="both", expand=True, padx=4)
 
-        VintageLabel(body, text="Buttons it clicks:").pack(anchor="w")
+        self._lbl_buttons = VintageLabel(body, text=Locale.tr("buttons_title"))
+        self._lbl_buttons.pack(anchor="w")
+        self._locale_widgets.append(("lbl", self._lbl_buttons, "buttons_title"))
         self.tree_frame = VintageSunken(body, bg_color=TOKENS["compareBack"])
         self.tree_frame.pack(fill="x", pady=2)
 
@@ -93,28 +104,48 @@ class AutoContinueTab(tk.Frame):
         style = ttk.Style()
         style.configure("Treeview", background=TOKENS["compareBack"], foreground=TOKENS["textPrimary"], fieldbackground=TOKENS["compareBack"], font=FONT_MAIN, borderwidth=0)
         style.configure("Treeview.Heading", background=TOKENS["surfaceRaised"], foreground=TOKENS["textPrimary"], font=FONT_MAIN)
-        self.tree.heading("#0", text="Name")
-        self.tree.heading("threshold", text="Match")
+        self.tree.heading("#0", text=Locale.tr("name_lbl"))
+        self.tree.heading("threshold", text=Locale.tr("match_lbl"))
         self.tree.column("#0", width=330)
         self.tree.column("threshold", width=70)
         self.tree.pack(fill="x")
 
         btn_row = tk.Frame(body, bg=TOKENS["background"])
         btn_row.pack(fill="x", pady=2)
-        VintageButton(btn_row, text="Remove", command=self.remove_button, width=8).pack(side="left")
-        VintageButton(btn_row, text="⇄ Reset", command=self.reset_defaults, width=8).pack(side="left", padx=2)
-        VintageButton(btn_row, text="Apply to Engine", command=self._trigger_apply, width=15).pack(side="right")
+        self._btn_remove = VintageButton(btn_row, text=Locale.tr("remove_lbl"), command=self.remove_button, width=8)
+        self._btn_remove.pack(side="left")
+        self._locale_widgets.append(("btn", self._btn_remove, "remove_lbl"))
+        self._btn_reset = VintageButton(btn_row, text=Locale.tr("reset_lbl"), command=self.reset_defaults, width=8)
+        self._btn_reset.pack(side="left", padx=2)
+        self._locale_widgets.append(("btn", self._btn_reset, "reset_lbl"))
+        self._btn_apply = VintageButton(btn_row, text=Locale.tr("apply_to_engine"), command=self._trigger_apply, width=15)
+        self._btn_apply.pack(side="right")
+        self._locale_widgets.append(("btn", self._btn_apply, "apply_to_engine"))
 
-        VintageLabel(body,
-                     text="These are calibrated already - it clicks Continue through the "
-                          "post-game screens on its own. Nothing to set up.",
+        self._lbl_note = VintageLabel(body,
+                     text=Locale.tr("auto_note"),
                      fg=TOKENS["textMuted"], font=FONT_SM,
-                     wraplength=600, justify="left").pack(anchor="w", pady=6)
+                     wraplength=600, justify="left")
+        self._lbl_note.pack(anchor="w", pady=6)
+        self._locale_widgets.append(("lbl", self._lbl_note, "auto_note"))
 
         self._refresh_tree()
         self._tick()
         if self.monitor_var.get():
             self.runner.start(["--replace"])
+
+    def apply_locale(self):
+        for kind, widget, key in self._locale_widgets:
+            if kind == "lbl":
+                widget.config(text=Locale.tr(key))
+            elif kind == "btn":
+                widget.label.config(text=Locale.tr(key))
+            elif kind == "chk":
+                widget.config(text=Locale.tr(key))
+            elif kind == "picker":
+                widget.apply_locale()
+        self.tree.heading("#0", text=Locale.tr("name_lbl"))
+        self.tree.heading("threshold", text=Locale.tr("match_lbl"))
 
     def reset_defaults(self):
         import json
@@ -175,7 +206,7 @@ class AutoContinueTab(tk.Frame):
     def remove_button(self):
         sel = self.tree.selection()
         if not sel:
-            messagebox.showinfo("Remove", "Select a button in the list first.")
+            messagebox.showinfo(Locale.tr("remove_lbl"), Locale.tr("remove_need"))
             return
         del self.buttons[int(sel[0])]
         self._refresh_tree()
@@ -193,6 +224,6 @@ class AutoContinueTab(tk.Frame):
             if silent:
                 print(f"AutoContinue save skipped (invalid input): {e}", file=sys.stderr)
             else:
-                messagebox.showerror("Invalid value", str(e))
+                messagebox.showerror(Locale.tr("invalid_value"), str(e))
             return
         save_json(self.cfg_path, cfg)

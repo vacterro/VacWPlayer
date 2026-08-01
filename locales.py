@@ -1,3 +1,6 @@
+import json
+import os
+
 LOCALES = {
     "en": {
         "app_title": "WildRiftAssistant",
@@ -18,6 +21,55 @@ LOCALES = {
         "backup_failed": "Backup failed",
         "export_title": "Export config",
         "import_title": "Import config",
+        "export_config_title": "Export config",
+        "import_config_title": "Import config",
+        "import_config_confirm": "Replace current config with\n%s?",
+        "export_ok": "Config exported",
+        "import_ok": "Config imported",
+        "import_only_json": "Only .json config files supported.",
+        "backup_ok": "Backup saved: ",
+        "generating": "Generating...",
+        "auto_restarting": "Auto-restarting...",
+        "auto_restarted": "Auto-restarted: %s",
+        "hotkeys_title": "Active Hotkeys",
+        "close_lbl": "Close",
+        "hk_global": "GLOBAL",
+        "hk_stop_key": "Stop key:",
+        "hk_anti_afk": "Anti-AFK:",
+        "hk_in_game_toggle": "toggle in game",
+        "hk_mode": "Mode:",
+        "hk_target_exe": "Target exe:",
+        "hk_champ_triggers": "CHAMPION TRIGGERS",
+        "hk_interval": "interval",
+        "hk_minimap": "MINIMAP",
+        "hk_afk_farm": "AFK FARM",
+        "hk_toggle": "Toggle:",
+        "hk_slots": "Slots:",
+        "hk_combo": "Combo:",
+        "hk_disabled": "disabled",
+        "tray_show": "Show",
+        "tray_apply_start": "Apply & Start",
+        "tray_stop": "Stop engine",
+        "tray_quit": "Quit",
+        "add_champion_title": "Add champion",
+        "search_lbl": "Search",
+        "picker_hint": "%d of %d shown   * = placeholder combo",
+        "combo_browser_title": "Combo Browser",
+        "browse_apply": "Apply",
+        "browse_champion": "Champion",
+        "browse_source": "Source",
+        "browse_known": "Known guide",
+        "browse_placeholder": "Placeholder — edit it",
+        "browse_trigger": "Trigger",
+        "browse_keys": "Keys",
+        "browse_step": "Step ms",
+        "browse_none": "(none)",
+        "bind": "Bind",
+        "press_key": "press",
+        "remove_need_tpl": "Select a template first.",
+        "preview": "Preview",
+        "preview_warn": "BlueStacks window not found, minimized, or region is empty.",
+        "region_preview": "Region preview",
         "reset_defaults": "Reset defaults",
         "enable": "Enable AFK Farm",
         "toggle_key": "Toggle key:",
@@ -28,11 +80,15 @@ LOCALES = {
         "cycle_slots": "Cycle through slots:",
         "farm_desc": "Cycle through Minimap tab positions -> move+combo -> next pos -> ...",
         "tab_main": "Main",
+        "tab_combos": "Combos",
+        "tab_champions": "Champions",
         "tab_death": "Death Watch",
+        "tab_buy": "Buy",
         "tab_auto": "Auto Continue",
         "tab_minimap": "Minimap",
         "tab_afkfarm": "AFK Farm",
         "tab_autoaccept": "Auto Accept",
+        "tab_accept": "Accept",
         "auto_accept_enable": "Enable Auto-Accept",
         "auto_accept_desc": "When enabled, scans for 'Accept' button and clicks it.\n"
                             "Provide template: templates/accept_button.png",
@@ -40,6 +96,105 @@ LOCALES = {
         "browse_combos": "Web",
         "no_ahk": "AHK: stopped",
         "ahk_running": "AHK: running",
+        "status_generating": "Generating...",
+        "status_auto_restarting": "Auto-restarting...",
+        "status_auto_restarted": "Auto-restarted: %s",
+        "status_backup_saved": "Backup saved: %s",
+        "toggle_mouse_remap": "Mouse remap (LMB=move hold, RMB=tap)",
+        "toggle_space_spam": "Space spam while held",
+        "toggle_anti_afk": "Anti-AFK (Ctrl+G toggles in game)",
+        "toggle_manual_aim": "Manual q/w/e/r/d/f pauses combos",
+        "stop_lbl": "Stop:",
+        "spc_ms_lbl": "Spc ms:",
+        "afk_ms_lbl": "AFK ms:",
+        "exe_lbl": "Exe:",
+        "detect": "Detect",
+        "detect_none": "No known emulators running.\nStart your emulator and try again.",
+        "detect_running": "Running: %s\nSet to \"%s\".\nPick another from the list if needed.",
+        "detect_title": "Detect",
+        "combos_title": "Combos (General mode):",
+        "col_trigger": "Trigger",
+        "col_keys": "Keys",
+        "col_ms": "ms",
+        "col_shift": "Shift",
+        "selected_combo": "Selected combo:",
+        "trigger_lbl": "Trigger:",
+        "keys_lbl": "Keys:",
+        "interval_lbl": "Interval:",
+        "shift_cast": "Shift-cast q/w/e/r",
+        "apply": "Apply",
+        "combo_hint": "key:ms sets that step's own\ndelay, e.g. q,e:120,{Space}:200",
+        "delete": "Delete",
+        "clear_all": "Clear all",
+        "clear_title": "Clear combos",
+        "clear_text": "Delete all %d custom combos?",
+        "apply_need": "Select a combo first (or Add one).",
+        "remove_lbl": "Remove",
+        "reset_lbl": "Reset",
+        "select_hint": "Select a champion above",
+        "slot_wave": "Wave:",
+        "slot_jungle": "Jungle:",
+        "slot_pvp": "Pvp:",
+        "interval_ms_lbl": "Interval (ms):",
+        "shift_modifier": "Shift Modifier",
+        "qwer_uiop": "Interpret QWER as UIOP",
+        "combo_sourced": "Combo from a known guide.",
+        "combo_placeholder": "Placeholder combo - not researched. Edit it.",
+        "rename_preset": "Rename preset",
+        "preset_name": "Preset name:",
+        "ok": "OK",
+        "cancel": "Cancel",
+        "enable_death_monitor": "Enable Death Watch Monitor",
+        "stopped": "Stopped",
+        "window_title_lbl": "Window title",
+        "poll_interval_s": "Poll interval (s)",
+        "shop_buffer_s": "Shop buffer (s)",
+        "restore_buffer_s": "Restore buffer (s)",
+        "max_wait_s": "Max wait clamp (s)",
+        "block_keys_lbl": "Block keys",
+        "block_duration_s": "Block duration (s)",
+        "switch_work_lbl": "Switch to work window while dead",
+        "click_mid_lbl": "Click Mid upon resurrecting",
+        "lock_window_lbl": "Lock window (Ctrl+Shift+F8)",
+        "work_window_lbl": "Work Window",
+        "invalid_value": "Invalid value",
+        "pick_btn": "Pick...",
+        "pick_prompt": "Click any window (15s)",
+        "pick_btn_2": "Pick window...",
+        "pick_none": "No window selected (timed out or nothing under the click).",
+        "pick_title": "Pick window",
+        "auto_buy_title": "Auto-Buy After Recall",
+        "quickbuy_key_lbl": "Quick-buy key:",
+        "presses_lbl": "Presses:",
+        "window_ms_lbl": "Window (ms):",
+        "autobuy_after_b": "Auto-buy after Recall (B)",
+        "delay_s_lbl": "Delay (s):",
+        "click_mid_after_buy": "Click mid after buy",
+        "bg_z_lbl": "Background Z (ControlSend)",
+        "enable_auto_monitor": "Enable Auto Continue Monitor",
+        "buttons_title": "Buttons it clicks:",
+        "name_lbl": "Name",
+        "match_lbl": "Match",
+        "apply_to_engine": "Apply to Engine",
+        "auto_note": "These are calibrated already - it clicks Continue through the "
+                     "post-game screens on its own. Nothing to set up.",
+        "click_cooldown_s": "Click cooldown (s)",
+        "remove_need": "Select a button in the list first.",
+        "minimap_title": "Minimap Click Hotkeys",
+        "minimap_sub": "Click on lane = move there in game",
+        "hotkey_lbl": "Hotkey",
+        "add_lbl": "+ Add",
+        "enable_accept_monitor": "Enable Auto-Accept Monitor",
+        "poll_s_lbl": "Poll (s):",
+        "cooldown_s_lbl": "Cooldown (s):",
+        "templates_title": "Button templates:",
+        "file_lbl": "File",
+        "add_template": "Add template",
+        "accept_note": "Place cropped button PNGs in templates/ folder, then add them here.\n"
+                       "Poller uses PrintWindow - detects button even when game is behind other windows.",
+        "select_png_title": "Select button template PNG",
+        "template_name_title": "Template name",
+        "template_name": "Name:",
         "slots": {
             "top": "Top",
             "mid": "Mid",
@@ -54,12 +209,12 @@ LOCALES = {
     "ru": {
         "app_title": "WildRiftAssistant",
         "champion": "Чемпион:",
-        "add": "Add",
-        "export": "Exp",
-        "import": "Imp",
-        "backup": "Bak",
-        "stop": "Stop",
-        "apply_start": "Run",
+        "add": "Добавить",
+        "export": "Экспорт",
+        "import": "Импорт",
+        "backup": "Бэкап",
+        "stop": "Стоп",
+        "apply_start": "Запуск",
         "ready": "Готов",
         "engine_stopped": "Движок остановлен",
         "config_exported": "Конфиг экспортирован",
@@ -70,7 +225,56 @@ LOCALES = {
         "backup_failed": "Ошибка бэкапа",
         "export_title": "Экспорт конфига",
         "import_title": "Импорт конфига",
-        "reset_defaults": "Сброс",
+        "export_config_title": "Экспорт конфига",
+        "import_config_title": "Импорт конфига",
+        "import_config_confirm": "Заменить текущий конфиг на\n%s?",
+        "export_ok": "Конфиг экспортирован",
+        "import_ok": "Конфиг импортирован",
+        "import_only_json": "Поддерживаются только .json конфиги.",
+        "backup_ok": "Бэкап сохранён: ",
+        "generating": "Генерация...",
+        "auto_restarting": "Перезапуск...",
+        "auto_restarted": "Перезапущено: %s",
+        "hotkeys_title": "Активные хоткеи",
+        "close_lbl": "Закрыть",
+        "hk_global": "ГЛОБАЛЬНО",
+        "hk_stop_key": "Стоп:",
+        "hk_anti_afk": "Анти-AFK:",
+        "hk_in_game_toggle": "переключение в игре",
+        "hk_mode": "Режим:",
+        "hk_target_exe": "Целевой exe:",
+        "hk_champ_triggers": "ТРИГГЕРЫ ЧЕМПИОНОВ",
+        "hk_interval": "интервал",
+        "hk_minimap": "МИНИКАРТА",
+        "hk_afk_farm": "AFK FARM",
+        "hk_toggle": "Вкл:",
+        "hk_slots": "Точки:",
+        "hk_combo": "Комбо:",
+        "hk_disabled": "выключен",
+        "tray_show": "Показать",
+        "tray_apply_start": "Применить и запустить",
+        "tray_stop": "Остановить движок",
+        "tray_quit": "Выход",
+        "add_champion_title": "Добавить чемпиона",
+        "search_lbl": "Поиск",
+        "picker_hint": "Показано %d из %d   * = комбо-заглушка",
+        "combo_browser_title": "Обзор комбо",
+        "browse_apply": "Применить",
+        "browse_champion": "Чемпион",
+        "browse_source": "Источник",
+        "browse_known": "Известный гайд",
+        "browse_placeholder": "Заглушка — отредактируйте",
+        "browse_trigger": "Триггер",
+        "browse_keys": "Клавиши",
+        "browse_step": "Шаг мс",
+        "browse_none": "(нет)",
+        "bind": "Связать",
+        "press_key": "нажмите",
+        "remove_need_tpl": "Сначала выберите шаблон.",
+        "preview": "Превью",
+        "preview_warn": "Окно BlueStacks не найдено, свёрнуто или регион пуст.",
+        "region_preview": "Превью региона",
+        "reset_defaults": "Сброс по умолчанию",
         "enable": "Включить AFK Farm",
         "toggle_key": "Клавиша вкл:",
         "move_duration": "Длит. движения (мс):",
@@ -80,18 +284,122 @@ LOCALES = {
         "cycle_slots": "Точки для цикла:",
         "farm_desc": "Цикл по точкам Minimap → движение+комбо → след. точка → ...",
         "tab_main": "Главная",
-        "tab_death": "Death Watch",
-        "tab_auto": "Auto Continue",
+        "tab_combos": "Комбо",
+        "tab_champions": "Чемпионы",
+        "tab_death": "Наблюдение за смертью",
+        "tab_buy": "Покупка",
+        "tab_auto": "Автопродолжение",
         "tab_minimap": "Миникарта",
         "tab_afkfarm": "AFK Farm",
-        "tab_autoaccept": "Auto Accept",
+        "tab_autoaccept": "Автопринятие",
+        "tab_accept": "Принять",
         "auto_accept_enable": "Вкл. автопринятие",
         "auto_accept_desc": "Сканирует кнопку 'Accept' в фоне и кликает.\n"
                             "Шаблон: templates/accept_button.png",
-        "hotkeys": "Keys",
-        "browse_combos": "Web",
+        "hotkeys": "Клавиши",
+        "browse_combos": "Веб",
         "no_ahk": "AHK: остановлен",
         "ahk_running": "AHK: запущен",
+        "status_generating": "Генерация...",
+        "status_auto_restarting": "Перезапуск...",
+        "status_auto_restarted": "Перезапущено: %s",
+        "status_backup_saved": "Бэкап сохранён: %s",
+        "toggle_mouse_remap": "Мышь (ЛКМ=движение, ПКМ=тап)",
+        "toggle_space_spam": "Спам пробела пока зажат",
+        "toggle_anti_afk": "Анти-AFK (Ctrl+G в игре)",
+        "toggle_manual_aim": "Ручное q/w/e/r/d/f останавливает комбо",
+        "stop_lbl": "Стоп:",
+        "spc_ms_lbl": "Пробел мс:",
+        "afk_ms_lbl": "AFK мс:",
+        "exe_lbl": "Экзешник:",
+        "detect": "Найти",
+        "detect_none": "Известные эмуляторы не найдены.\nЗапустите эмулятор и попробуйте снова.",
+        "detect_running": "Запущено: %s\nУстановлено: \"%s\".\nПри необходимости выберите другой из списка.",
+        "detect_title": "Поиск",
+        "combos_title": "Комбо (обычный режим):",
+        "col_trigger": "Триггер",
+        "col_keys": "Клавиши",
+        "col_ms": "мс",
+        "col_shift": "Шифт",
+        "selected_combo": "Выбранное комбо:",
+        "trigger_lbl": "Триггер:",
+        "keys_lbl": "Клавиши:",
+        "interval_lbl": "Интервал:",
+        "shift_cast": "Шифт-каст q/w/e/r",
+        "apply": "Применить",
+        "combo_hint": "key:мс — задержка этого шага,\nнапр. q,e:120,{Space}:200",
+        "delete": "Удалить",
+        "clear_all": "Очистить всё",
+        "clear_title": "Очистка комбо",
+        "clear_text": "Удалить все %d своих комбо?",
+        "apply_need": "Сначала выберите комбо (или добавьте).",
+        "remove_lbl": "Убрать",
+        "reset_lbl": "Сброс",
+        "select_hint": "Выберите чемпиона выше",
+        "slot_wave": "Волна:",
+        "slot_jungle": "Лес:",
+        "slot_pvp": "ПвП:",
+        "interval_ms_lbl": "Интервал (мс):",
+        "shift_modifier": "Шифт-модификатор",
+        "qwer_uiop": "Трактовать QWER как UIOP",
+        "combo_sourced": "Комбо из известного гайда.",
+        "combo_placeholder": "Комбо-заглушка — не исследовано. Отредактируйте.",
+        "rename_preset": "Переименовать пресет",
+        "preset_name": "Имя пресета:",
+        "ok": "ОК",
+        "cancel": "Отмена",
+        "enable_death_monitor": "Включить наблюдение за смертью",
+        "stopped": "Остановлен",
+        "window_title_lbl": "Заголовок окна",
+        "poll_interval_s": "Интервал опроса (с)",
+        "shop_buffer_s": "Буфер магазина (с)",
+        "restore_buffer_s": "Буфер восстановления (с)",
+        "max_wait_s": "Макс. ожидание (с)",
+        "block_keys_lbl": "Блок клавиш",
+        "block_duration_s": "Длит. блокировки (с)",
+        "switch_work_lbl": "Переключаться на рабочее окно пока мёртв",
+        "click_mid_lbl": "Клик Mid при возрождении",
+        "lock_window_lbl": "Зафиксировать окно (Ctrl+Shift+F8)",
+        "work_window_lbl": "Рабочее окно",
+        "invalid_value": "Недопустимое значение",
+        "pick_btn": "Выбрать...",
+        "pick_prompt": "Кликните любое окно (15с)",
+        "pick_btn_2": "Выбрать окно...",
+        "pick_none": "Окно не выбрано (таймаут или клик мимо).",
+        "pick_title": "Выбор окна",
+        "auto_buy_title": "Автопокупка после отката",
+        "quickbuy_key_lbl": "Клавиша быстрой покупки:",
+        "presses_lbl": "Нажатий:",
+        "window_ms_lbl": "Окно (мс):",
+        "autobuy_after_b": "Автопокупка после отката (B)",
+        "delay_s_lbl": "Задержка (с):",
+        "click_mid_after_buy": "Клик Mid после покупки",
+        "bg_z_lbl": "Фоновое Z (ControlSend)",
+        "enable_auto_monitor": "Включить автопродолжение",
+        "buttons_title": "Кнопки, которые он кликает:",
+        "name_lbl": "Имя",
+        "match_lbl": "Совпадение",
+        "apply_to_engine": "Применить к движку",
+        "auto_note": "Уже откалибровано — кликает Continue на послематчевых "
+                     "экранах сам. Настраивать нечего.",
+        "click_cooldown_s": "Кулдаун клика (с)",
+        "remove_need": "Сначала выберите кнопку в списке.",
+        "minimap_title": "Хоткеи кликов по миникарте",
+        "minimap_sub": "Клик по линии = движение туда в игре",
+        "hotkey_lbl": "Хоткей",
+        "add_lbl": "+ Добавить",
+        "enable_accept_monitor": "Включить автопринятие",
+        "poll_s_lbl": "Опрос (с):",
+        "cooldown_s_lbl": "Кулдаун (с):",
+        "templates_title": "Шаблоны кнопок:",
+        "file_lbl": "Файл",
+        "add_template": "Добавить шаблон",
+        "accept_note": "Положите вырезанные PNG кнопок в папку templates/, затем "
+                       "добавьте их сюда.\nПоллер использует PrintWindow — видит "
+                       "кнопку даже за другими окнами.",
+        "select_png_title": "Выбор PNG-шаблона кнопки",
+        "template_name_title": "Имя шаблона",
+        "template_name": "Имя:",
         "slots": {
             "top": "Верх",
             "mid": "Центр",
@@ -106,6 +414,40 @@ LOCALES = {
 }
 
 
+LANG_NAMES = {
+    "en": "English", "ru": "Русский", "et": "Eesti", "ded": "Дед-мод",
+    "ja": "日本語", "uk": "Українська", "de": "Deutsch", "fr": "Français",
+    "es": "Español", "it": "Italiano", "pt": "Português", "nl": "Nederlands",
+    "pl": "Polski", "sv": "Svenska", "da": "Dansk", "fi": "Suomi",
+    "no": "Norsk", "zh": "中文", "ko": "한국어", "th": "ไทย",
+    "vi": "Tiếng Việt", "ar": "العربية", "he": "עברית", "tr": "Türkçe",
+    "hi": "हिन्दी", "id": "Bahasa Indonesia", "el": "Ελληνικά",
+    "cs": "Čeština", "ro": "Română", "hu": "Magyar", "bg": "Български",
+    "sk": "Slovenčina", "hr": "Hrvatski",
+}
+
+_LOCALES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "locales")
+
+
+def _load_locale_bundles():
+    if not os.path.isdir(_LOCALES_DIR):
+        return
+    for name in sorted(os.listdir(_LOCALES_DIR)):
+        if not name.endswith(".json"):
+            continue
+        code = name[:-5]
+        try:
+            with open(os.path.join(_LOCALES_DIR, name), encoding="utf-8") as f:
+                bundle = json.load(f)
+        except (OSError, ValueError):
+            continue
+        if isinstance(bundle, dict) and code not in LOCALES:
+            LOCALES[code] = bundle
+
+
+_load_locale_bundles()
+
+
 class Locale:
     _current = "ru"
 
@@ -118,19 +460,35 @@ class Locale:
         return LOCALES.get(code or cls._current, LOCALES["en"])
 
     @classmethod
-    def tr(cls, key, fallback=None):
-        d = cls.get()
-        parts = key.split(".")
+    def _walk(cls, d, parts):
         for p in parts:
-            if isinstance(d, dict):
-                d = d.get(p)
+            if isinstance(d, dict) and p in d:
+                d = d[p]
             else:
-                return fallback or key
-        return d if isinstance(d, str) else (fallback or key)
+                return None
+        return d if isinstance(d, str) else None
+
+    @classmethod
+    def tr(cls, key, fallback=None):
+        parts = key.split(".")
+        v = cls._walk(cls.get(), parts)
+        if v is None:
+            v = cls._walk(LOCALES.get("en"), parts)
+        if v is None:
+            return fallback if fallback is not None else key
+        return v
 
     @classmethod
     def current(cls):
         return cls._current
+
+    @classmethod
+    def languages(cls):
+        return [c for c in LOCALES if c in LANG_NAMES]
+
+    @classmethod
+    def language_name(cls, code):
+        return LANG_NAMES.get(code, code)
 
     @classmethod
     def toggle(cls):

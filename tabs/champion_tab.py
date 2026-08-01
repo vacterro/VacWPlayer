@@ -4,6 +4,7 @@ from tkinter import ttk
 import champions
 from theme import VintageButton, VintageLabel, VintageEntry, TOKENS, FONT_SM, FONT_MAIN
 from tabs.champ_tab import BindButton
+from locales import Locale
 
 # ── simple tooltip ─────────────────────────────────────────────────
 class _ToolTip:
@@ -67,11 +68,15 @@ class ChampionTab(tk.Frame):
         self.on_remove = on_remove
         self._current_key = None
         self._vars = {}
+        self._locale_widgets = []
+        self._champ_locale = []
 
         head = tk.Frame(self, bg=TOKENS["background"])
         head.pack(fill="x", padx=4, pady=(4, 2))
 
-        VintageLabel(head, text="Champion:").pack(side="left")
+        self._lbl_champion = VintageLabel(head, text=Locale.tr("champion"))
+        self._lbl_champion.pack(side="left")
+        self._locale_widgets.append(("lbl", self._lbl_champion, "champion"))
         self.var_champ = tk.StringVar()
         self.var_champ.trace_add("write", self._on_champ_change)
         self.champ_combo = ttk.Combobox(head, textvariable=self.var_champ,
@@ -79,12 +84,14 @@ class ChampionTab(tk.Frame):
         self.champ_combo.pack(side="left", padx=4)
         self.btn_add = VintageButton(head, text="+", command=self._pick_champion, width=2)
         self.btn_add.pack(side="left")
-        self.btn_remove = VintageButton(head, text="Remove", command=self._remove_current,
+        self.btn_remove = VintageButton(head, text=Locale.tr("remove_lbl"), command=self._remove_current,
                                         width=7)
         self.btn_remove.pack(side="right", padx=(2, 0))
-        self.btn_reset = VintageButton(head, text="Reset", command=self._reset_current,
+        self._locale_widgets.append(("btn", self.btn_remove, "remove_lbl"))
+        self.btn_reset = VintageButton(head, text=Locale.tr("reset_lbl"), command=self._reset_current,
                                        width=6)
         self.btn_reset.pack(side="right")
+        self._locale_widgets.append(("btn", self.btn_reset, "reset_lbl"))
 
         sep = tk.Frame(self, bg=TOKENS["borderMuted"], height=1)
         sep.pack(fill="x", padx=4)
@@ -92,13 +99,26 @@ class ChampionTab(tk.Frame):
         self.form = tk.Frame(self, bg=TOKENS["background"])
         self.form.pack(fill="x", padx=4, pady=4)
 
-        self._info_lbl = VintageLabel(self.form, text="Select a champion above",
+        self._info_lbl = VintageLabel(self.form, text=Locale.tr("select_hint"),
                                        fg=TOKENS["textMuted"])
         self._info_lbl.pack(anchor="w", pady=10)
+        self._locale_widgets.append(("lbl", self._info_lbl, "select_hint"))
 
         self._champ_form = None
 
         self.refresh_list()
+
+    def apply_locale(self):
+        for kind, widget, key in self._locale_widgets:
+            if kind == "lbl":
+                widget.config(text=Locale.tr(key))
+            elif kind == "btn":
+                widget.label.config(text=Locale.tr(key))
+        for kind, widget, key in self._champ_locale:
+            if kind == "lbl":
+                widget.config(text=Locale.tr(key))
+            elif kind == "chk":
+                widget.config(text=Locale.tr(key))
 
     def refresh_list(self):
         names = []
@@ -136,6 +156,7 @@ class ChampionTab(tk.Frame):
             self._champ_form.destroy()
         self._info_lbl.pack_forget()
         self._vars.clear()
+        self._champ_locale = []
 
         entry = self._get_entry(key)
         defaults = champions.default_for(name)
@@ -158,8 +179,9 @@ class ChampionTab(tk.Frame):
             # load & normalize presets for this slot
             self._presets[slot] = self._normalize_presets(cfg.get("presets_" + slot, []))
 
-            VintageLabel(self._champ_form, text=slot.capitalize() + ":").grid(
-                row=row, column=0, sticky="w", pady=1)
+            slot_lbl = VintageLabel(self._champ_form, text=Locale.tr("slot_" + slot))
+            slot_lbl.grid(row=row, column=0, sticky="w", pady=1)
+            self._champ_locale.append(("lbl", slot_lbl, "slot_" + slot))
             VintageEntry(self._champ_form, textvariable=tv, width=6).grid(
                 row=row, column=1, sticky="w", pady=1)
             BindButton(self._champ_form, tv).grid(row=row, column=2, sticky="w", padx=1)
@@ -175,32 +197,39 @@ class ChampionTab(tk.Frame):
 
         row2 = tk.Frame(self._champ_form, bg=TOKENS["background"])
         row2.grid(row=3, column=0, columnspan=5, sticky="w", pady=4)
-        VintageLabel(row2, text="Interval (ms):").pack(side="left")
+        self._lbl_interval = VintageLabel(row2, text=Locale.tr("interval_ms_lbl"))
+        self._lbl_interval.pack(side="left")
+        self._champ_locale.append(("lbl", self._lbl_interval, "interval_ms_lbl"))
         self._var_interval = tk.IntVar(value=int(cfg.get("interval", 50)))
         VintageEntry(row2, textvariable=self._var_interval, width=5).pack(side="left", padx=2)
 
         self._var_shift = tk.BooleanVar(value=cfg.get("use_shift", True))
-        tk.Checkbutton(row2, text="Shift Modifier", variable=self._var_shift,
+        self._chk_shift = tk.Checkbutton(row2, text=Locale.tr("shift_modifier"), variable=self._var_shift,
                        bg=TOKENS["background"], fg=TOKENS["textPrimary"],
                        selectcolor=TOKENS["compareBack"],
                        activebackground=TOKENS["background"],
                        activeforeground=TOKENS["textPrimary"],
-                       font=FONT_SM, highlightthickness=0, bd=0).pack(side="left", padx=(8, 2))
+                       font=FONT_SM, highlightthickness=0, bd=0)
+        self._chk_shift.pack(side="left", padx=(8, 2))
+        self._champ_locale.append(("chk", self._chk_shift, "shift_modifier"))
 
         self._var_uiop = tk.BooleanVar(value=cfg.get("qwer_as_uiop", False))
-        tk.Checkbutton(row2, text="Interpret QWER as UIOP", variable=self._var_uiop,
+        self._chk_uiop = tk.Checkbutton(row2, text=Locale.tr("qwer_uiop"), variable=self._var_uiop,
                        bg=TOKENS["background"], fg=TOKENS["textPrimary"],
                        selectcolor=TOKENS["compareBack"],
                        activebackground=TOKENS["background"],
                        activeforeground=TOKENS["textPrimary"],
-                       font=FONT_SM, highlightthickness=0, bd=0).pack(side="left", padx=2)
+                       font=FONT_SM, highlightthickness=0, bd=0)
+        self._chk_uiop.pack(side="left", padx=2)
+        self._champ_locale.append(("chk", self._chk_uiop, "qwer_uiop"))
 
         if defaults.get("sourced"):
-            note, colour = "Combo from a known guide.", TOKENS["textMuted"]
+            note_key, colour = "combo_sourced", TOKENS["textMuted"]
         else:
-            note = "Placeholder combo - not researched. Edit it."
-            colour = TOKENS["warning"]
-        VintageLabel(row2, text=note, fg=colour, font=FONT_SM).pack(side="left", padx=8)
+            note_key, colour = "combo_placeholder", TOKENS["warning"]
+        self._lbl_note = VintageLabel(row2, text=Locale.tr(note_key), fg=colour, font=FONT_SM)
+        self._lbl_note.pack(side="left", padx=8)
+        self._champ_locale.append(("lbl", self._lbl_note, note_key))
 
         self._refresh_preset_visuals()
 
@@ -285,12 +314,12 @@ class ChampionTab(tk.Frame):
         """Open small dialog to rename a preset slot."""
         current = self._presets[slot][idx]["name"]
         win = tk.Toplevel(self.winfo_toplevel())
-        win.title("Rename preset")
+        win.title(Locale.tr("rename_preset"))
         win.configure(bg=TOKENS["background"])
         win.resizable(False, False)
         win.transient(self.winfo_toplevel())
         win.grab_set()
-        tk.Label(win, text="Preset name:", bg=TOKENS["background"],
+        tk.Label(win, text=Locale.tr("preset_name"), bg=TOKENS["background"],
                  fg=TOKENS["textPrimary"], font=FONT_SM).pack(padx=8, pady=(6, 2))
         var = tk.StringVar(value=current)
         entry = tk.Entry(win, textvariable=var, bg=TOKENS["compareBack"],
@@ -316,8 +345,8 @@ class ChampionTab(tk.Frame):
         entry.bind("<KeyPress>", on_key)
         btn_frame = tk.Frame(win, bg=TOKENS["background"])
         btn_frame.pack(pady=(2, 6))
-        VintageButton(btn_frame, text="OK", command=ok, width=6).pack(side="left", padx=2)
-        VintageButton(btn_frame, text="Cancel", command=win.destroy, width=6).pack(side="left", padx=2)
+        VintageButton(btn_frame, text=Locale.tr("ok"), command=ok, width=6).pack(side="left", padx=2)
+        VintageButton(btn_frame, text=Locale.tr("cancel"), command=win.destroy, width=6).pack(side="left", padx=2)
 
     def _refresh_preset_visuals(self):
         """Update preset button labels, tooltips, and dim-state."""

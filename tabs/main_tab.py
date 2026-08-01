@@ -65,6 +65,8 @@ class MainTab(tk.Frame):
         toggles = dict(TOGGLE_DEFAULTS)
         toggles.update(config.get("toggles", {}))
 
+        self._locale_widgets = []
+
         tog = tk.Frame(self, bg=TOKENS["background"])
         tog.pack(fill="x", padx=4, pady=(4, 2))
 
@@ -76,57 +78,76 @@ class MainTab(tk.Frame):
         self.var_afk.trace_add("write", self._auto_save)
         self.var_manual = tk.BooleanVar(value=toggles["manual_aim_block"])
         self.var_manual.trace_add("write", self._auto_save)
-        _check(tog, "Mouse remap (LMB=move hold, RMB=tap)", self.var_remap).grid(
-            row=0, column=0, sticky="w")
-        _check(tog, "Space spam while held", self.var_space).grid(
-            row=0, column=1, sticky="w", padx=(6, 0))
-        _check(tog, "Anti-AFK (Ctrl+G toggles in game)", self.var_afk).grid(
-            row=1, column=0, sticky="w")
-        _check(tog, "Manual q/w/e/r/d/f pauses combos", self.var_manual).grid(
-            row=1, column=1, sticky="w", padx=(6, 0))
+        self._chk_remap = _check(tog, Locale.tr("toggle_mouse_remap"), self.var_remap)
+        self._chk_remap.grid(row=0, column=0, sticky="w")
+        self._chk_space = _check(tog, Locale.tr("toggle_space_spam"), self.var_space)
+        self._chk_space.grid(row=0, column=1, sticky="w", padx=(6, 0))
+        self._chk_afk = _check(tog, Locale.tr("toggle_anti_afk"), self.var_afk)
+        self._chk_afk.grid(row=1, column=0, sticky="w")
+        self._chk_manual = _check(tog, Locale.tr("toggle_manual_aim"), self.var_manual)
+        self._chk_manual.grid(row=1, column=1, sticky="w", padx=(6, 0))
+        for w, k in ((self._chk_remap, "toggle_mouse_remap"),
+                     (self._chk_space, "toggle_space_spam"),
+                     (self._chk_afk, "toggle_anti_afk"),
+                     (self._chk_manual, "toggle_manual_aim")):
+            self._locale_widgets.append(("chk", w, k))
 
         row2 = tk.Frame(self, bg=TOKENS["background"])
         row2.pack(fill="x", padx=4, pady=1)
-        VintageLabel(row2, text="Stop:", font=FONT_SM).pack(side="left")
+        self._lbl_stop = VintageLabel(row2, text=Locale.tr("stop_lbl"), font=FONT_SM)
+        self._lbl_stop.pack(side="left")
+        self._locale_widgets.append(("lbl", self._lbl_stop, "stop_lbl"))
         self.var_stop = tk.StringVar(value=toggles["stop_key"])
         self.var_stop.trace_add("write", self._auto_save)
         VintageEntry(row2, textvariable=self.var_stop, width=3).pack(side="left", padx=1)
-        VintageLabel(row2, text="Spc ms:", font=FONT_SM).pack(side="left", padx=(6, 0))
+        self._lbl_spc = VintageLabel(row2, text=Locale.tr("spc_ms_lbl"), font=FONT_SM)
+        self._lbl_spc.pack(side="left", padx=(6, 0))
+        self._locale_widgets.append(("lbl", self._lbl_spc, "spc_ms_lbl"))
         self.var_space_ms = tk.IntVar(value=int(toggles["space_interval"]))
         self.var_space_ms.trace_add("write", self._auto_save)
         VintageEntry(row2, textvariable=self.var_space_ms, width=5).pack(side="left", padx=2)
-        VintageLabel(row2, text="AFK ms:", font=FONT_SM).pack(side="left", padx=(6, 0))
+        self._lbl_afk = VintageLabel(row2, text=Locale.tr("afk_ms_lbl"), font=FONT_SM)
+        self._lbl_afk.pack(side="left", padx=(6, 0))
+        self._locale_widgets.append(("lbl", self._lbl_afk, "afk_ms_lbl"))
         self.var_afk_ms = tk.IntVar(value=int(toggles["anti_afk_interval"]))
         self.var_afk_ms.trace_add("write", self._auto_save)
         VintageEntry(row2, textvariable=self.var_afk_ms, width=6).pack(side="left", padx=2)
-        VintageLabel(row2, text="Exe:", font=FONT_SM).pack(side="left", padx=(6, 0))
+        self._lbl_exe = VintageLabel(row2, text=Locale.tr("exe_lbl"), font=FONT_SM)
+        self._lbl_exe.pack(side="left", padx=(6, 0))
+        self._locale_widgets.append(("lbl", self._lbl_exe, "exe_lbl"))
         self.var_exe = tk.StringVar(value=toggles["target_exe"])
         self.var_exe.trace_add("write", self._auto_save)
         self.exe_combo = ttk.Combobox(row2, textvariable=self.var_exe,
                                        values=EMULATOR_EXES, width=14,
                                        font=FONT_SM)
         self.exe_combo.pack(side="left", padx=2)
-        self.exe_detect = VintageButton(row2, text="Detect", command=self._detect_exe, width=7)
+        self.exe_detect = VintageButton(row2, text=Locale.tr("detect"), command=self._detect_exe, width=7)
         self.exe_detect.pack(side="left", padx=1)
+        self._locale_widgets.append(("btn", self.exe_detect, "detect"))
 
         sep = tk.Frame(self, bg=TOKENS["borderMuted"], height=1)
         sep.pack(fill="x", padx=4, pady=4)
 
+    def apply_locale(self):
+        for kind, widget, key in self._locale_widgets:
+            if kind == "lbl":
+                widget.config(text=Locale.tr(key))
+            elif kind == "btn":
+                widget.label.config(text=Locale.tr(key))
+            elif kind == "chk":
+                widget.config(text=Locale.tr(key))
+
     def _detect_exe(self):
         found = detect_running_emulators()
         if not found:
-            messagebox.showinfo("Detect",
-                "No known emulators running.\n"
-                "Start your emulator and try again.")
+            messagebox.showinfo(Locale.tr("detect_title"), Locale.tr("detect_none"))
             return
         if len(found) == 1:
             self.var_exe.set(found[0])
         else:
             self.var_exe.set(found[0])
-            messagebox.showinfo("Detect",
-                "Running: " + ", ".join(found) + "\n"
-                "Set to \"" + found[0] + "\".\n"
-                "Pick another from the list if needed.")
+            messagebox.showinfo(Locale.tr("detect_title"),
+                Locale.tr("detect_running") % (", ".join(found), found[0]))
 
     def get_data(self):
         return []  # no combos here anymore

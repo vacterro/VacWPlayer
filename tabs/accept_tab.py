@@ -5,6 +5,7 @@ import json
 from theme import VintageSunken, VintageButton, VintageLabel, VintageEntry, TOKENS, FONT_MAIN, FONT_SM
 from vintage_widgets import VintageWindowPicker
 from process_runner import ProcessRunner
+from locales import Locale
 
 BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -40,15 +41,18 @@ class AcceptTab(tk.Frame):
         form = tk.Frame(self, bg=TOKENS["background"])
         form.pack(fill="x", padx=4, pady=(4, 2))
 
+        self._locale_widgets = []
+
         mon_enabled = cfg.get("monitor_enabled", False)
         self.monitor_var = tk.BooleanVar(value=mon_enabled)
         self.chk_monitor = tk.Checkbutton(
-            form, text="Enable Auto-Accept Monitor", variable=self.monitor_var,
+            form, text=Locale.tr("enable_accept_monitor"), variable=self.monitor_var,
             bg=TOKENS["background"], fg=TOKENS["textPrimary"], selectcolor=TOKENS["compareBack"],
             command=self.toggle_monitor)
         self.chk_monitor.pack(anchor="w", pady=1)
+        self._locale_widgets.append(("chk", self.chk_monitor, "enable_accept_monitor"))
 
-        self.status_var = tk.StringVar(value="Stopped")
+        self.status_var = tk.StringVar(value=Locale.tr("stopped"))
         self.last_line_var = tk.StringVar(value="")
 
         status_frame = tk.Frame(form, bg=TOKENS["background"])
@@ -65,8 +69,9 @@ class AcceptTab(tk.Frame):
         config_frame = tk.Frame(self, bg=TOKENS["background"])
         config_frame.pack(fill="x", padx=4)
 
-        self.window_picker = VintageWindowPicker(config_frame, "Window title", cfg["window_title"])
+        self.window_picker = VintageWindowPicker(config_frame, Locale.tr("window_title_lbl"), cfg["window_title"], label_key="window_title_lbl")
         self.window_picker.pack(fill="x", pady=1)
+        self._locale_widgets.append(("picker", self.window_picker, "window_title_lbl"))
 
         params_frame = tk.Frame(config_frame, bg=TOKENS["background"])
         params_frame.pack(fill="x", pady=1)
@@ -75,9 +80,13 @@ class AcceptTab(tk.Frame):
         self.click_cooldown = tk.StringVar(value=str(cfg.get("click_cooldown_sec", 3.0)))
         self.click_cooldown.trace_add("write", self._auto_save)
 
-        VintageLabel(params_frame, text="Poll (s):", font=FONT_SM).pack(side="left")
+        self._lbl_poll = VintageLabel(params_frame, text=Locale.tr("poll_s_lbl"), font=FONT_SM)
+        self._lbl_poll.pack(side="left")
+        self._locale_widgets.append(("lbl", self._lbl_poll, "poll_s_lbl"))
         VintageEntry(params_frame, textvariable=self.poll_interval, width=6).pack(side="left", padx=2)
-        VintageLabel(params_frame, text="Cooldown (s):", font=FONT_SM).pack(side="left", padx=(6, 0))
+        self._lbl_cooldown = VintageLabel(params_frame, text=Locale.tr("cooldown_s_lbl"), font=FONT_SM)
+        self._lbl_cooldown.pack(side="left", padx=(6, 0))
+        self._locale_widgets.append(("lbl", self._lbl_cooldown, "cooldown_s_lbl"))
         VintageEntry(params_frame, textvariable=self.click_cooldown, width=6).pack(side="left", padx=2)
 
         tk.Frame(config_frame, bg=TOKENS["borderMuted"], height=1).pack(fill="x", pady=3)
@@ -85,7 +94,9 @@ class AcceptTab(tk.Frame):
         templates_frame = tk.Frame(self, bg=TOKENS["background"])
         templates_frame.pack(fill="both", expand=True, padx=4)
 
-        VintageLabel(templates_frame, text="Button templates:").pack(anchor="w")
+        self._lbl_templates = VintageLabel(templates_frame, text=Locale.tr("templates_title"))
+        self._lbl_templates.pack(anchor="w")
+        self._locale_widgets.append(("lbl", self._lbl_templates, "templates_title"))
         self.tree_frame = VintageSunken(templates_frame, bg_color=TOKENS["compareBack"])
         self.tree_frame.pack(fill="x", pady=2)
 
@@ -97,9 +108,9 @@ class AcceptTab(tk.Frame):
                         font=FONT_MAIN, borderwidth=0)
         style.configure("Treeview.Heading", background=TOKENS["surfaceRaised"],
                         foreground=TOKENS["textPrimary"], font=FONT_MAIN)
-        self.tree.heading("#0", text="Name")
-        self.tree.heading("file", text="File")
-        self.tree.heading("threshold", text="Match")
+        self.tree.heading("#0", text=Locale.tr("name_lbl"))
+        self.tree.heading("file", text=Locale.tr("file_lbl"))
+        self.tree.heading("threshold", text=Locale.tr("match_lbl"))
         self.tree.column("#0", width=160)
         self.tree.column("file", width=200)
         self.tree.column("threshold", width=60)
@@ -107,19 +118,39 @@ class AcceptTab(tk.Frame):
 
         btn_row = tk.Frame(templates_frame, bg=TOKENS["background"])
         btn_row.pack(fill="x", pady=2)
-        VintageButton(btn_row, text="Add template", command=self.add_template, width=12).pack(side="left")
-        VintageButton(btn_row, text="Remove", command=self.remove_template, width=8).pack(side="left", padx=2)
-        VintageButton(btn_row, text="Apply", command=self._trigger_apply, width=8).pack(side="right")
+        self._btn_add = VintageButton(btn_row, text=Locale.tr("add_template"), command=self.add_template, width=12)
+        self._btn_add.pack(side="left")
+        self._locale_widgets.append(("btn", self._btn_add, "add_template"))
+        self._btn_remove = VintageButton(btn_row, text=Locale.tr("remove_lbl"), command=self.remove_template, width=8)
+        self._btn_remove.pack(side="left", padx=2)
+        self._locale_widgets.append(("btn", self._btn_remove, "remove_lbl"))
+        self._btn_apply = VintageButton(btn_row, text=Locale.tr("apply"), command=self._trigger_apply, width=8)
+        self._btn_apply.pack(side="right")
+        self._locale_widgets.append(("btn", self._btn_apply, "apply"))
 
-        msg = ("Place cropped button PNGs in templates/ folder, then add them here.\n"
-               "Poller uses PrintWindow — detects button even when game is behind other windows.")
-        VintageLabel(templates_frame, text=msg, fg=TOKENS["textMuted"], font=FONT_SM,
-                     wraplength=600, justify="left").pack(anchor="w", pady=6)
+        self._lbl_note = VintageLabel(templates_frame, text=Locale.tr("accept_note"), fg=TOKENS["textMuted"], font=FONT_SM,
+                     wraplength=600, justify="left")
+        self._lbl_note.pack(anchor="w", pady=6)
+        self._locale_widgets.append(("lbl", self._lbl_note, "accept_note"))
 
         self._refresh_tree()
         self._tick()
         if self.monitor_var.get():
             self.runner.start(["--replace"])
+
+    def apply_locale(self):
+        for kind, widget, key in self._locale_widgets:
+            if kind == "lbl":
+                widget.config(text=Locale.tr(key))
+            elif kind == "btn":
+                widget.label.config(text=Locale.tr(key))
+            elif kind == "chk":
+                widget.config(text=Locale.tr(key))
+            elif kind == "picker":
+                widget.apply_locale()
+        self.tree.heading("#0", text=Locale.tr("name_lbl"))
+        self.tree.heading("file", text=Locale.tr("file_lbl"))
+        self.tree.heading("threshold", text=Locale.tr("match_lbl"))
 
     def _refresh_tree(self):
         self.tree.delete(*self.tree.get_children())
@@ -133,12 +164,13 @@ class AcceptTab(tk.Frame):
         from tkinter import filedialog, simpledialog
         path = filedialog.askopenfilename(
             initialdir=os.path.join(BASE, "templates"),
-            title="Select button template PNG",
+            title=Locale.tr("select_png_title"),
             filetypes=[("PNG images", "*.png"), ("All files", "*.*")])
         if not path:
             return
         rel = os.path.relpath(path, BASE)
-        name = simpledialog.askstring("Template name", "Name:", initialvalue=os.path.splitext(os.path.basename(path))[0])
+        name = simpledialog.askstring(Locale.tr("template_name_title"), Locale.tr("template_name"),
+                                      initialvalue=os.path.splitext(os.path.basename(path))[0])
         if not name:
             return
         cfg = load_json(self.cfg_path)
@@ -153,7 +185,7 @@ class AcceptTab(tk.Frame):
     def remove_template(self):
         sel = self.tree.selection()
         if not sel:
-            messagebox.showinfo("Remove", "Select a template first.")
+            messagebox.showinfo(Locale.tr("remove_lbl"), Locale.tr("remove_need_tpl"))
             return
         idx = int(sel[0])
         cfg = load_json(self.cfg_path)
@@ -213,6 +245,6 @@ class AcceptTab(tk.Frame):
             if silent:
                 print(f"Accept save skipped (invalid input): {e}", file=sys.stderr)
             else:
-                messagebox.showerror("Invalid value", str(e))
+                messagebox.showerror(Locale.tr("invalid_value"), str(e))
             return
         save_json(self.cfg_path, cfg)

@@ -110,7 +110,7 @@ def load_config():
     on_disk.pop("xin", None)
 
     lang = on_disk.get("lang", "ru")
-    Locale.set_lang(lang if lang in ("en", "ru") else "ru")
+    Locale.set_lang(lang if lang in Locale.languages() else "ru")
 
     for key in ("mode", "toggles", "combos", "champions", "window", "minimap", "afkfarm", "lang"):
         if key not in on_disk:
@@ -174,25 +174,29 @@ class WildRiftAssistant:
         self.notebook.pack(fill="both", expand=True, padx=2, pady=2)
 
         self._tab_specs = [
-            ("tab_main", "General", lambda: MainTab(self.notebook, self.config)),
-            ("tab_combos", "Combos", lambda: ComboTab(self.notebook, self.config)),
-            ("tab_champions", "Champions", lambda: ChampionTab(
+            ("tab_main", "tab_main", lambda: MainTab(self.notebook, self.config)),
+            ("tab_combos", "tab_combos", lambda: ComboTab(self.notebook, self.config)),
+            ("tab_champions", "tab_champions", lambda: ChampionTab(
                 self.notebook, self.config["champions"],
                 on_select=self._on_champ_select, on_remove=self._on_champ_remove)),
-            ("tab_death", "Death", lambda: DeathWatchTab(self.notebook)),
-            ("tab_buy", "Buy", lambda: BuyTab(self.notebook)),
-            ("tab_auto", "Continue", lambda: AutoContinueTab(self.notebook)),
-            ("tab_minimap", "Minimap", lambda: MinimapTab(self.notebook, self.config.get("minimap"))),
-            ("tab_afkfarm", "Farm", lambda: AFKFarmTab(self.notebook, self.config.get("afkfarm"))),
-            ("tab_accept", "Accept", lambda: AcceptTab(self.notebook)),
+            ("tab_death", "tab_death", lambda: DeathWatchTab(self.notebook)),
+            ("tab_buy", "tab_buy", lambda: BuyTab(self.notebook)),
+            ("tab_auto", "tab_auto", lambda: AutoContinueTab(self.notebook)),
+            ("tab_minimap", "tab_minimap", lambda: MinimapTab(self.notebook, self.config.get("minimap"))),
+            ("tab_afkfarm", "tab_afkfarm", lambda: AFKFarmTab(self.notebook, self.config.get("afkfarm"))),
+            ("tab_accept", "tab_accept", lambda: AcceptTab(self.notebook)),
         ]
         self._build_all_tabs()
         self._restore_active_tab()
 
         self._bar_locale_widgets = []
-        self.lang_btn = VintageButton(bar, text="RU" if Locale.current() == "ru" else "EN",
-                                      command=self._toggle_lang, width=2)
-        self.lang_btn.pack(side="left")
+        self.lang_var = tk.StringVar()
+        self.lang_box = ttk.Combobox(bar, textvariable=self.lang_var, state="readonly",
+                                     values=[Locale.language_name(c) for c in Locale.languages()],
+                                     font=FONT_SM, width=14)
+        self.lang_box.set(Locale.language_name(Locale.current()))
+        self.lang_box.pack(side="left")
+        self.lang_box.bind("<<ComboboxSelected>>", self._set_lang)
         lbl_champ = VintageLabel(bar, text=Locale.tr("champion"), font=FONT_SM)
         lbl_champ.pack(side="left")
         self._bar_locale_widgets.append(("label", lbl_champ, "champion"))
@@ -242,15 +246,17 @@ class WildRiftAssistant:
 
     # --- tabs ------------------------------------------------------------------
     def _build_all_tabs(self):
-        for attr, text, factory in self._tab_specs:
+        for attr, key, factory in self._tab_specs:
             tab = factory()
-            self.notebook.add(tab, text=text)
+            self.notebook.add(tab, text=Locale.tr(key))
             setattr(self, attr, tab)
 
     # --- locale ---------------------------------------------------------------
-    def _toggle_lang(self):
-        Locale.toggle()
-        self.lang_btn.label.config(text="RU" if Locale.current() == "ru" else "EN")
+    def _set_lang(self, _event=None):
+        for code in Locale.languages():
+            if Locale.language_name(code) == self.lang_var.get():
+                Locale.set_lang(code)
+                break
         self._apply_locale()
         self.collect_config()
         save_config(self.config)
@@ -262,8 +268,12 @@ class WildRiftAssistant:
             elif kind == "btn":
                 widget.label.config(text=Locale.tr(key))
         self.status_lbl.config(text=Locale.tr("ready"))
-        if self.tab_afkfarm:
-            self.tab_afkfarm.apply_locale()
+        for idx, (attr, key, _factory) in enumerate(self._tab_specs):
+            tab = getattr(self, attr, None)
+            if tab is not None:
+                self.notebook.tab(idx, text=Locale.tr(key))
+                if hasattr(tab, "apply_locale"):
+                    tab.apply_locale()
 
     # --- champion tab ---------------------------------------------------------
     def _on_champ_select(self, key):
@@ -363,7 +373,7 @@ class WildRiftAssistant:
         path = filedialog.asksaveasfilename(
             initialdir=BASE, defaultextension=".json",
             filetypes=[("JSON config", "*.json"), ("All files", "*.*")],
-            title="Export config")
+            title=Locale.tr("export_config_title"))
         if not path:
             return
         self.collect_config()
@@ -371,9 +381,9 @@ class WildRiftAssistant:
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(self.config, f, indent=4)
                 f.write("\n")
-            self.status_lbl.config(text="Config exported", fg=TOKENS["success"])
+            self.status_lbl.config(text=Locale.tr("export_ok"), fg=TOKENS["success"])
         except OSError as e:
-            messagebox.showerror("Export failed", str(e))
+            messagebox.showerror(Locale.tr("export_failed"), str(e))
 
     def _on_file_drop(self, event):
         raw = event.data.strip().strip("{}")
@@ -383,7 +393,7 @@ class WildRiftAssistant:
         if not path or not os.path.isfile(path):
             return
         if not path.lower().endswith(".json"):
-            messagebox.showwarning("Import", "Only .json config files supported.")
+            messagebox.showwarning(Locale.tr("import"), Locale.tr("import_only_json"))
             return
         self.root.after(50, lambda: self._do_import_file(path))
 
@@ -392,20 +402,20 @@ class WildRiftAssistant:
             with open(path, "r", encoding="utf-8") as f:
                 imported = json.load(f)
         except (OSError, ValueError) as e:
-            messagebox.showerror("Import failed", str(e))
+            messagebox.showerror(Locale.tr("import_failed"), str(e))
             return
-        if not messagebox.askyesno("Import config",
-                                   "Replace current config with\n%s?" % os.path.basename(path)):
+        if not messagebox.askyesno(Locale.tr("import_config_title"),
+                                   Locale.tr("import_config_confirm") + "\n%s?" % os.path.basename(path)):
             return
         save_config(imported)
         self.config = load_config()
         self._rebuild_ui()
-        self.status_lbl.config(text="Config imported", fg=TOKENS["success"])
+        self.status_lbl.config(text=Locale.tr("import_ok"), fg=TOKENS["success"])
 
     def import_config(self):
         path = filedialog.askopenfilename(
             initialdir=BASE, filetypes=[("JSON config", "*.json"), ("All files", "*.*")],
-            title="Import config")
+            title=Locale.tr("import_config_title"))
         if not path:
             return
         self._do_import_file(path)
@@ -415,7 +425,7 @@ class WildRiftAssistant:
         try:
             os.makedirs(backup_dir, exist_ok=True)
         except OSError as e:
-            messagebox.showerror("Backup failed", str(e))
+            messagebox.showerror(Locale.tr("backup_failed"), str(e))
             return
         self.collect_config()
         save_config(self.config)
@@ -423,10 +433,10 @@ class WildRiftAssistant:
         backup_path = os.path.join(backup_dir, "config_%s.json" % ts)
         try:
             shutil.copy2(CONFIG_FILE, backup_path)
-            self.status_lbl.config(text="Backup saved: config_%s.json" % ts,
+            self.status_lbl.config(text=Locale.tr("backup_ok") + "config_%s.json" % ts,
                                    fg=TOKENS["success"])
         except OSError as e:
-            messagebox.showerror("Backup failed", str(e))
+            messagebox.showerror(Locale.tr("backup_failed"), str(e))
 
     def _rebuild_ui(self):
         if self.tab_death:
@@ -454,7 +464,7 @@ class WildRiftAssistant:
         self.collect_config()
         save_config(self.config)
         self._engine_should_run = True
-        self.status_lbl.config(text="Generating...", fg=TOKENS["warning"])
+        self.status_lbl.config(text=Locale.tr("generating"), fg=TOKENS["warning"])
         threading.Thread(target=self._apply_worker, daemon=True).start()
 
     def _apply_worker(self):
@@ -477,7 +487,7 @@ class WildRiftAssistant:
         if getattr(self, "_engine_should_run", False) and not self._applying:
             if not ahk_generator.is_running():
                 self._applying = True
-                self.status_lbl.config(text="Auto-restarting...", fg=TOKENS["warning"])
+                self.status_lbl.config(text=Locale.tr("auto_restarting"), fg=TOKENS["warning"])
                 threading.Thread(target=self._watchdog_worker, daemon=True).start()
         try:
             self.root.after(3000, self._engine_watchdog)
@@ -489,13 +499,13 @@ class WildRiftAssistant:
         self.root.after(0, lambda: self._watchdog_done(ok, msg))
 
     def _watchdog_done(self, ok, msg):
-        self.status_lbl.config(text="Auto-restarted: " + msg, fg=TOKENS["warning"])
+        self.status_lbl.config(text=Locale.tr("auto_restarted") + " " + msg, fg=TOKENS["warning"])
         self._update_ahk_dot(ok)
         self._applying = False
 
     def _show_hotkeys(self):
         win = tk.Toplevel(self.root)
-        win.title("Active Hotkeys")
+        win.title(Locale.tr("hotkeys_title"))
         win.configure(bg=TOKENS["background"])
         win.resizable(False, False)
         txt = tk.Text(win, width=56, height=24, bg=TOKENS["compareBack"],
@@ -511,14 +521,14 @@ class WildRiftAssistant:
         minimap = self.config.get("minimap", {})
         afkfarm = self.config.get("afkfarm", {})
 
-        w("=== GLOBAL ===")
-        w("  Stop key:     %s" % toggles.get("stop_key", "s"))
-        w("  Anti-AFK:     Ctrl+G (toggle in game)")
-        w("  Mode:         %s" % self.config.get("mode", "general"))
-        w("  Target exe:   %s" % toggles.get("target_exe", "HD-Player.exe"))
+        w("=== " + Locale.tr("hk_global") + " ===")
+        w("  " + Locale.tr("hk_stop_key") + ":     %s" % toggles.get("stop_key", "s"))
+        w("  " + Locale.tr("hk_anti_afk") + ":     Ctrl+G (" + Locale.tr("hk_in_game_toggle") + ")")
+        w("  " + Locale.tr("hk_mode") + ":         %s" % self.config.get("mode", "general"))
+        w("  " + Locale.tr("hk_target_exe") + ":   %s" % toggles.get("target_exe", "HD-Player.exe"))
         w("")
 
-        w("=== CHAMPION TRIGGERS ===")
+        w("=== " + Locale.tr("hk_champ_triggers") + " ===")
         mode = self.config.get("mode", "general")
         if mode != "general":
             entry = champs.get(mode, {})
@@ -529,11 +539,12 @@ class WildRiftAssistant:
                     w("  %s: %s -> %s" % (slot, trig, keys))
         else:
             for c in self.config.get("combos", []):
-                w("  %s -> %s  (interval %d)" % (
-                    c.get("trigger", "?"), c.get("keys", "?"), c.get("interval", 50)))
+                w("  %s -> %s  (%s %d)" % (
+                    c.get("trigger", "?"), c.get("keys", "?"),
+                    Locale.tr("hk_interval"), c.get("interval", 50)))
         w("")
 
-        w("=== MINIMAP ===")
+        w("=== " + Locale.tr("hk_minimap") + " ===")
         for key in minimap.get("_order", []):
             entry = minimap.get(key, {})
             trig = entry.get("trigger", "")
@@ -542,16 +553,16 @@ class WildRiftAssistant:
                 w("  %s: %s  (%d, %d)" % (key, trig, x, y))
         w("")
 
-        w("=== AFK FARM ===")
+        w("=== " + Locale.tr("hk_afk_farm") + " ===")
         if afkfarm.get("enabled"):
-            w("  Toggle:  %s" % afkfarm.get("toggle_key", "F5"))
-            w("  Slots:   %s" % ", ".join(afkfarm.get("slots", [])))
-            w("  Combo:   %s" % afkfarm.get("combo_keys", ""))
+            w("  " + Locale.tr("hk_toggle") + ":  %s" % afkfarm.get("toggle_key", "F5"))
+            w("  " + Locale.tr("hk_slots") + ":   %s" % ", ".join(afkfarm.get("slots", [])))
+            w("  " + Locale.tr("hk_combo") + ":   %s" % afkfarm.get("combo_keys", ""))
         else:
-            w("  (disabled)")
+            w("  (" + Locale.tr("hk_disabled") + ")")
 
         txt.config(state="disabled")
-        VintageButton(win, text="Close", command=win.destroy, width=8).pack(pady=(0, 8))
+        VintageButton(win, text=Locale.tr("close_lbl"), command=win.destroy, width=8).pack(pady=(0, 8))
         win.bind("<Escape>", lambda e: win.destroy())
 
     def _show_combo_browser(self):
@@ -601,10 +612,10 @@ class WildRiftAssistant:
         except ImportError:
             return
         menu = pystray.Menu(
-            pystray.MenuItem("Show", self.show_window, default=True),
-            pystray.MenuItem("Apply & Start", lambda: self.root.after(0, self.apply_and_start)),
-            pystray.MenuItem("Stop engine", lambda: self.root.after(0, self.stop_engine)),
-            pystray.MenuItem("Quit", self.quit_app),
+            pystray.MenuItem(Locale.tr("tray_show"), self.show_window, default=True),
+            pystray.MenuItem(Locale.tr("tray_apply_start"), lambda: self.root.after(0, self.apply_and_start)),
+            pystray.MenuItem(Locale.tr("tray_stop"), lambda: self.root.after(0, self.stop_engine)),
+            pystray.MenuItem(Locale.tr("tray_quit"), self.quit_app),
         )
         self.tray_icon = pystray.Icon("WildRiftAssistant", self._tray_image(),
                                       "WildRiftAssistant", menu)

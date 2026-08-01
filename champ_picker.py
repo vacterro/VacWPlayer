@@ -2,6 +2,7 @@ import tkinter as tk
 
 import champions
 from theme import VintageButton, VintageLabel, VintageEntry, VintageSunken, TOKENS, FONT_MAIN, FONT_SM
+from locales import Locale
 
 
 class ChampionPicker(tk.Toplevel):
@@ -13,7 +14,7 @@ class ChampionPicker(tk.Toplevel):
 
     def __init__(self, parent, on_pick, already=()):
         super().__init__(parent)
-        self.title("Add champion")
+        self.title(Locale.tr("add_champion_title"))
         self.configure(bg=TOKENS["background"])
         self.resizable(False, False)
         self.on_pick = on_pick
@@ -21,7 +22,7 @@ class ChampionPicker(tk.Toplevel):
         self.pool = [n for n in champions.ROSTER
                      if champions.slug(n) not in self.already]
 
-        VintageLabel(self, text="Search:", font=FONT_SM).pack(anchor="w", padx=8, pady=(8, 0))
+        VintageLabel(self, text=Locale.tr("search_lbl") + ":", font=FONT_SM).pack(anchor="w", padx=8, pady=(8, 0))
         self.var_search = tk.StringVar()
         entry = VintageEntry(self, textvariable=self.var_search, width=30)
         entry.pack(anchor="w", padx=8, pady=2)
@@ -43,8 +44,8 @@ class ChampionPicker(tk.Toplevel):
 
         row = tk.Frame(self, bg=TOKENS["background"])
         row.pack(fill="x", padx=8, pady=6)
-        VintageButton(row, text="Add", command=self._pick, width=8).pack(side="left")
-        VintageButton(row, text="Cancel", command=self.destroy, width=8).pack(side="left", padx=4)
+        VintageButton(row, text=Locale.tr("add_lbl"), command=self._pick, width=8).pack(side="left")
+        VintageButton(row, text=Locale.tr("cancel"), command=self.destroy, width=8).pack(side="left", padx=4)
 
         self._refresh()
         entry.entry.focus_set()
@@ -68,8 +69,7 @@ class ChampionPicker(tk.Toplevel):
             self.listbox.insert("end", n + mark)
         if names:
             self.listbox.selection_set(0)
-        self.hint.config(text="%d of %d shown   * = placeholder combo"
-                              % (len(names), len(self.pool)))
+        self.hint.config(text=Locale.tr("picker_hint") % (len(names), len(self.pool)))
 
     def _pick(self):
         names = self._visible()

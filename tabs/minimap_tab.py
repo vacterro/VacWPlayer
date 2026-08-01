@@ -1,6 +1,7 @@
 import tkinter as tk
 from theme import VintageButton, VintageLabel, VintageEntry, TOKENS, FONT_SM
 from tabs.champ_tab import BindButton
+from locales import Locale
 
 MINIMAP_DEFAULTS = {
     "top":        {"trigger": "F17", "x": 64,  "y": 137},
@@ -40,9 +41,15 @@ class MinimapTab(tk.Frame):
 
         head = tk.Frame(self, bg=TOKENS["background"])
         head.pack(fill="x", padx=4, pady=(4, 1))
-        VintageLabel(head, text="Minimap Click Hotkeys").pack(anchor="w")
-        VintageLabel(head, text="Click on lane = move there in game",
-                     font=FONT_SM, fg=TOKENS["textMuted"]).pack(anchor="w")
+        self._lbl_title = VintageLabel(head, text=Locale.tr("minimap_title"))
+        self._lbl_title.pack(anchor="w")
+        self._lbl_sub = VintageLabel(head, text=Locale.tr("minimap_sub"),
+                     font=FONT_SM, fg=TOKENS["textMuted"])
+        self._lbl_sub.pack(anchor="w")
+        self._locale_widgets = [
+            ("lbl", self._lbl_title, "minimap_title"),
+            ("lbl", self._lbl_sub, "minimap_sub"),
+        ]
 
         # Scrollable area
         self._canvas = tk.Canvas(self, bg=TOKENS["background"], highlightthickness=0)
@@ -70,26 +77,48 @@ class MinimapTab(tk.Frame):
         self._canvas.bind("<Leave>", lambda e: self._canvas.unbind_all("<MouseWheel>"))
 
         # Header
-        hdr_fg = TOKENS["textSecondary"]
-        VintageLabel(self._form, text="Name", font=FONT_SM, fg=hdr_fg
-                     ).grid(row=0, column=0, sticky="w", padx=1)
-        VintageLabel(self._form, text="Hotkey", font=FONT_SM, fg=hdr_fg
-                     ).grid(row=0, column=1, sticky="w", padx=(2, 1))
-        VintageLabel(self._form, text="X", font=FONT_SM, fg=hdr_fg
-                     ).grid(row=0, column=3, sticky="w", padx=(4, 1))
-        VintageLabel(self._form, text="Y", font=FONT_SM, fg=hdr_fg
-                     ).grid(row=0, column=4, sticky="w", padx=1)
+        self._draw_header()
 
         self._rebuild_form()
 
         btn_frame = tk.Frame(self, bg=TOKENS["background"])
         btn_frame.pack(fill="x", padx=4, pady=2)
-        VintageButton(btn_frame, text="+ Add", command=self.add_slot,
-                      width=7).pack(side="left", padx=1)
-        VintageButton(btn_frame, text="Reset defaults",
-                      command=self.reset_defaults, width=13).pack(side="left", padx=6)
-        VintageButton(btn_frame, text="Apply to Engine",
-                      command=self._trigger_apply, width=15).pack(side="right", padx=1)
+        self._btn_add = VintageButton(btn_frame, text=Locale.tr("add_lbl"), command=self.add_slot,
+                      width=7)
+        self._btn_add.pack(side="left", padx=1)
+        self._locale_widgets.append(("btn", self._btn_add, "add_lbl"))
+        self._btn_reset = VintageButton(btn_frame, text=Locale.tr("reset_defaults"),
+                      command=self.reset_defaults, width=13)
+        self._btn_reset.pack(side="left", padx=6)
+        self._locale_widgets.append(("btn", self._btn_reset, "reset_defaults"))
+        self._btn_apply = VintageButton(btn_frame, text=Locale.tr("apply_to_engine"),
+                      command=self._trigger_apply, width=15)
+        self._btn_apply.pack(side="right", padx=1)
+        self._locale_widgets.append(("btn", self._btn_apply, "apply_to_engine"))
+
+    def _draw_header(self):
+        hdr_fg = TOKENS["textSecondary"]
+        self._hdr_name = VintageLabel(self._form, text=Locale.tr("name_lbl"), font=FONT_SM, fg=hdr_fg)
+        self._hdr_name.grid(row=0, column=0, sticky="w", padx=1)
+        self._hdr_hotkey = VintageLabel(self._form, text=Locale.tr("hotkey_lbl"), font=FONT_SM, fg=hdr_fg)
+        self._hdr_hotkey.grid(row=0, column=1, sticky="w", padx=(2, 1))
+        VintageLabel(self._form, text="X", font=FONT_SM, fg=hdr_fg
+                     ).grid(row=0, column=3, sticky="w", padx=(4, 1))
+        VintageLabel(self._form, text="Y", font=FONT_SM, fg=hdr_fg
+                     ).grid(row=0, column=4, sticky="w", padx=1)
+
+    def apply_locale(self):
+        self._hdr_name.config(text=Locale.tr("name_lbl"))
+        self._hdr_hotkey.config(text=Locale.tr("hotkey_lbl"))
+        for kind, widget, key in self._locale_widgets:
+            if kind == "lbl":
+                widget.config(text=Locale.tr(key))
+            elif kind == "btn":
+                widget.label.config(text=Locale.tr(key))
+        for key, r in self._rows.items():
+            lbl = r.get("name_lbl")
+            if lbl:
+                lbl.config(text=Locale.tr("slots." + key, fallback=key.replace("_", " ").title()) + ":")
 
     def _trigger_apply(self):
         try:
@@ -144,15 +173,7 @@ class MinimapTab(tk.Frame):
         self._rows.clear()
 
         # Re-draw header
-        hdr_fg = TOKENS["textSecondary"]
-        VintageLabel(self._form, text="Name", font=FONT_SM, fg=hdr_fg
-                     ).grid(row=0, column=0, sticky="w", padx=1)
-        VintageLabel(self._form, text="Hotkey", font=FONT_SM, fg=hdr_fg
-                     ).grid(row=0, column=1, sticky="w", padx=(2, 1))
-        VintageLabel(self._form, text="X", font=FONT_SM, fg=hdr_fg
-                     ).grid(row=0, column=3, sticky="w", padx=(4, 1))
-        VintageLabel(self._form, text="Y", font=FONT_SM, fg=hdr_fg
-                     ).grid(row=0, column=4, sticky="w", padx=1)
+        self._draw_header()
 
         order = self._resolve_order()
         for row_idx, key in enumerate(order, start=1):
@@ -215,7 +236,7 @@ class MinimapTab(tk.Frame):
 
     def _add_row(self, row, key, track=False):
         d = self.slots.get(key, {"trigger": "", "x": 0, "y": 0})
-        label = SLOT_LABELS.get(key)
+        label = Locale.tr("slots." + key, fallback=SLOT_LABELS.get(key, key))
 
         if label:
             name_lbl = VintageLabel(self._form, text=label + ":", width=10)
@@ -231,6 +252,7 @@ class MinimapTab(tk.Frame):
             name_entry.bind("<Button-1>", lambda e, k=key: self._drag_begin(e, k))
             name_entry.bind("<B1-Motion>", lambda e, k=key: self._drag_motion(e, k))
             name_entry.bind("<ButtonRelease-1>", lambda e, k=key: self._drag_drop(e, k))
+            name_lbl = None
 
         tv = tk.StringVar(value=d.get("trigger", ""))
         tv.trace_add("write", self._auto_save)
@@ -257,7 +279,7 @@ class MinimapTab(tk.Frame):
 
         if track:
             self._rows[key] = {
-                "name_entry": name_entry, "trigger_var": tv,
+                "name_entry": name_entry, "name_lbl": name_lbl, "trigger_var": tv,
                 "x_var": xv, "y_var": yv, "remove_btn": remove_btn,
             }
 
