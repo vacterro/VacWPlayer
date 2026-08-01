@@ -11,7 +11,7 @@ import shutil
 from datetime import datetime
 from tkinterdnd2 import TkinterDnD
 
-VERSION = "0.0.2"
+VERSION = "0.0.3"
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 PARENT = os.path.dirname(BASE)
@@ -617,7 +617,10 @@ class WildRiftAssistant:
     def quit_app(self, icon=None, item=None):
         if self.tray_icon:
             self.tray_icon.stop()
-        self._remember_window()
+        self.collect_config()
+        for tab in (self.tab_death, self.tab_buy, self.tab_auto, self.tab_accept):
+            if tab and hasattr(tab, "save"):
+                tab.save(silent=True)
         save_config(self.config)
         self.stop_everything()
         self.root.after(0, self.root.destroy)

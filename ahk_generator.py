@@ -2,6 +2,12 @@ import os
 import shutil
 import subprocess
 import sys
+import time
+
+import pywintypes
+import win32api
+import win32con
+import win32process
 from ahk_builder import generate_script, validate_config
 
 """Renders wr_runtime.ahk from config and manages its process.
@@ -53,14 +59,8 @@ def generate_and_run(config):
     except (OSError, subprocess.SubprocessError) as e:
         return False, "Failed to launch AutoHotkey: %s" % e
 
-    # Write PID atomically
-    pid_path_tmp = PID_PATH + ".tmp"
-    try:
-        with open(pid_path_tmp, "w") as f:
-            f.write(str(proc.pid))
-        os.replace(pid_path_tmp, PID_PATH)
-    except OSError as e:
-        print(f"ahk_generator: PID file race during launch: {e}", file=sys.stderr)
+    # Runtime writes its own PID to .ahk.pid on start - nothing to do here.
+    # (No Python-side write: a dead pid file must not shadow a failed launch.)
 
     if config_warnings:
         msg = "Warnings: " + "; ".join(config_warnings[:3])
@@ -74,9 +74,35 @@ def generate_and_run(config):
             msg += " - dropped duplicate triggers: " + ", ".join(dropped)
     return True, msg
 
+def _pid_alive(pid):
+    """True if the process is alive. Pure win32 - no subprocess spawn, so the
+    3s engine watchdog costs ~0 CPU instead of spawning tasklist/powershell."""
+    try:
+        handle = win32api.OpenProcess(
+            win32con.PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    except pywintypes.error:
+        return False
+    try:
+        return win32process.GetExitCodeProcess(handle) == 259  # STILL_ACTIVE
+    except pywintypes.error:
+        return False
+    finally:
+        win32api.CloseHandle(handle)
+
+
+_last_scan_ts = 0.0
 def _find_our_pids():
-    """Return list of PIDs of AutoHotkey processes running our script."""
-    print("WARNING: falling back to PowerShell _find_our_pids()!", flush=True)
+    """Return list of PIDs of AutoHotkey processes running our script.
+
+    PowerShell/WMI fallback - expensive (~1s), so throttled to once per
+    10s. With the runtime writing its own .ahk.pid this path is only hit
+    during startup or after a failed launch.
+    """
+    global _last_scan_ts
+    now = time.monotonic()
+    if now - _last_scan_ts < 10:
+        return []
+    _last_scan_ts = now
     ours = []
     script_abs = os.path.abspath(AHK_PATH).replace("\\", "\\\\")
     ps_cmd = (
@@ -93,8 +119,8 @@ def _find_our_pids():
             line = line.strip()
             if line.isdigit():
                 ours.append(int(line))
-    except Exception as e:
-        print(f"ahk_generator: PowerShell fallback failed: {e}", file=sys.stderr)
+    except Exception:
+        pass
     return ours
 
 def _stop_pids(pids, wait_ms=500):
@@ -125,13 +151,11 @@ def is_running():
         try:
             with open(PID_PATH) as f:
                 pid = int(f.read().strip())
-            r = subprocess.run(["tasklist", "/FI", "PID eq %d" % pid, "/NH"],
-                               capture_output=True, creationflags=0x08000000)
-            if str(pid) in r.stdout.decode("utf-8", errors="replace"):
+            if _pid_alive(pid):
                 return True
-        except Exception as e:
-            print(f"ahk_generator: tasklist check failed for cached PID: {e}", file=sys.stderr)
-            
+        except (ValueError, OSError):
+            pass
+
     pids = _find_our_pids()
     if pids:
         try:

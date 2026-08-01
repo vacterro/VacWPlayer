@@ -23,7 +23,7 @@
 
 ## Käivitamine
 
-Topeltklõps **`WildRiftAssistant.bat`**-le (leiab venv-i ise, ilma konsooliaknata).
+Topeltklõps **`WildRiftAssistant.vbs`** (varjatud konsool, käivitub vaikselt) või käivita **`WildRiftAssistant.bat`** käsitsi (nähtavad vead / `--check`). Mõlemad leiavad venv-i ise.
 Või käsitsi:
 
 ```

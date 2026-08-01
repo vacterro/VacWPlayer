@@ -1,4 +1,6 @@
+import json
 import os
+import re
 
 """Renders wr_runtime.ahk from config and manages its process.
 
@@ -37,6 +39,11 @@ def parse_steps(keys_str, default_interval):
                 key, delay = head, int(tail)
         steps.append((key, delay))
     return steps
+
+def _is_plain_key(trigger):
+    """True for single keys usable with GetKeyState (no hotkey modifiers)."""
+    return bool(trigger and re.fullmatch(r"[A-Za-z0-9]|F\d{1,2}", trigger))
+
 
 def _send_for(key, shift):
     """Shift-wrap ability letters (self-cast in Wild Rift), send others raw."""
@@ -155,7 +162,6 @@ def _gen_header(a, target_exe, combos, afk):
             a.append("global P_afk_Active := false")
             a.append("global P_afk_Cycle := 0")
             a.append("global P_afk_Timer := 0")
-            a.append("global P_afk_MoveTimer := 0")
             a.append("global P_afk_Step := 0")
             a.append("global P_afk_LastCombo := 0")
             a.append("global P_afk_NextDelay := 0")
@@ -165,6 +171,9 @@ def _gen_header(a, target_exe, combos, afk):
             a.append("global P_afk_PosIndex := 0")
     a.append("")
     a.append("global ParentPID := %1%")
+    a.append('ahkPid := DllCall("GetCurrentProcessId")')
+    a.append('FileDelete, %A_ScriptDir%\\.ahk.pid')
+    a.append('FileAppend, %ahkPid%, %A_ScriptDir%\\.ahk.pid')
     a.append("SetTimer, Watchdog, 2000")
     a.append("SetTimer, MasterSpammer, 15")
     if isinstance(afk, dict) and afk.get("enabled") and (afk.get("toggle_key") or "").strip():
@@ -340,8 +349,7 @@ def _gen_hotkeys(a, target_exe, toggles, combos, minimap, afk_k):
             a.append('    if (!WinActive("ahk_exe ' + target_exe + '"))')
             a.append("        return")
             a.append('    MouseGetPos, _mm_x, _mm_y')
-            a.append('    WinGetPos, _mm_wx, _mm_wy,,, ahk_exe ' + target_exe)
-            a.append('    MouseMove, _mm_wx + ' + str(x) + ', _mm_wy + ' + str(y) + ', 0')
+            a.append('    MouseMove, ' + str(x) + ', ' + str(y) + ', 0')
             a.append('    SendInput {Blind}{LButton}')
             a.append('    MouseMove, _mm_x, _mm_y, 0')
             a.append("return")
@@ -390,6 +398,23 @@ def _gen_master_spammer(a, target_exe, toggles, combos):
     a.append("        LMB_Held := false")
     a.append("        CheckMovement()")
     a.append("    }")
+    for c in combos:
+        trig = (c.get("trigger") or "").strip()
+        if _is_plain_key(trig):
+            a.append('    if (P_' + c["tag"] + '_Held && !GetKeyState("' + trig + '", "P")) {')
+            a.append("        P_" + c["tag"] + "_Held := false")
+            a.append("        Step_" + c["tag"] + " := 0")
+            a.append("    }")
+    stop_key = (toggles.get("stop_key") or "").strip()
+    if _is_plain_key(stop_key):
+        a.append('    if (StopActive && !GetKeyState("' + stop_key + '", "P")) {')
+        a.append("        StopActive := false")
+        a.append("        CheckMovement()")
+        a.append("    }")
+    if toggles.get("space_spam", True):
+        a.append('    if (SpaceActive && !GetKeyState("Space", "P")) {')
+        a.append("        SpaceActive := false")
+        a.append("    }")
     a.append("    if (ManualAimActive || StopActive)")
     a.append("        return")
     a.append("    currentTime := A_TickCount")
@@ -422,6 +447,28 @@ def _gen_master_spammer(a, target_exe, toggles, combos):
     a.append("return")
     a.append("")
 
+def _deathwatch_cfg():
+    """Load deathwatch_config.json for AFK death-pause region/template.
+
+    Falls back to the classic hardcoded defaults if the file is missing or
+    malformed - the AFK farm must never die on a bad engine config.
+    """
+    dw_path = os.path.join(BASE, "deathwatch_config.json")
+    try:
+        with open(dw_path, encoding="utf-8") as f:
+            dw = json.load(f)
+        region = dw.get("death_label_region", [900, 118, 1165, 145])
+        template = dw.get("death_label_template",
+                          "templates/death_label.png")
+        if len(region) != 4:
+            region = [900, 118, 1165, 145]
+        if not template.endswith(".png"):
+            template = "templates/death_label.png"
+        return [int(v) for v in region], template
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return [900, 118, 1165, 145], "templates/death_label.png"
+
+
 def _gen_afk_farm(a, target_exe, config, afk, afk_k):
     """AFKFarmLogic timer: death check, minimap cycle, movement, combo."""
     if not afk_k:
@@ -442,7 +489,12 @@ def _gen_afk_farm(a, target_exe, config, afk, afk_k):
         y = int(entry.get("y", 0))
         if trig and x > 0 and y > 0:
             positions.append({"name": mk, "x": x, "y": y})
-    death_template = "%A_ScriptDir%\\templates\\death_label.png"
+    dl_region, dl_template = _deathwatch_cfg()
+    dl_x1, dl_y1, dl_x2, dl_y2 = dl_region
+    death_template = dl_template
+    if not os.path.isabs(death_template):
+        death_template = os.path.join("%A_ScriptDir%",
+                                      death_template.replace("/", "\\"))
 
     a.append("AFKFarmLogic:")
     a.append("    if (!P_afk_Active) {")
@@ -468,7 +520,7 @@ def _gen_afk_farm(a, target_exe, config, afk, afk_k):
     a.append("    ; --- death check every 500ms -----------------------------")
     a.append("    if (currentTime - P_afk_DeathCheck >= 500) {")
     a.append("        P_afk_DeathCheck := currentTime")
-    a.append("        ImageSearch, , , 900, 118, 1165, 145, *40 " + death_template)
+    a.append("        ImageSearch, , , " + str(dl_x1) + ", " + str(dl_y1) + ", " + str(dl_x2) + ", " + str(dl_y2) + ", *40 " + death_template)
     a.append("        if (ErrorLevel = 0) {")
     a.append("            if (!P_afk_WasDead) {")
     a.append("                P_afk_WasDead := true")

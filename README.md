@@ -31,8 +31,9 @@ AHK" with a UI, no hand-editing scripts.
 
 ## Run
 
-Double-click **`WildRiftAssistant.bat`** (auto-finds the venv, no console window).
-Or manually:
+Double-click **`WildRiftAssistant.vbs`** for a zero-console launch (hidden
+window, app starts silently). Or run **`WildRiftAssistant.bat`** manually for
+visible errors / `--check` diagnostics. Both auto-find the venv. Manually:
 
 ```
 ..\venv\Scripts\pythonw.exe main.pyw
