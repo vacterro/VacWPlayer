@@ -1,7 +1,7 @@
 import tkinter as tk
 import champions
 from theme import (VintageSunken, VintageButton, VintageLabel, VintageEntry,
-                   TOKENS, FONT_MAIN, FONT_SM)
+                   TOKENS, FONT_SM)
 
 
 class ComboBrowser(tk.Toplevel):

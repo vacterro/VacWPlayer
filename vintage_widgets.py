@@ -1,14 +1,13 @@
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import messagebox
 import threading
 import time
-import os
 
 import win32api
 import win32con
 import win32gui
 
-from theme import VintageButton, VintageEntry, VintageLabel, VintageSunken, TOKENS, FONT_MAIN
+from theme import VintageButton, VintageEntry, VintageLabel, TOKENS
 
 def capture_preview_bytes(region=None):
     import cv2
@@ -113,33 +112,3 @@ class VintageRegionEditor(tk.Frame):
             messagebox.showwarning("Preview", "BlueStacks window not found, minimized, or region is empty.")
             return
         show_image_popup(self, "Region preview", data=data)
-
-class VintageTemplatePicker(tk.Frame):
-    def __init__(self, parent, label, initial_rel_path, label_width=16, entry_width=28):
-        super().__init__(parent, bg=TOKENS["background"])
-        VintageLabel(self, text=label, width=label_width).pack(side="left")
-        self.path_var = tk.StringVar(value=initial_rel_path or "")
-        VintageEntry(self, textvariable=self.path_var, width=entry_width).pack(side="left", padx=4)
-        VintageButton(self, text="Browse...", command=self._browse, width=9).pack(side="left", padx=2)
-        VintageButton(self, text="Show", command=self._show, width=6).pack(side="left")
-
-    def get(self):
-        return self.path_var.get()
-
-    def _browse(self):
-        path = filedialog.askopenfilename(
-            initialdir=BASE, filetypes=[("PNG images", "*.png"), ("All files", "*.*")]
-        )
-        if path:
-            try:
-                rel = os.path.relpath(path, BASE)
-            except ValueError:
-                rel = path
-            self.path_var.set(rel.replace("\\", "/"))
-
-    def _show(self):
-        full = os.path.join(BASE, self.path_var.get())
-        if not os.path.isfile(full):
-            messagebox.showwarning("Show", f"File not found:\n{full}")
-            return
-        show_image_popup(self, "Template preview", file=full)

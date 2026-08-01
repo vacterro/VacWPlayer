@@ -11,7 +11,7 @@ import shutil
 from datetime import datetime
 from tkinterdnd2 import TkinterDnD
 
-VERSION = "0.0.5"
+VERSION = "0.0.6"
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 PARENT = os.path.dirname(BASE)
@@ -41,9 +41,8 @@ for p in (BASE, PARENT):
 
 import champions
 import single_instance
-from champ_picker import ChampionPicker
 from theme import (
-    apply_base_theme, TOKENS, FONT_SM, FONT_MAIN,
+    apply_base_theme, TOKENS, FONT_SM,
     VintageButton, VintageLabel, VintageNotebook
 )
 import ahk_generator
