@@ -31,3 +31,4 @@ backups/
 wr_runtime.ahk
 # tool output
 templates/burst_death/
+.ahk.pid
