@@ -45,7 +45,8 @@ def build_buttons(cfg):
     for b in cfg["buttons"]:
         tmpl = cv2.imread(os.path.join(BASE, b["template"]), cv2.IMREAD_GRAYSCALE)
         if tmpl is None:
-            print("WARN: template not found, skipping '%s': %s" % (b.get("name"), b["template"]))
+            print("WARN: template not found, '%s' - blind click mode: %s" % (b.get("name"), b["template"]))
+            buttons.append({**b, "tmpl": None})
             continue
         buttons.append({**b, "tmpl": tmpl})
     return buttons
@@ -100,14 +101,20 @@ def main(replace=False):
 
             clicked = False
             for region, group in region_groups.items():
-                crop = capture.grab_region(hwnd, region)
+                needs_scan = any(b["tmpl"] is not None for b in group)
+                crop = capture.grab_region(hwnd, region) if needs_scan else None
                 for b in group:
+                    x0, y0, x1, y1 = region
+                    cx, cy = (x0 + x1) // 2, (y0 + y1) // 2
+                    if b["tmpl"] is None:
+                        print(f"blind-click '{b['name']}' at ({cx},{cy})")
+                        window_ctl.click_at(hwnd, cx, cy, button="left")
+                        clicked = True
+                        break
                     score = match_score(crop, b["tmpl"])
                     if score >= b["threshold"]:
-                        x0, y0, x1, y1 = region
-                        cx, cy = (x0 + x1) // 2, (y0 + y1) // 2
                         print(f"matched '{b['name']}' (score={score:.2f}), clicking ({cx},{cy})")
-                        window_ctl.click_at(hwnd, cx, cy)
+                        window_ctl.click_at(hwnd, cx, cy, button="left")
                         clicked = True
                         break
                 if clicked:

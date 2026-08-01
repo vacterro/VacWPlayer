@@ -46,8 +46,6 @@ def main(replace=False):
 
     cfg_last_mtime = os.path.getmtime(CONFIG_PATH)
     cfg = load_config()
-    cfg_last_mtime = os.path.getmtime(CONFIG_PATH)
-    cfg = load_config()
     hwnd = None
     loaded_window_title = cfg["window_title"]
     templates = build_templates(cfg)
