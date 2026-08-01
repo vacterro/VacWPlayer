@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# IDE
+.vscode/
+.idea/
+
+# Runtime artifacts
+crash.log
+*.log
+*.prof
+*.bak
+.locks/
+.pytest_cache/
+
+# OS droppings
+.DS_Store
+Thumbs.db
+
+# saipen agent state
+.saipen/
+
+# user data
+.freebuff/
+backups/
+
+# generated
+wr_runtime.ahk
+# tool output
+templates/burst_death/

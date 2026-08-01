@@ -1,0 +1,9 @@
+# WildRiftAssistant GUI deps (install into the project venv)
+mss
+opencv-python
+numpy
+pywin32
+pystray
+pillow
+# Runtime dependency (not pip): AutoHotkey v1 - https://www.autohotkey.com/
+pytest

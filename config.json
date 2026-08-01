@@ -1,0 +1,279 @@
+{
+    "mode": "ryze",
+    "toggles": {
+        "mouse_remap": true,
+        "space_spam": true,
+        "space_interval": 128,
+        "anti_afk_hotkey": true,
+        "anti_afk_interval": 5000,
+        "stop_key": "s",
+        "manual_aim_block": true,
+        "target_exe": "HD-Player.exe"
+    },
+    "combos": [],
+    "champions": {
+        "ryze": {
+            "trigger_wave": "F13",
+            "keys_wave": "q,e,{Space}",
+            "trigger_jungle": "F14",
+            "keys_jungle": "q,e,q,w,q,{Space}",
+            "trigger_pvp": "F15",
+            "keys_pvp": "e,w,w,q,{Space}",
+            "interval": 16,
+            "use_shift": false,
+            "qwer_as_uiop": true,
+            "display_name": "Ryze",
+            "presets_wave": [
+                {
+                    "keys": "q,e,{Space}",
+                    "name": ""
+                },
+                {
+                    "keys": "",
+                    "name": ""
+                },
+                {
+                    "keys": "",
+                    "name": ""
+                }
+            ],
+            "presets_jungle": [
+                {
+                    "keys": "q,q,e,q,w,q,{Space}",
+                    "name": ""
+                },
+                {
+                    "keys": "",
+                    "name": ""
+                },
+                {
+                    "keys": "",
+                    "name": ""
+                }
+            ],
+            "presets_pvp": [
+                {
+                    "keys": "e,w,e,q,w,e,{Space}",
+                    "name": ""
+                },
+                {
+                    "keys": "",
+                    "name": ""
+                },
+                {
+                    "keys": "",
+                    "name": ""
+                }
+            ]
+        },
+        "xin_zhao": {
+            "trigger_wave": "F13",
+            "keys_wave": "w,q,{Space}",
+            "ignore_npc_keys_wave": "w",
+            "trigger_jungle": "F14",
+            "keys_jungle": "w,q,e,{Space}",
+            "ignore_npc_keys_jungle": "w",
+            "trigger_pvp": "F15",
+            "keys_pvp": "e,w,q,{Space}",
+            "ignore_npc_keys_pvp": "w",
+            "interval": 128,
+            "display_name": "Xin Zhao"
+        },
+        "zyra": {
+            "trigger_wave": "F13",
+            "keys_wave": "q,w,e,{Space}",
+            "ignore_npc_keys_wave": "w",
+            "trigger_jungle": "F14",
+            "keys_jungle": "q,w,e,f,{Space}",
+            "ignore_npc_keys_jungle": "w",
+            "trigger_pvp": "F15",
+            "keys_pvp": "e,q,w,{Space}",
+            "ignore_npc_keys_pvp": "",
+            "interval": 50,
+            "display_name": "Zyra"
+        },
+        "taliyah": {
+            "trigger_wave": "F13",
+            "keys_wave": "w,e,q,{Space}",
+            "trigger_jungle": "F14",
+            "keys_jungle": "w,e,q,f,{Space}",
+            "trigger_pvp": "F15",
+            "keys_pvp": "w,e,q,{Space}",
+            "interval": 50,
+            "use_shift": false,
+            "qwer_as_uiop": true,
+            "display_name": "Ryze",
+            "presets_wave": [
+                {
+                    "keys": "",
+                    "name": ""
+                },
+                {
+                    "keys": "",
+                    "name": ""
+                },
+                {
+                    "keys": "",
+                    "name": ""
+                }
+            ],
+            "presets_jungle": [
+                {
+                    "keys": "",
+                    "name": ""
+                },
+                {
+                    "keys": "",
+                    "name": ""
+                },
+                {
+                    "keys": "",
+                    "name": ""
+                }
+            ],
+            "presets_pvp": [
+                {
+                    "keys": "",
+                    "name": ""
+                },
+                {
+                    "keys": "",
+                    "name": ""
+                },
+                {
+                    "keys": "",
+                    "name": ""
+                }
+            ]
+        },
+        "ezreal": {
+            "trigger_wave": "F13",
+            "keys_wave": "q,w,{Space}",
+            "trigger_jungle": "F14",
+            "keys_jungle": "w,q,e,{Space}",
+            "trigger_pvp": "F15",
+            "keys_pvp": "w,e,q,r,{Space}",
+            "interval": 32,
+            "use_shift": false,
+            "qwer_as_uiop": true,
+            "display_name": "Ryze",
+            "presets_wave": [
+                {
+                    "keys": "",
+                    "name": ""
+                },
+                {
+                    "keys": "",
+                    "name": ""
+                },
+                {
+                    "keys": "",
+                    "name": ""
+                }
+            ],
+            "presets_jungle": [
+                {
+                    "keys": "",
+                    "name": ""
+                },
+                {
+                    "keys": "",
+                    "name": ""
+                },
+                {
+                    "keys": "",
+                    "name": ""
+                }
+            ],
+            "presets_pvp": [
+                {
+                    "keys": "",
+                    "name": ""
+                },
+                {
+                    "keys": "",
+                    "name": ""
+                },
+                {
+                    "keys": "",
+                    "name": ""
+                }
+            ]
+        }
+    },
+    "minimap": {
+        "top": {
+            "trigger": "!F9",
+            "x": 64,
+            "y": 137
+        },
+        "mid": {
+            "trigger": "!F2",
+            "x": 116,
+            "y": 293
+        },
+        "bot": {
+            "trigger": "!F6",
+            "x": 268,
+            "y": 369
+        },
+        "top_deep": {
+            "trigger": "F20",
+            "x": 206,
+            "y": 135
+        },
+        "mid_deep": {
+            "trigger": "F21",
+            "x": 233,
+            "y": 182
+        },
+        "bot_deep": {
+            "trigger": "F22",
+            "x": 282,
+            "y": 211
+        },
+        "base": {
+            "trigger": "",
+            "x": 170,
+            "y": 370
+        },
+        "enemy_base": {
+            "trigger": "",
+            "x": 80,
+            "y": 80
+        },
+        "_order": [
+            "top",
+            "mid",
+            "bot",
+            "top_deep",
+            "mid_deep",
+            "bot_deep",
+            "base",
+            "enemy_base"
+        ]
+    },
+    "afkfarm": {
+        "toggle_key": "F4",
+        "move_duration": 5000,
+        "follow_cursor": true,
+        "combo_keys": "q,w,e,{Space}",
+        "combo_interval": 128,
+        "slots": [
+            "top",
+            "mid",
+            "bot",
+            "top_deep",
+            "mid_deep",
+            "bot_deep"
+        ]
+    },
+    "lang": "ru",
+    "window": {
+        "active_tab": 2,
+        "position": "1926,565"
+    },
+    "auto_accept": {
+        "enabled": false
+    }
+}

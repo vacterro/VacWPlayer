@@ -1,0 +1,7 @@
+{
+    "monitor_enabled": false,
+    "window_title": "BlueStacks App Player",
+    "poll_interval_sec": 1.0,
+    "click_cooldown_sec": 3.0,
+    "templates": []
+}

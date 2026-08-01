@@ -1,0 +1,41 @@
+{
+  "monitor_enabled": true,
+  "window_title": "BlueStacks App Player",
+  "poll_interval_sec": 0.4,
+  "shop_buffer_sec": 0.0,
+  "restore_buffer_sec": 2.0,
+  "match_threshold": 0.75,
+  "death_label_region": [
+    900,
+    118,
+    1165,
+    145
+  ],
+  "timer_digits_region": [
+    955,
+    143,
+    1035,
+    170
+  ],
+  "death_label_template": "templates/death_label.png",
+  "digit_templates_dir": "templates/digits",
+  "max_death_wait_sec": 90.0,
+  "quickbuy_key": "Z",
+  "quickbuy_presses": 5,
+  "quickbuy_window_ms": 10.0,
+  "blocked_keys": [
+    "F13",
+    "F14",
+    "F15"
+  ],
+  "pedal_block_sec": 1.0,
+  "switch_to_work_window": false,
+  "work_window_title": "WildRiftAssistant",
+  "click_mid_on_resurrect": false,
+  "lock_window_resurrect": false,
+  "autobuy_after_b": false,
+  "buy_after_b_delay_sec": 6.5,
+  "autobuy_then_mid": false,
+  "controlsend_z": false,
+  "autobuy_then_mid_delay_sec": 0.5
+}

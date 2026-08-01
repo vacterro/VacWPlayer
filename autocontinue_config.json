@@ -1,0 +1,41 @@
+{
+  "monitor_enabled": false,
+  "window_title": "BlueStacks App Player",
+  "poll_interval_sec": 0.6,
+  "click_cooldown_sec": 2.5,
+  "buttons": [
+    {
+      "name": "continue_victory",
+      "region": [
+        800,
+        690,
+        1140,
+        765
+      ],
+      "template": "templates/buttons/continue_victory.png",
+      "threshold": 0.85
+    },
+    {
+      "name": "continue_shared",
+      "region": [
+        1590,
+        875,
+        1900,
+        940
+      ],
+      "template": "templates/buttons/continue_shared.png",
+      "threshold": 0.85
+    },
+    {
+      "name": "continue_awards",
+      "region": [
+        1590,
+        875,
+        1900,
+        940
+      ],
+      "template": "templates/buttons/continue_awards.png",
+      "threshold": 0.85
+    }
+  ]
+}

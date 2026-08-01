@@ -1,0 +1,51 @@
+🇪🇪 **Eesti** | 🇷🇺 [Русский](README.ru.md) | 🇺🇸 [English](README.md) | 👴 [Дед-Мод](README.ded.md) | 🇯🇵 [日本語](README.ja.md)
+
+# WildRiftAssistant
+
+Üks vanaaegse teemaga GUI kogu Wild Rifti tööriistakomplektile: pedaalide kombod, meistripõhised rotatsioonid, automaatne minimeerimine surma korral ja automaatne jätkamine pärast mängu – juhitav "super AHK" koos kasutajaliidesega, ilma skriptide käsitsi redigeerimiseta.
+
+## Funktsioonid
+
+- **Vahekaart Main (Peamine)** – globaalsed sisendi lülitid (hiire ümberkaardistamine, tühiku spämm, anti-AFK, peatamise klahv, käsitsi sihtimise paus, sihtmärk exe) pluss General-režiimi kohandatud kombode loend: lisa, kustuta, tühjenda, seo päästik klahvivajutusega, taasta pärandseaded.
+- **Vahekaart Ryze** – Wave / Jungle / PVP rotatsioonid, mis on eellaaditud tõeliste kombodega.
+- **Vahekaart Xin Zhao** – E->W->Q ründekombod vastavalt praeguse meta juhenditele.
+- **Vahekaardid Death Watch / Auto Continue** – juhivad olemasolevaid mootoreid `deathwatch.py` / `autocontinue.py` (testrežiimi lüliti, reaalajas olek), mis võtavad puhtalt üle käsuga `--replace`.
+- **Tšempioni režiim** (General / Ryze / Xin valikunupud) valib täpselt ühe aktiivse kombokomplekti, et F13–F15 ei satuks kunagi kangelaste vahel konflikti.
+- **Sammupõhised viivitused** – süntaks `klahv:ms`, nt `q,e:120,{Space}:200`.
+- **Süsteemisalve ikoon** – X peidab salve, mootor jätkab tööd; Quit peatab kõik.
+
+## Nõuded
+
+- Windows, Python 3.11, projekti virtuaalne keskkond (`../venv`).
+- AutoHotkey v1 komplektis nimega `AutoHotkeyU64.exe` – eraldi installimist pole vaja.
+- `pip install -r requirements.txt`.
+
+## Käivitamine
+
+Topeltklõps **`WildRiftAssistant.bat`**-le (leiab venv-i ise, ilma konsooliaknata).
+Või käsitsi:
+
+```
+..\venv\Scripts\pythonw.exe main.pyw
+```
+
+Ryze abiline käivitub automaatselt. Muuda mis tahes vahekaarti, vali tšempion ja vajuta **Käivita**.
+
+## Testid
+
+```
+python -m pytest tests/ -v
+```
+
+Vajab pytesti (`pip install pytest` või `pip install -r requirements.txt`).
+Testid impordivad ilma GUI-ta mooduleid ja kontrollivad, et kõik .py failid kompileeruvad puhtalt.
+
+## Kuidas see töötab
+
+GUI ise ei püüa kunagi klahvivajutusi – see genereerib `wr_runtime.ahk` failist `config.json` kasutades `ahk_generator.py` ja käivitab AutoHotkey (Event režiim, vajalik BlueStacksi jaoks). Ainult MEIE käivitatud runtime jälgitakse ja tapetakse PID järgi; teised AHK skriptid jäetakse rahule. Vana käsitsi kirjutatud `wr.ahk` eemaldatakse käivitamisel automaatselt.
+
+Kolm konfiguratsiooni, igaühel üks töö: `config.json` (kombod, režiim, lülitid), `deathwatch_config.json` (surma tuvastamine), `autocontinue_config.json` (mängujärgsed nupud). `wr_runtime.ahk` genereeritakse – ära kunagi redigeeri seda käsitsi.
+
+## Kombo süntaks
+
+Komadega eraldatud klahvid. `{Space}`, `f`, tähed. Oskuste tähed q/w/e/r valatakse Shiftiga (enda peale valamine), kui "Shift-cast" pole välja lülitatud. Lisa `:ms` klahvile, et määrata selle sammu viivitus; vastasel juhul rakendub kombo intervall. Hoidke päästikut all, et tsüklit korrata.
