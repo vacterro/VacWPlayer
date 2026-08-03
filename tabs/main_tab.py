@@ -33,12 +33,15 @@ def detect_running_emulators():
 
 TOGGLE_DEFAULTS = {
     "mouse_remap": True,
+    "mouse_move_instead_hold": False,
+    "mouse_toggle_hold": False,
     "space_spam": True,
     "space_interval": 128,
     "anti_afk_hotkey": True,
     "anti_afk_interval": 5000,
     "stop_key": "s",
     "manual_aim_block": True,
+    "guard_outside_game": True,
     "target_exe": "HD-Player.exe",
 }
 
@@ -72,24 +75,41 @@ class MainTab(tk.Frame):
 
         self.var_remap = tk.BooleanVar(value=toggles["mouse_remap"])
         self.var_remap.trace_add("write", self._auto_save)
+        self.var_move_instead_hold = tk.BooleanVar(value=toggles["mouse_move_instead_hold"])
+        self.var_move_instead_hold.trace_add("write", self._auto_save)
+        self.var_move_instead_hold.trace_add("write", self._exclusive_mouse_modes)
+        self.var_toggle_hold = tk.BooleanVar(value=toggles["mouse_toggle_hold"])
+        self.var_toggle_hold.trace_add("write", self._auto_save)
+        self.var_toggle_hold.trace_add("write", self._exclusive_mouse_modes)
         self.var_space = tk.BooleanVar(value=toggles["space_spam"])
         self.var_space.trace_add("write", self._auto_save)
         self.var_afk = tk.BooleanVar(value=toggles["anti_afk_hotkey"])
         self.var_afk.trace_add("write", self._auto_save)
         self.var_manual = tk.BooleanVar(value=toggles["manual_aim_block"])
         self.var_manual.trace_add("write", self._auto_save)
+        self.var_guard = tk.BooleanVar(value=toggles["guard_outside_game"])
+        self.var_guard.trace_add("write", self._auto_save)
         self._chk_remap = _check(tog, Locale.tr("toggle_mouse_remap"), self.var_remap)
         self._chk_remap.grid(row=0, column=0, sticky="w")
+        self._chk_move_instead_hold = _check(tog, Locale.tr("toggle_mouse_move_instead_hold"), self.var_move_instead_hold)
+        self._chk_move_instead_hold.grid(row=0, column=1, sticky="w", padx=(6, 0))
+        self._chk_toggle_hold = _check(tog, Locale.tr("toggle_mouse_toggle_hold"), self.var_toggle_hold)
+        self._chk_toggle_hold.grid(row=3, column=0, columnspan=2, sticky="w")
         self._chk_space = _check(tog, Locale.tr("toggle_space_spam"), self.var_space)
-        self._chk_space.grid(row=0, column=1, sticky="w", padx=(6, 0))
+        self._chk_space.grid(row=1, column=0, sticky="w")
         self._chk_afk = _check(tog, Locale.tr("toggle_anti_afk"), self.var_afk)
-        self._chk_afk.grid(row=1, column=0, sticky="w")
+        self._chk_afk.grid(row=1, column=1, sticky="w", padx=(6, 0))
         self._chk_manual = _check(tog, Locale.tr("toggle_manual_aim"), self.var_manual)
-        self._chk_manual.grid(row=1, column=1, sticky="w", padx=(6, 0))
+        self._chk_manual.grid(row=2, column=0, sticky="w")
+        self._chk_guard = _check(tog, Locale.tr("toggle_guard_outside"), self.var_guard)
+        self._chk_guard.grid(row=2, column=1, sticky="w", padx=(6, 0))
         for w, k in ((self._chk_remap, "toggle_mouse_remap"),
+                     (self._chk_move_instead_hold, "toggle_mouse_move_instead_hold"),
+                     (self._chk_toggle_hold, "toggle_mouse_toggle_hold"),
                      (self._chk_space, "toggle_space_spam"),
                      (self._chk_afk, "toggle_anti_afk"),
-                     (self._chk_manual, "toggle_manual_aim")):
+                     (self._chk_manual, "toggle_manual_aim"),
+                     (self._chk_guard, "toggle_guard_outside")):
             self._locale_widgets.append(("chk", w, k))
 
         row2 = tk.Frame(self, bg=TOKENS["background"])
@@ -137,6 +157,24 @@ class MainTab(tk.Frame):
             elif kind == "chk":
                 widget.config(text=Locale.tr(key))
 
+    def _exclusive_mouse_modes(self, *args):
+        """Click-to-move and toggle-hold are alternative LMB behaviours.
+
+        Whichever checkbox the user just ticked wins: the other one is
+        turned off, so the two can never stay in conflict.
+        """
+        if getattr(self, "_syncing_mouse", False):
+            return
+        changed = args[0] if args else ""
+        self._syncing_mouse = True
+        try:
+            if changed == self.var_toggle_hold._name and self.var_toggle_hold.get():
+                self.var_move_instead_hold.set(False)
+            elif changed == self.var_move_instead_hold._name and self.var_move_instead_hold.get():
+                self.var_toggle_hold.set(False)
+        finally:
+            self._syncing_mouse = False
+
     def _detect_exe(self):
         found = detect_running_emulators()
         if not found:
@@ -149,9 +187,6 @@ class MainTab(tk.Frame):
             messagebox.showinfo(Locale.tr("detect_title"),
                 Locale.tr("detect_running") % (", ".join(found), found[0]))
 
-    def get_data(self):
-        return []  # no combos here anymore
-
     def get_toggles(self):
         try:
             space_ms = int(self.var_space_ms.get())
@@ -163,14 +198,15 @@ class MainTab(tk.Frame):
             afk_ms = TOGGLE_DEFAULTS["anti_afk_interval"]
         return {
             "mouse_remap": self.var_remap.get(),
+            "mouse_move_instead_hold": self.var_move_instead_hold.get(),
+            "mouse_toggle_hold": self.var_toggle_hold.get(),
             "space_spam": self.var_space.get(),
             "space_interval": space_ms,
             "anti_afk_hotkey": self.var_afk.get(),
             "anti_afk_interval": afk_ms,
             "stop_key": self.var_stop.get().strip(),
             "manual_aim_block": self.var_manual.get(),
+            "guard_outside_game": self.var_guard.get(),
             "target_exe": self.var_exe.get().strip() or "HD-Player.exe",
         }
 
-    def get_autoaccept(self):
-        return {"enabled": False}

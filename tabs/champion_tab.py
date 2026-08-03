@@ -21,6 +21,17 @@ class _ToolTip:
         self._schedule()
 
     def _leave(self, e):
+        # Same guard as tabs.death_tab.ToolTip: a Leave fired while the pointer
+        # is still inside the widget means the tip popped up underneath it, and
+        # acting on it starts a hide/show flicker loop.
+        try:
+            x = self.widget.winfo_pointerx() - self.widget.winfo_rootx()
+            y = self.widget.winfo_pointery() - self.widget.winfo_rooty()
+            if (0 <= x < self.widget.winfo_width()
+                    and 0 <= y < self.widget.winfo_height()):
+                return
+        except tk.TclError:
+            pass
         self._unschedule()
         self._hide()
 
@@ -173,8 +184,10 @@ class ChampionTab(tk.Frame):
         for row, slot in enumerate(("wave", "jungle", "pvp")):
             tv = tk.StringVar(value=cfg.get("trigger_" + slot, ""))
             kv = tk.StringVar(value=cfg.get("keys_" + slot, ""))
+            mv = tk.BooleanVar(value=cfg.get("move_when_pressed_" + slot, False))
             self._vars["trigger_" + slot] = tv
             self._vars["keys_" + slot] = kv
+            self._vars["move_when_pressed_" + slot] = mv
 
             # load & normalize presets for this slot
             self._presets[slot] = self._normalize_presets(cfg.get("presets_" + slot, []))
@@ -187,16 +200,27 @@ class ChampionTab(tk.Frame):
             BindButton(self._champ_form, tv).grid(row=row, column=2, sticky="w", padx=1)
             VintageEntry(self._champ_form, textvariable=kv, width=22).grid(
                 row=row, column=3, sticky="w", padx=(4, 0), pady=1)
+            
+            # Move when pressed checkbox: also hold RButton (move) with the combo
+            move_chk = tk.Checkbutton(self._champ_form, text=Locale.tr("champ_move_when_pressed"),
+                           variable=mv,
+                           bg=TOKENS["background"], fg=TOKENS["textPrimary"],
+                           selectcolor=TOKENS["compareBack"],
+                           activebackground=TOKENS["background"],
+                           activeforeground=TOKENS["textPrimary"],
+                           font=FONT_SM, highlightthickness=0, bd=0)
+            move_chk.grid(row=row, column=4, sticky="w", padx=2)
+            self._champ_locale.append(("chk", move_chk, "champ_move_when_pressed"))
 
             # --- 3 preset buttons with trigger label ---
             pframe = tk.Frame(self._champ_form, bg=TOKENS["background"])
-            pframe.grid(row=row, column=4, sticky="w", padx=(3, 2))
+            pframe.grid(row=row, column=5, sticky="w", padx=(3, 2))
             self._build_preset_buttons(pframe, slot, kv, tv)
 
 
 
         row2 = tk.Frame(self._champ_form, bg=TOKENS["background"])
-        row2.grid(row=3, column=0, columnspan=5, sticky="w", pady=4)
+        row2.grid(row=3, column=0, columnspan=6, sticky="w", pady=4)
         self._lbl_interval = VintageLabel(row2, text=Locale.tr("interval_ms_lbl"))
         self._lbl_interval.pack(side="left")
         self._champ_locale.append(("lbl", self._lbl_interval, "interval_ms_lbl"))

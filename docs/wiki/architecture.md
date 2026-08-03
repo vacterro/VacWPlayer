@@ -16,7 +16,7 @@ subprocesses driven by their own config files.
 main.pyw  (TkinterDnD root, single instance via single_instance.py)
  ├── tabs/            UI layer — 9 tabs, all built at startup
  ├── theme.py / vintage_widgets.py   vintage look + pickers
- ├── locales.py       RU/EN strings
+ ├── locales.py       33-language UI strings (bundles in locales/*.json)
  ├── config.json      <-> main config (autosave debounce 300ms)
  ├── ahk_generator.py  generate wr_runtime.ahk, launch/stop AHK (PID-tracked)
  │   └── ahk_builder.py   script text assembly (the actual generator)
@@ -101,7 +101,7 @@ instance takes over cleanly. Dry-run toggle + live status in the tabs.
 
 - `champions.py`: roster + `default_for(name)` combo defaults + `slug()`.
 - `combo_browser.py` / `champ_picker.py`: Toplevel pickers feeding Champions tab.
-- `locales.py` (`Locale`): `set_lang`, `toggle`, `tr()`; RU/EN.
+- `locales.py` (`Locale`): `set_lang`, `toggle`, `tr()`; 33 languages, bundles auto-loaded from `locales/*.json`.
 - `theme.py`: `apply_base_theme`, `TOKENS`, `VintageButton/Label/Notebook`.
 - `single_instance.py`: PID-file based single-instance with replace (kill old holder).
 - `tests/`: `conftest.py` + `test_imports.py` — non-GUI import smoke + py_compile all.

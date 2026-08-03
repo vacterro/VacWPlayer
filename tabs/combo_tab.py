@@ -6,9 +6,9 @@ from tabs.champ_tab import BindButton
 from locales import Locale
 
 LEGACY_COMBOS = [
-    {"trigger": "F13", "keys": "q,e,w,e,e,e,{Space}", "interval": 50, "shift": True},
-    {"trigger": "F14", "keys": "w,q,e,f,{Space}", "interval": 50, "shift": True},
-    {"trigger": "F15", "keys": "e,e,e,w,q,{Space},e,{Space},q,{Space}", "interval": 50, "shift": True},
+    {"trigger": "F13", "keys": "q,e,w,e,e,e,{Space}", "interval": 50, "shift": True, "move_when_pressed": False},
+    {"trigger": "F14", "keys": "w,q,e,f,{Space}", "interval": 50, "shift": True, "move_when_pressed": False},
+    {"trigger": "F15", "keys": "e,e,e,w,q,{Space},e,{Space},q,{Space}", "interval": 50, "shift": True, "move_when_pressed": False},
 ]
 
 
@@ -38,7 +38,7 @@ class ComboTab(tk.Frame):
 
         self._locale_widgets = []
         self._tree_header_keys = (("trigger", "col_trigger"), ("keys", "col_keys"),
-                                  ("ms", "col_ms"), ("shift", "col_shift"))
+                                  ("ms", "col_ms"), ("shift", "col_shift"), ("move", "col_move"))
 
         left = tk.Frame(body, bg=TOKENS["background"])
         left.pack(side="left", fill="both", expand=True)
@@ -48,9 +48,9 @@ class ComboTab(tk.Frame):
         tree_holder = VintageSunken(left, bg_color=TOKENS["compareBack"])
         tree_holder.pack(fill="both", expand=True, pady=2)
         self.tree = ttk.Treeview(tree_holder.content,
-                                 columns=("trigger", "keys", "ms", "shift"),
+                                 columns=("trigger", "keys", "ms", "shift", "move"),
                                  show="headings", height=7)
-        for col, w in (("trigger", 50), ("keys", 170), ("ms", 36), ("shift", 38)):
+        for col, w in (("trigger", 50), ("keys", 170), ("ms", 36), ("shift", 38), ("move", 38)):
             self.tree.heading(col, text=Locale.tr(dict(self._tree_header_keys)[col]))
             self.tree.column(col, width=w)
         self.tree.pack(fill="both", expand=True)
@@ -102,12 +102,17 @@ class ComboTab(tk.Frame):
         self._chk_shift.grid(row=4, column=0, columnspan=2, sticky="w")
         self._locale_widgets.append(("chk", self._chk_shift, "shift_cast"))
 
+        self.var_move_when_pressed = tk.BooleanVar(value=False)
+        self._chk_move_when_pressed = _check(edit, Locale.tr("combo_move_when_pressed"), self.var_move_when_pressed)
+        self._chk_move_when_pressed.grid(row=5, column=0, columnspan=2, sticky="w")
+        self._locale_widgets.append(("chk", self._chk_move_when_pressed, "combo_move_when_pressed"))
+
         self._btn_apply = VintageButton(edit, text=Locale.tr("apply"), command=self.apply_changes, width=8)
-        self._btn_apply.grid(row=5, column=0, columnspan=3, sticky="w", pady=3)
+        self._btn_apply.grid(row=6, column=0, columnspan=3, sticky="w", pady=3)
         self._locale_widgets.append(("btn", self._btn_apply, "apply"))
         self._lbl_hint = VintageLabel(edit, text=Locale.tr("combo_hint"),
                      font=FONT_SM, fg=TOKENS["textMuted"], justify="left")
-        self._lbl_hint.grid(row=6, column=0, columnspan=3, sticky="w")
+        self._lbl_hint.grid(row=7, column=0, columnspan=3, sticky="w")
         self._locale_widgets.append(("lbl", self._lbl_hint, "combo_hint"))
 
         self.refresh_list()
@@ -128,7 +133,8 @@ class ComboTab(tk.Frame):
         for i, c in enumerate(self.combos):
             self.tree.insert("", "end", iid=str(i), values=(
                 c["trigger"], c["keys"], c["interval"],
-                "yes" if c.get("shift", True) else "no"))
+                "yes" if c.get("shift", True) else "no",
+                "yes" if c.get("move_when_pressed", False) else "no"))
 
     def on_select(self, _event):
         sel = self.tree.selection()
@@ -139,10 +145,11 @@ class ComboTab(tk.Frame):
         self.var_keys.set(c["keys"])
         self.var_interval.set(c["interval"])
         self.var_shift.set(c.get("shift", True))
+        self.var_move_when_pressed.set(c.get("move_when_pressed", False))
 
     def add_combo(self):
         self.combos.append({"trigger": "F13", "keys": "q,w,e,{Space}",
-                            "interval": 50, "shift": True})
+                            "interval": 50, "shift": True, "move_when_pressed": False})
         self.refresh_list()
         self.tree.selection_set(str(len(self.combos) - 1))
         self._auto_save()
@@ -184,6 +191,7 @@ class ComboTab(tk.Frame):
             "keys": self.var_keys.get().strip(),
             "interval": interval,
             "shift": self.var_shift.get(),
+            "move_when_pressed": self.var_move_when_pressed.get(),
         }
         self.refresh_list()
         self.tree.selection_set(str(idx))

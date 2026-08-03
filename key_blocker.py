@@ -45,6 +45,8 @@ user32.UnhookWindowsHookEx.restype = ctypes.c_long
 user32.UnhookWindowsHookEx.argtypes = [ctypes.c_void_p]
 user32.PostThreadMessageW.restype = ctypes.c_long
 user32.PostThreadMessageW.argtypes = [wintypes.DWORD, ctypes.c_uint, wintypes.WPARAM, wintypes.LPARAM]
+user32.GetAsyncKeyState.restype = ctypes.c_short
+user32.GetAsyncKeyState.argtypes = [ctypes.c_int]
 
 _block_until = 0.0
 _blocked_vk = set()
@@ -52,13 +54,27 @@ _hook_handle = None
 _thread = None
 
 
+_block_until_released_vk = set()
+
 def _hook_proc(nCode, wParam, lParam):
     if nCode == 0 and wParam in (WM_KEYDOWN, WM_SYSKEYDOWN, WM_KEYUP, WM_SYSKEYUP):
         kb = ctypes.cast(lParam, ctypes.POINTER(KBDLLHOOKSTRUCT)).contents
-        if kb.vkCode in _blocked_vk and time.time() < _block_until:
-            return 1  # non-zero = swallow: never reaches the hook chain below
-            # us (wr.ahk's own hotkey hook included), nor the focused app.
+        vk = kb.vkCode
+        if vk in _blocked_vk:
+            if vk in _block_until_released_vk:
+                if wParam in (WM_KEYUP, WM_SYSKEYUP):
+                    _block_until_released_vk.discard(vk)
+                    return 1
+                else:
+                    return 1
+            if time.time() < _block_until:
+                return 1
     return user32.CallNextHookEx(None, nCode, wParam, lParam)
+
+def block_until_released():
+    for vk in _blocked_vk:
+        if user32.GetAsyncKeyState(vk) & 0x8000:
+            _block_until_released_vk.add(vk)
 
 
 _hook_proc_ref = _LowLevelKeyboardProc(_hook_proc)  # must outlive the hook

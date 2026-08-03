@@ -19,6 +19,7 @@ TOKENS = {
     "success": "#4A7A20",
     "warning": "#7A7A20",
     "danger": "#7A2020",
+    "dangerText": "#D66464",
     "selection": "#3D372A",
     "compareBack": "#14120C",
     "link": "#F0D060",

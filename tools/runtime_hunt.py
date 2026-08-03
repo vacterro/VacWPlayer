@@ -43,7 +43,7 @@ def parse_file(f):
     try:
         with open(f, encoding='utf-8-sig') as fh:
             return ast.parse(fh.read(), f)
-    except (SyntaxError, UnicodeDecodeError) as e:
+    except (SyntaxError, UnicodeDecodeError):
         return None
 
 
@@ -193,7 +193,7 @@ class ProcessLifecycleAnalyzer:
 
             class LifecycleVisitor(ast.NodeVisitor):
                 def visit_FunctionDef(self_, n):
-                    nonlocal in_func, in_class
+                    nonlocal in_func
                     old_func = in_func
                     in_func = n.name
                     self_.generic_visit(n)
@@ -207,7 +207,6 @@ class ProcessLifecycleAnalyzer:
                     in_class = old_cls
 
                 def visit_Call(self_, n):
-                    nonlocal in_func, in_class
                     is_popen = False
                     if isinstance(n.func, ast.Name) and n.func.id == 'Popen':
                         is_popen = True

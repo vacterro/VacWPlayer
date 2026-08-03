@@ -14,8 +14,16 @@ AFKFARM_DEFAULTS = {
     "follow_cursor": True,
     "combo_keys": "q,w,e,{Space}",
     "combo_interval": 128,
-    "slots": ["top", "mid", "bot", "top_deep", "mid_deep", "bot_deep",
-              "base", "enemy_base"],
+    "slots": {
+        "top": {"enabled": True, "move_when_pressed": False},
+        "mid": {"enabled": True, "move_when_pressed": False},
+        "bot": {"enabled": True, "move_when_pressed": False},
+        "top_deep": {"enabled": True, "move_when_pressed": False},
+        "mid_deep": {"enabled": True, "move_when_pressed": False},
+        "bot_deep": {"enabled": True, "move_when_pressed": False},
+        "base": {"enabled": True, "move_when_pressed": False},
+        "enemy_base": {"enabled": True, "move_when_pressed": False},
+    },
 }
 
 
@@ -34,6 +42,16 @@ class AFKFarmTab(tk.Frame):
             for k in cfg:
                 if k in saved:
                     cfg[k] = saved[k]
+            # Migrate old list format to new dict format for slots
+            if isinstance(saved.get("slots"), list):
+                old_slots = saved["slots"]
+                new_slots = {}
+                for key in SLOT_KEYS:
+                    new_slots[key] = {
+                        "enabled": key in old_slots,
+                        "move_when_pressed": False
+                    }
+                cfg["slots"] = new_slots
 
         self._locale_widgets = []
 
@@ -110,16 +128,34 @@ class AFKFarmTab(tk.Frame):
 
         r += 1
         self._lbl_slots = VintageLabel(form, text="")
-        self._lbl_slots.grid(row=r, column=0, columnspan=4, sticky="w", pady=(0, 2))
+        self._lbl_slots.grid(row=r, column=0, columnspan=6, sticky="w", pady=(0, 2))
         self._locale_widgets.append(("lbl", self._lbl_slots, "cycle_slots"))
 
         r += 1
         self._slot_chks = []
         self.slot_vars = {}
+        self.slot_move_vars = {}
+        
+        # Ensure slots is a dict
+        slots_cfg = cfg.get("slots", {})
+        if isinstance(slots_cfg, list):
+            # Already migrated in __init__, but double-check
+            new_slots = {}
+            for key in SLOT_KEYS:
+                new_slots[key] = {
+                    "enabled": key in slots_cfg,
+                    "move_when_pressed": False
+                }
+            slots_cfg = new_slots
+        
         for i, key in enumerate(SLOT_KEYS):
-            col_offset = (i // 3) * 2
-            row_offset = i % 3
-            sv = tk.BooleanVar(value=key in cfg.get("slots", SLOT_KEYS))
+            col_offset = (i // 4) * 2
+            row_offset = i % 4
+            
+            slot_cfg = slots_cfg.get(key, {"enabled": True, "move_when_pressed": False})
+            
+            # Enable checkbox
+            sv = tk.BooleanVar(value=slot_cfg.get("enabled", True))
             sv.trace_add("write", self._auto_save)
             self.slot_vars[key] = sv
             chk = tk.Checkbutton(form, variable=sv,
@@ -129,9 +165,21 @@ class AFKFarmTab(tk.Frame):
                            activeforeground=TOKENS["textPrimary"],
                            font=FONT_SM, highlightthickness=0, bd=0)
             chk.grid(row=r + row_offset, column=col_offset,
-                     columnspan=2,
                      sticky="w", padx=(6 if col_offset else 0, 0))
             self._slot_chks.append((chk, key))
+            
+            # Move when pressed checkbox
+            mv = tk.BooleanVar(value=slot_cfg.get("move_when_pressed", False))
+            mv.trace_add("write", self._auto_save)
+            self.slot_move_vars[key] = mv
+            move_chk = tk.Checkbutton(form, variable=mv, text="",
+                           bg=TOKENS["background"], fg=TOKENS["textPrimary"],
+                           selectcolor=TOKENS["compareBack"],
+                           activebackground=TOKENS["background"],
+                           activeforeground=TOKENS["textPrimary"],
+                           font=FONT_SM, highlightthickness=0, bd=0)
+            move_chk.grid(row=r + row_offset, column=col_offset + 1, sticky="w")
+            self._locale_widgets.append(("chk", move_chk, "slot_move_when_pressed"))
 
         btn_frame = tk.Frame(self, bg=TOKENS["background"])
         btn_frame.pack(fill="x", padx=8, pady=4)
@@ -173,8 +221,9 @@ class AFKFarmTab(tk.Frame):
         self.var_follow.set(AFKFARM_DEFAULTS["follow_cursor"])
         self.var_keys.set(AFKFARM_DEFAULTS["combo_keys"])
         self.var_combo_ms.set(AFKFARM_DEFAULTS["combo_interval"])
-        for key, sv in self.slot_vars.items():
-            sv.set(key in AFKFARM_DEFAULTS.get("slots", []))
+        for key in SLOT_KEYS:
+            self.slot_vars[key].set(AFKFARM_DEFAULTS["slots"][key]["enabled"])
+            self.slot_move_vars[key].set(AFKFARM_DEFAULTS["slots"][key]["move_when_pressed"])
         self._auto_save()
 
     def get_data(self):
@@ -186,7 +235,12 @@ class AFKFarmTab(tk.Frame):
             combo_ms = int(self.var_combo_ms.get())
         except (tk.TclError, ValueError):
             combo_ms = AFKFARM_DEFAULTS["combo_interval"]
-        slots = [k for k, sv in self.slot_vars.items() if sv.get()]
+        slots = {}
+        for key in SLOT_KEYS:
+            slots[key] = {
+                "enabled": self.slot_vars[key].get(),
+                "move_when_pressed": self.slot_move_vars[key].get(),
+            }
         return {
             "enabled": bool(self.var_enabled.get()),
             "toggle_key": self.var_toggle.get().strip(),

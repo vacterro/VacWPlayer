@@ -115,7 +115,7 @@ class FileChurnAnalyzer:
         sorted_files = sorted(file_commits.items(), key=lambda x: -len(x[1]))
 
         if sorted_files:
-            results.append(('', 'INFO', f'Top 15 most-changed files:'))
+            results.append(('', 'INFO', 'Top 15 most-changed files:'))
             for fname, commits in sorted_files[:15]:
                 results.append((f'  {fname}', 'INFO', f'{len(commits)} commits'))
         else:

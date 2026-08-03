@@ -78,7 +78,7 @@ into `config.json` or its engine config.
 
 ## Bottom bar (main.pyw)
 
-- Lang toggle (RU/EN), mode combobox (General + champions), Export / Import
+- Language combobox (33 languages, native names), mode combobox (General + champions), Export / Import
   (also JSON file drop onto window) / Backup config, Hotkeys viewer, Combo
   browser (opens `combo_browser.py`), status label, AHK running dot
   (green/red), **Apply & Start**, **Stop**, tray icon (Show / Apply & Start /

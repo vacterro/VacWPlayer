@@ -96,6 +96,7 @@
   "toggle_space_spam": "Spam Space cât e apăsat",
   "toggle_anti_afk": "Anti-AFK (Ctrl+G comută în joc)",
   "toggle_manual_aim": "q/w/e/r/d/f manual întrerupe combo-urile",
+  "toggle_guard_outside": "Blochează pedala doar cât rămâne apăsată după ieșirea din joc",
   "stop_lbl": "Oprire:",
   "spc_ms_lbl": "Spc ms:",
   "afk_ms_lbl": "AFK ms:",
@@ -197,5 +198,24 @@
     "bot_deep": "Jos adânc",
     "base": "Bază",
     "enemy_base": "Baza inamică"
-  }
+  },
+  "toggle_mouse_move_instead_hold": "Move instead of hold (click to move)",
+  "toggle_mouse_toggle_hold": "LMB toggles move hold (click again to release)",
+  "combo_move_when_pressed": "Also move when pressed",
+  "col_move": "Move",
+  "slot_move_when_pressed": "Move when pressed",
+  "champ_move_when_pressed": "Move when pressed",
+  "tt_quickbuy_key": "Key that buys items from quick-buy slots in shop",
+  "tt_quickbuy_window": "Time window (ms) after shop opens during which quick-buy is allowed",
+  "tt_autobuy_after_b": "Auto-buy items from quick-buy slots when you press Recall (B)",
+  "tt_buy_delay": "How long after pressing B to send the quick-buy keys",
+  "tt_click_mid_after_buy": "After auto-buy, click the mid lane on minimap to return to lane",
+  "tt_mid_delay": "Delay after buying before clicking mid on minimap",
+  "tt_bg_z": "Send Z keys + minimap click directly to game window, works when Alt-Tabbed",
+  "tt_death_monitor": "Start/stop the death watch loop that detects death and resurrection in-game",
+  "tt_death_window": "Which game window title to monitor for death/revive events",
+  "tt_switch_work": "While dead, auto-switch to the work window (browser/notes) to keep you productive",
+  "tt_click_mid_res": "When you resurrect, click the mid lane on minimap to go back to lane immediately",
+  "tt_lock_window": "Lock/unlock current game window so minimap clicks don't lose focus (Ctrl+Shift+F8 toggle)",
+  "tt_work_window": "Window to auto-switch to while dead (e.g. browser, notes, YouTube)"
 }

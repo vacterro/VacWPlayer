@@ -7,8 +7,22 @@ import win32api
 import win32con
 import win32gui
 
-from theme import VintageButton, VintageEntry, VintageLabel, TOKENS
+from theme import VintageButton, VintageEntry, VintageLabel, TOKENS, FONT_SM
 from locales import Locale
+
+
+def grid_row(parent, row, *fields, pad=(4, 1), pady=0):
+    """Lay out label+entry pairs on one grid row; returns locale-widget tuples."""
+    col = 0
+    created = []
+    for key, var, width in fields:
+        lbl = VintageLabel(parent, text=Locale.tr(key), font=FONT_SM)
+        lbl.grid(row=row, column=col, sticky="w", padx=(0 if col == 0 else pad[0], pad[1]), pady=pady)
+        VintageEntry(parent, textvariable=var, width=width).grid(
+            row=row, column=col + 1, sticky="w", pady=pady)
+        created.append(("lbl", lbl, key))
+        col += 2
+    return created
 
 def capture_preview_bytes(region=None):
     import cv2

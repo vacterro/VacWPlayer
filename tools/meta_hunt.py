@@ -16,7 +16,7 @@ import sys
 import subprocess
 import json
 import re
-from collections import defaultdict, Counter
+from collections import defaultdict
 
 PROJECT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TOOLS_DIR = os.path.join(PROJECT, 'tools')
@@ -54,14 +54,11 @@ def parse_summary(stdout):
     """Extract the SUMMARY table from a scanner's output."""
     lines = stdout.split('\n')
     summary_start = None
-    summary_end = None
     results = {}
 
     for i, line in enumerate(lines):
         if 'HUNT' in line and 'SUMMARY' in line:
             summary_start = i
-            # Read the next line of === separators
-            summary_end = None
 
     if summary_start:
         for i in range(summary_start, min(summary_start + 50, len(lines))):
@@ -278,7 +275,7 @@ def generate_report(scanner_results, file_metrics, orphan_templates):
 
     # Find files with most diverse issue types
     diverse_files = sorted(file_cats.items(), key=lambda x: -len(x[1]))[:10]
-    report.append(f'  Files with most diverse issue types:')
+    report.append('  Files with most diverse issue types:')
     for path, cats in diverse_files:
         report.append(f'    {path}: appears in {len(cats)} categories ({sorted(cats)})')
 
@@ -334,9 +331,9 @@ def generate_report(scanner_results, file_metrics, orphan_templates):
     for reason, deduct in deductions.items():
         score += deduct
         report.append(f'    {deduct:+3d}  {reason}')
-    report.append(f'    ----')
+    report.append('    ----')
     report.append(f'    {score:3d}  TOTAL HEALTH SCORE')
-    report.append(f'    (Higher is better. 70+ = healthy, 50-70 = needs work, <50 = critical)')
+    report.append('    (Higher is better. 70+ = healthy, 50-70 = needs work, <50 = critical)')
     report.append('')
 
     report.append('=' * 70)

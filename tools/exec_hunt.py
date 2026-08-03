@@ -17,9 +17,7 @@ Usage:  python tools/exec_hunt.py
 import os
 import sys
 import json
-import subprocess
 import traceback
-from collections import defaultdict
 
 PROJECT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT)
@@ -126,7 +124,7 @@ class SmokeTester:
 
         # Test digit_reader constants
         try:
-            from digit_reader import SAT_MAX, VAL_MIN, MIN_RUN_WIDTH
+            from digit_reader import SAT_MAX, VAL_MIN
             results.append(('digit_reader constants', 'OK', f'{SAT_MAX=}, {VAL_MIN=}'))
         except Exception as e:
             results.append(('digit_reader constants', 'FAIL', str(e)))
@@ -134,28 +132,28 @@ class SmokeTester:
         # Test single_instance
         try:
             import single_instance
-            results.append(('single_instance', 'OK', 'imported'))
+            results.append(('single_instance', 'OK', f'imported ({single_instance.__name__})'))
         except Exception as e:
             results.append(('single_instance', 'FAIL', str(e)))
 
         # Test process_runner
         try:
             import process_runner
-            results.append(('process_runner', 'OK', 'imported'))
+            results.append(('process_runner', 'OK', f'imported ({process_runner.__name__})'))
         except Exception as e:
             results.append(('process_runner', 'FAIL', str(e)))
 
         # Test combo_browser module-level (tkinter may fail headless)
         try:
             import combo_browser
-            results.append(('combo_browser', 'OK', 'imported'))
+            results.append(('combo_browser', 'OK', f'imported ({combo_browser.__name__})'))
         except Exception as e:
             results.append(('combo_browser', 'FAIL', str(e)[:80]))
 
         # Test ahk_generator key functions
         try:
             from ahk_generator import parse_steps, generate_script
-            results.append(('ahk_generator', 'OK', 'parse_steps, generate_script imported'))
+            results.append(('ahk_generator', 'OK', f'imported {parse_steps.__name__}, {generate_script.__name__}'))
         except Exception as e:
             results.append(('ahk_generator', 'FAIL', str(e)[:80]))
 
@@ -314,7 +312,6 @@ class AHKStructureChecker:
         hotkeys = []
         directives = []
         functions = []
-        loop_count = 0
 
         for i, line in enumerate(lines, 1):
             stripped = line.strip()
@@ -468,7 +465,7 @@ class ConfigUsageXRef:
                     # Check if key appears as string literal in source
                     key_refs = source_text.count(f"'{key}'") + source_text.count(f'"{key}"')
                     if key_refs <= 2:  # Only the config.json itself references it
-                        results.append((f'config.json', f'UNUSED', f'field "{full_path}" never referenced in code'))
+                        results.append(('config.json', 'UNUSED', f'field "{full_path}" never referenced in code'))
                     if isinstance(value, (dict, list)):
                         _check(prefix, value, full_path)
 

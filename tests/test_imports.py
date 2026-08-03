@@ -1,7 +1,6 @@
 """Smoke tests: verify non-GUI modules import and py_compile clean."""
 
 import py_compile
-import sys
 from pathlib import Path
 
 BASE = Path(__file__).resolve().parent.parent
@@ -43,6 +42,6 @@ def test_all_py_files_compile():
         try:
             py_compile.compile(str(f), doraise=True)
             ok += 1
-        except py_compile.PyCompileError as e:
+        except py_compile.PyCompileError:
             failed.append(str(f.relative_to(root)))
     assert not failed, f"{len(failed)} files fail compile:\n" + "\n".join(failed)

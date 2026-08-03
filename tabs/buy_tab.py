@@ -53,7 +53,7 @@ class BuyTab(tk.Frame):
         self.quickbuy_key.trace_add("write", self._auto_save)
         qk_entry = VintageEntry(form, textvariable=self.quickbuy_key, width=4)
         qk_entry.grid(row=r, column=1, sticky="w")
-        ToolTip(qk_entry, "Key that buys items from quick-buy slots in shop")
+        ToolTip(qk_entry, key="tt_quickbuy_key")
 
         self._lbl_presses = VintageLabel(form, text=Locale.tr("presses_lbl"), font=FONT_SM)
         self._lbl_presses.grid(row=r, column=2, sticky="w", padx=(6, 1))
@@ -69,7 +69,7 @@ class BuyTab(tk.Frame):
         self.quickbuy_window_ms.trace_add("write", self._auto_save)
         qw_entry = VintageEntry(form, textvariable=self.quickbuy_window_ms, width=6)
         qw_entry.grid(row=r, column=5, sticky="w")
-        ToolTip(qw_entry, "Time window (ms) after shop opens during which quick-buy is allowed")
+        ToolTip(qw_entry, key="tt_quickbuy_window")
 
         r += 1
         sep = tk.Frame(form, bg=TOKENS["borderMuted"], height=1)
@@ -82,7 +82,7 @@ class BuyTab(tk.Frame):
                        bg=TOKENS["background"], fg=TOKENS["textPrimary"], selectcolor=TOKENS["compareBack"])
         buy_ckbtn.grid(row=r, column=0, columnspan=2, sticky="w", pady=1)
         self._locale_widgets.append(("chk", buy_ckbtn, "autobuy_after_b"))
-        ToolTip(buy_ckbtn, "Auto-buy items from quick-buy slots when you press Recall (B)")
+        ToolTip(buy_ckbtn, key="tt_autobuy_after_b")
 
         self._lbl_delay = VintageLabel(form, text=Locale.tr("delay_s_lbl"), font=FONT_SM)
         self._lbl_delay.grid(row=r, column=2, sticky="w", padx=(6, 1))
@@ -91,7 +91,7 @@ class BuyTab(tk.Frame):
         self.buy_delay_sec.trace_add("write", self._auto_save)
         bd_entry = VintageEntry(form, textvariable=self.buy_delay_sec, width=5)
         bd_entry.grid(row=r, column=3, sticky="w")
-        ToolTip(bd_entry, "How long after pressing B to send the quick-buy keys")
+        ToolTip(bd_entry, key="tt_buy_delay")
 
         r += 1
         self.buy_then_mid = tk.BooleanVar(value=cfg.get("autobuy_then_mid", False))
@@ -101,7 +101,7 @@ class BuyTab(tk.Frame):
                        selectcolor=TOKENS["compareBack"])
         mid_ckbtn.grid(row=r, column=0, columnspan=2, sticky="w", pady=1)
         self._locale_widgets.append(("chk", mid_ckbtn, "click_mid_after_buy"))
-        ToolTip(mid_ckbtn, "After auto-buy, click the mid lane on minimap to return to lane")
+        ToolTip(mid_ckbtn, key="tt_click_mid_after_buy")
 
         self._lbl_delay2 = VintageLabel(form, text=Locale.tr("delay_s_lbl"), font=FONT_SM)
         self._lbl_delay2.grid(row=r, column=2, sticky="w", padx=(6, 1))
@@ -110,7 +110,7 @@ class BuyTab(tk.Frame):
         self.buy_then_mid_delay.trace_add("write", self._auto_save)
         tm_entry = VintageEntry(form, textvariable=self.buy_then_mid_delay, width=5)
         tm_entry.grid(row=r, column=3, sticky="w")
-        ToolTip(tm_entry, "Delay after buying before clicking mid on minimap")
+        ToolTip(tm_entry, key="tt_mid_delay")
 
         r += 1
         self.controlsend_z = tk.BooleanVar(value=cfg.get("controlsend_z", False))
@@ -120,7 +120,7 @@ class BuyTab(tk.Frame):
                        selectcolor=TOKENS["compareBack"])
         cs_ckbtn.grid(row=r, column=0, columnspan=3, sticky="w", pady=1)
         self._locale_widgets.append(("chk", cs_ckbtn, "bg_z_lbl"))
-        ToolTip(cs_ckbtn, "Send Z keys + minimap click directly to game window, works when Alt-Tabbed")
+        ToolTip(cs_ckbtn, key="tt_bg_z")
 
         btn_frame = tk.Frame(self, bg=TOKENS["background"])
         btn_frame.pack(fill="x", padx=4, pady=6)

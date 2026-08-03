@@ -20,7 +20,7 @@ change), lang toggle, quit. Loaded by `load_config()` with deep-merge over defau
 | `champions` | object | per-champion defaults | Per-champion trigger/keys per slot |
 | `minimap` | object | MINIMAP_DEFAULTS | Minimap click slots + `_order` |
 | `afkfarm` | object | AFKFARM_DEFAULTS | AFK farm settings |
-| `lang` | str | `"ru"` | UI language, `ru` or `en` |
+| `lang` | str | `"ru"` | UI language code, any of 33 (e.g. `ru`, `en`, `ja`, `et`) |
 | `window` | object | `{"active_tab": 0}` | Last tab index + window position |
 | `auto_accept` | object | `{"enabled": false}` | Auto-accept switch (Main tab) |
 
@@ -35,7 +35,23 @@ change), lang toggle, quit. Loaded by `load_config()` with deep-merge over defau
 | `anti_afk_interval` | 5000 | ms |
 | `stop_key` | `"s"` | Global stop key |
 | `manual_aim_block` | true | Manual-aim pause |
+| `guard_outside_game` | true | Mute a carried-over pedal hold once the game stops being active |
 | `target_exe` | `"HD-Player.exe"` | Emulator process target (WinActive guard) |
+
+`guard_outside_game` is deliberately **not** a blanket block — the pedal stays
+usable outside the game. Each in-game F-key trigger sets `Carry["<base>"]` on
+its key-down, and the generator emits a matching `#If GuardCarry("<base>")`
+variant. That variant only exists for a press that began inside the game and is
+still physically held, i.e. the death-minimize case where a foot never left the
+pedal and its auto-repeat would otherwise rain into whatever app is now in
+front. Releasing the pedal clears `Carry`, so the very next press outside the
+game reaches Windows untouched. `FocusWatch` also clears any `Carry` entry whose
+key is no longer physically down, so a lost key-up can never leave the pedal
+dead.
+
+F13–F24 are guarded with any modifier (`*F13`); F1–F12 only in the exact
+modifier combination configured, so system chords like Alt+F4 are never
+shadowed. Letter/digit triggers are never guarded — they have to stay typeable.
 
 ### combos (General mode)
 

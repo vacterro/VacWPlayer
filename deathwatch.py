@@ -31,19 +31,42 @@ def label_match_score(region_bgr, template_gray):
     return cv2.matchTemplate(crop, template_gray, cv2.TM_CCOEFF_NORMED)[0][0]
 
 
-def toggle_mouse_lock():
+def toggle_mouse_lock(hwnd=None):
+    """Send BlueStacks' Ctrl+Shift+F8 mouse-lock chord.
+
+    keybd_event is system-wide: it lands on whatever window owns keyboard
+    focus. Firing it while the game is not in front planted a real Ctrl+Shift
+    chord in a browser or editor - and if anything threw between the downs and
+    the ups, the modifiers stayed physically down, which is what a "phantom
+    stuck Shift" outside the game actually was. So: refuse unless the target
+    window is genuinely in the foreground, and release in a finally block so
+    the ups are unconditional.
+    """
+    import ctypes
+
+    if hwnd is not None and win32gui.GetForegroundWindow() != hwnd:
+        print("mouse-lock toggle skipped: game is not the foreground window")
+        return False
+
+    KEYUP = 2
+    downs = [0x11, 0x10, 0x77]  # Ctrl, Shift, F8
+    sent = []
     try:
-        import ctypes
-        ctypes.windll.user32.keybd_event(0x11, 0, 0, 0) # Ctrl
-        ctypes.windll.user32.keybd_event(0x10, 0, 0, 0) # Shift
-        ctypes.windll.user32.keybd_event(0x77, 0, 0, 0) # F8
+        for vk in downs:
+            ctypes.windll.user32.keybd_event(vk, 0, 0, 0)
+            sent.append(vk)
         time.sleep(0.05)
-        ctypes.windll.user32.keybd_event(0x77, 0, 2, 0)
-        ctypes.windll.user32.keybd_event(0x10, 0, 2, 0)
-        ctypes.windll.user32.keybd_event(0x11, 0, 2, 0)
         print("sent Ctrl+Shift+F8 to toggle mouse lock")
+        return True
     except Exception as e:
         print(f"failed to toggle mouse lock: {e}")
+        return False
+    finally:
+        for vk in reversed(sent):
+            try:
+                ctypes.windll.user32.keybd_event(vk, 0, KEYUP, 0)
+            except Exception as e:
+                print(f"failed to release {vk:#04x} after mouse lock: {e}")
 
 
 def _set_block(sec):
@@ -106,9 +129,14 @@ def handle_death(hwnd, cfg, templates):
         # wr.ahk's NeedCleanup handles stuck LMB/RMB on focus return.
         if cfg.get("lock_window_resurrect"):
             print("unlocking mouse before minimizing...")
-            toggle_mouse_lock()
+            toggle_mouse_lock(hwnd)
 
         print(f"respawn in {n}s, minimizing for {wait:.1f}s")
+        # Drop any button wr_runtime.ahk is still holding for the movement
+        # remap first: posted messages, so no hardware event and no BlueStacks
+        # cursor capture. Doing it before the minimize means the game is not
+        # left walking into a wall for the whole respawn timer.
+        window_ctl.release_mouse_buttons(hwnd)
         window_ctl.minimize(hwnd)
     finally:
         # === UNBLOCK immediately after minimize ===
@@ -118,7 +146,25 @@ def handle_death(hwnd, cfg, templates):
     if work_hwnd:
         window_ctl.switch_to(work_hwnd)
         print(f"switched to work window '{cfg['work_window_title']}'")
-    time.sleep(wait)
+        
+    print(f"waiting {wait:.1f}s, spilling pedals suppressed")
+    if wants_block:
+        key_blocker.block_until_released()
+        
+    user_aborted = False
+    t_end = time.time() + wait
+    settle_time = time.time() + 2.0
+    while time.time() < t_end:
+        time.sleep(1.0)
+        if time.time() > settle_time and not win32gui.IsIconic(hwnd) and win32gui.GetForegroundWindow() == hwnd:
+            print("user manually focused game, aborting automation")
+            user_aborted = True
+            break
+            
+    if user_aborted:
+        _set_block(0)
+        return
+        
     if work_hwnd:
         window_ctl.minimize(work_hwnd)
 
@@ -144,7 +190,7 @@ def handle_death(hwnd, cfg, templates):
                     print(f"failed to click mid: {e}")
 
             if cfg.get("lock_window_resurrect"):
-                toggle_mouse_lock()
+                toggle_mouse_lock(hwnd)
         else:
             print("resurrect actions skipped: game not focused after restore")
     finally:

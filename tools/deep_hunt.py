@@ -47,7 +47,7 @@ def parse_file(f):
     try:
         with open(f, encoding='utf-8-sig') as fh:
             return ast.parse(fh.read(), f)
-    except (SyntaxError, UnicodeDecodeError) as e:
+    except (SyntaxError, UnicodeDecodeError):
         return None
 
 

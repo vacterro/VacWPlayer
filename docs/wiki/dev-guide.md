@@ -52,11 +52,11 @@ python -m pytest tests/ -v
   `vintage_widgets.py` adds pickers: region editor, template picker, window
   picker, image popup, capture preview.
 - **Locale**: every user-facing string through `Locale.tr()` (`locales.py`);
-  RU/EN only (`Locale.set_lang`, toggle from bottom bar). Tabs with dynamic
-  labels implement `apply_locale()`.
-- **Lazy tabs**: tab factories in `main.pyw._tab_specs`; new tabs registered
-  there. Never assume a tab is loaded — guard `collect_config`,
-  `stop_everything`, `_apply_locale` against `self.tab_x is None`.
+  33 languages, chosen via native-name combobox in the bottom bar
+  (`Locale.set_lang`/`toggle`), config `lang` persists any code. Tabs with
+  dynamic labels implement `apply_locale()`.
+- **Tabs**: all 9 tabs built at startup (`_build_all_tabs`), registered in
+  `main.pyw._tab_specs`; no lazy-load guards needed.
 - **Threading**: workers never touch tkinter directly — marshal via
   `root.after(0, ...)` (`_apply_worker`, `_watchdog_worker`).
 - **Config**: tab `get_data()`/`get_toggles()` → `collect_config()` →

@@ -82,23 +82,30 @@ def click_at(hwnd, x, y, button="right"):
     win32gui.PostMessage(hwnd, up, 0, lparam)
 
 
-def click_nowhere(hwnd, x=960, y=20):
-    """A normal left press+release at a spot that's always empty during an
-    active match (the top letterbox bar - solid black, no UI ever renders
-    there) - not meant to hit anything, just to force-cycle wr.ahk's
-    LButton-held -> RButton-to-game movement remap.
 
-    If the champion dies mid-movement-hold, wr.ahk's own cleanup (it
-    releases RButton once BlueStacks stops being the active window) can fire
-    a beat after we've already minimized - by then BlueStacks has already
-    lost focus, so that release lands nowhere and the game keeps thinking
-    the movement button is held. Doing one clean press+release here first,
-    while the window still has focus, guarantees the release actually lands
-    before we minimize. Also worth doing again after restoring, so the game
-    starts back up in a known-clean state rather than whatever it was left
-    holding.
+def release_mouse_buttons(hwnd):
+    """Post plain button-up messages to `hwnd` without touching real input.
+
+    wr_runtime.ahk holds RButton down for as long as the movement remap is
+    engaged. When a death minimizes the window mid-hold, AHK's own release
+    fires into a window that is no longer active and the game keeps walking.
+    PostMessage still reaches a minimized window and, unlike mouse_event, it
+    generates no hardware event - so it neither trips BlueStacks' cursor
+    capture nor lands in whatever app the death switched to.
+
+    Best effort by design: an emulator that ignores synthetic messages simply
+    stays as it was, and wr_runtime.ahk's NeedCleanup burst covers it on the
+    way back in.
     """
-    click_at(hwnd, x, y, button="left")
+    lparam = win32api.MAKELONG(0, 0)
+    for msg in (win32con.WM_LBUTTONUP, win32con.WM_RBUTTONUP,
+                win32con.WM_MBUTTONUP):
+        try:
+            win32gui.PostMessage(hwnd, msg, 0, lparam)
+        except Exception as e:
+            print(f"window_ctl: release_mouse_buttons failed: {e}",
+                  file=sys.stderr)
+            return
 
 
 def key_vk(letter):

@@ -2,8 +2,8 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 import os, sys
 import json
-from theme import VintageSunken, VintageButton, VintageLabel, VintageEntry, TOKENS, FONT_MAIN, FONT_SM
-from vintage_widgets import VintageWindowPicker
+from theme import VintageSunken, VintageButton, VintageLabel, TOKENS, FONT_MAIN, FONT_SM
+from vintage_widgets import VintageWindowPicker, grid_row
 from process_runner import ProcessRunner
 from locales import Locale
 
@@ -17,17 +17,6 @@ def save_json(path, data):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
         f.write("\n")
-
-def grid_row(parent, row, *fields):
-    col = 0
-    created = []
-    for key, var, width in fields:
-        lbl = VintageLabel(parent, text=Locale.tr(key), font=FONT_SM)
-        lbl.grid(row=row, column=col, sticky="w", padx=(0 if col == 0 else 6, 2), pady=1)
-        VintageEntry(parent, textvariable=var, width=width).grid(row=row, column=col + 1, sticky="w", pady=1)
-        created.append(("lbl", lbl, key))
-        col += 2
-    return created
 
 class AutoContinueTab(tk.Frame):
     CONFIG_NAME = "autocontinue_config.json"
@@ -86,7 +75,7 @@ class AutoContinueTab(tk.Frame):
         self.poll_interval.trace_add("write", self._auto_save)
         self.click_cooldown = tk.StringVar(value=cfg["click_cooldown_sec"])
         self.click_cooldown.trace_add("write", self._auto_save)
-        self._locale_widgets.extend(grid_row(params_frame, 0, ("poll_interval_s", self.poll_interval, 6), ("click_cooldown_s", self.click_cooldown, 6)))
+        self._locale_widgets.extend(grid_row(params_frame, 0, ("poll_interval_s", self.poll_interval, 6), ("click_cooldown_s", self.click_cooldown, 6), pad=(6, 2), pady=1))
 
         tk.Frame(config_frame, bg=TOKENS["borderMuted"], height=1).pack(fill="x", pady=3)
 

@@ -11,7 +11,7 @@ import shutil
 from datetime import datetime
 from tkinterdnd2 import TkinterDnD
 
-VERSION = "0.0.6"
+VERSION = "0.0.7"
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 PARENT = os.path.dirname(BASE)
@@ -153,7 +153,7 @@ class WildRiftAssistant:
         self.root = TkinterDnD.Tk()
         self.root.title("WildRiftAssistant")
         self.root.geometry(self._restore_geometry())
-        self.root.resizable(False, False)
+        self.root.resizable(True, True)
         apply_base_theme(self.root)
         self.root.update_idletasks()
         hwnd = ctypes.windll.user32.GetParent(self.root.winfo_id())
@@ -322,12 +322,12 @@ class WildRiftAssistant:
         try:
             x, y = (int(v) for v in pos.split(","))
         except (ValueError, AttributeError):
-            return "640x480"
+            return "750x550"
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
-        x = max(0, min(x, sw - 640))
-        y = max(0, min(y, sh - 480))
-        return "640x480+%d+%d" % (x, y)
+        x = max(0, min(x, sw - 750))
+        y = max(0, min(y, sh - 550))
+        return "750x550+%d+%d" % (x, y)
 
     def _remember_window(self):
         try:
@@ -362,9 +362,6 @@ class WildRiftAssistant:
             self.config["minimap"] = self.tab_minimap.get_data()
         if self.tab_afkfarm:
             self.config["afkfarm"] = self.tab_afkfarm.get_data()
-        if self.tab_main:
-            aa = self.tab_main.get_autoaccept()
-            self.config["auto_accept"] = aa
         self.config["lang"] = Locale.current()
         self.config.setdefault("window", {})["active_tab"] = self.notebook.index(self.notebook.select())
         self._remember_window()

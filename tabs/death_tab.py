@@ -2,38 +2,105 @@ import tkinter as tk
 import os, sys
 import json
 from tkinter import messagebox
-from theme import VintageButton, VintageLabel, VintageEntry, TOKENS, FONT_MAIN, FONT_SM
-from vintage_widgets import VintageWindowPicker
+from theme import VintageButton, TOKENS, FONT_MAIN
+from vintage_widgets import VintageWindowPicker, grid_row
 from process_runner import ProcessRunner
 from locales import Locale
 
 
 class ToolTip:
-    def __init__(self, widget, text):
+    """Hover tip that cannot enter an Enter/Leave feedback loop.
+
+    The old version created the Toplevel straight from <Enter> and destroyed
+    it straight from <Leave>. When the tip landed under the cursor Tk fired
+    Leave -> destroy -> Enter -> create ... thousands of times a second, which
+    pinned the GUI's main thread at ~100% of a core for as long as the window
+    stayed visible. Two guards break that cycle: the show is deferred by
+    DELAY_MS (a storm never gets to build), and _hide ignores any Leave fired
+    while the pointer is still geometrically inside the widget.
+    """
+
+    DELAY_MS = 450
+
+    def __init__(self, widget, text=None, key=None):
         self.widget = widget
         self.text = text
+        self.key = key
         self.tip = None
-        self.widget.bind("<Enter>", self._show, add="+")
+        self._after = None
+        self.widget.bind("<Enter>", self._schedule, add="+")
         self.widget.bind("<Leave>", self._hide, add="+")
+        self.widget.bind("<ButtonPress>", self._hide, add="+")
+        self.widget.bind("<Destroy>", self._hide, add="+")
 
-    def _show(self, event=None):
+    def _resolve_text(self):
+        if self.key:
+            resolved = Locale.tr(self.key)
+            # tr() returns the raw key when no bundle has it — fall back to
+            # the literal text instead of painting the key name on a tooltip.
+            if resolved != self.key:
+                return resolved
+        return self.text or ""
+
+    def _pointer_inside(self):
+        try:
+            x = self.widget.winfo_pointerx() - self.widget.winfo_rootx()
+            y = self.widget.winfo_pointery() - self.widget.winfo_rooty()
+            return (0 <= x < self.widget.winfo_width()
+                    and 0 <= y < self.widget.winfo_height())
+        except tk.TclError:
+            return False
+
+    def _schedule(self, event=None):
+        self._unschedule()
         if self.tip:
             return
-        x = self.widget.winfo_rootx() + 16
-        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 2
-        self.tip = tk.Toplevel(self.widget)
-        self.tip.wm_overrideredirect(True)
-        self.tip.wm_geometry(f"+{x}+{y}")
+        try:
+            self._after = self.widget.after(self.DELAY_MS, self._show)
+        except tk.TclError:
+            self._after = None
+
+    def _unschedule(self):
+        if self._after is not None:
+            try:
+                self.widget.after_cancel(self._after)
+            except tk.TclError:
+                pass
+            self._after = None
+
+    def _show(self):
+        self._after = None
+        if self.tip or not self._pointer_inside():
+            return
+        try:
+            x = self.widget.winfo_rootx() + 16
+            y = self.widget.winfo_rooty() + self.widget.winfo_height() + 6
+            self.tip = tk.Toplevel(self.widget)
+            self.tip.wm_overrideredirect(True)
+            self.tip.wm_geometry(f"+{x}+{y}")
+        except tk.TclError:
+            self.tip = None
+            return
         bg = TOKENS["surfaceAlt"]
         fg = TOKENS["textPrimary"]
-        lbl = tk.Label(self.tip, text=self.text, bg=bg, fg=fg,
+        lbl = tk.Label(self.tip, text=self._resolve_text(), bg=bg, fg=fg,
                        font=("Verdana", 8), padx=4, pady=2,
                        borderwidth=1, relief="solid")
         lbl.pack()
 
     def _hide(self, event=None):
+        # A Leave fired while the pointer is still inside means the tip itself
+        # (or a child widget) stole the crossing event - ignoring it is what
+        # stops the destroy/create storm.
+        if event is not None and getattr(event, "type", None) is not None:
+            if str(event.type) == "Leave" and self._pointer_inside():
+                return
+        self._unschedule()
         if self.tip:
-            self.tip.destroy()
+            try:
+                self.tip.destroy()
+            except tk.TclError:
+                pass
             self.tip = None
 
 BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -46,19 +113,6 @@ def save_json(path, data):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
         f.write("\n")
-
-def grid_row(parent, row, *fields):
-    col = 0
-    created = []
-    for key, var, width in fields:
-        lbl = VintageLabel(parent, text=Locale.tr(key), font=FONT_SM)
-        lbl.grid(row=row, column=col, sticky="w", padx=(0 if col == 0 else 4, 1), pady=0)
-        VintageEntry(parent, textvariable=var, width=width).grid(
-            row=row, column=col + 1, sticky="w", pady=0)
-        created.append(("lbl", lbl, key))
-        col += 2
-    return created
-
 
 class DeathWatchTab(tk.Frame):
     """Death detection + actions on resurrect.
@@ -94,7 +148,7 @@ class DeathWatchTab(tk.Frame):
                                           command=self.toggle_monitor)
         self.chk_monitor.pack(anchor="w", pady=0)
         self._locale_widgets.append(("chk", self.chk_monitor, "enable_death_monitor"))
-        ToolTip(self.chk_monitor, "Start/stop the death watch loop that detects death and resurrection in-game")
+        ToolTip(self.chk_monitor, key="tt_death_monitor")
 
         self.status_var = tk.StringVar(value=Locale.tr("stopped"))
         self.last_line_var = tk.StringVar(value="")
@@ -114,7 +168,7 @@ class DeathWatchTab(tk.Frame):
         self.window_picker = VintageWindowPicker(config_frame, Locale.tr("window_title_lbl"), cfg["window_title"], label_key="window_title_lbl")
         self.window_picker.pack(fill="x", pady=0)
         self._locale_widgets.append(("picker", self.window_picker, "window_title_lbl"))
-        ToolTip(self.window_picker, "Which game window title to monitor for death/revive events")
+        ToolTip(self.window_picker, key="tt_death_window")
 
         params_frame1 = tk.Frame(config_frame, bg=TOKENS["background"])
         params_frame1.pack(fill="x", pady=0)
@@ -158,7 +212,7 @@ class DeathWatchTab(tk.Frame):
                        bg=TOKENS["background"], fg=TOKENS["textPrimary"], selectcolor=TOKENS["compareBack"])
         sw_btn.pack(side="left")
         self._locale_widgets.append(("chk", sw_btn, "switch_work_lbl"))
-        ToolTip(sw_btn, "While dead, auto-switch to the work window (browser/notes) to keep you productive")
+        ToolTip(sw_btn, key="tt_switch_work")
 
         self.click_mid = tk.BooleanVar(value=cfg.get("click_mid_on_resurrect", False))
         self.click_mid.trace_add("write", self._auto_save)
@@ -166,7 +220,7 @@ class DeathWatchTab(tk.Frame):
                        bg=TOKENS["background"], fg=TOKENS["textPrimary"], selectcolor=TOKENS["compareBack"])
         cm_btn.pack(side="left", padx=(6, 0))
         self._locale_widgets.append(("chk", cm_btn, "click_mid_lbl"))
-        ToolTip(cm_btn, "When you resurrect, click the mid lane on minimap to go back to lane immediately")
+        ToolTip(cm_btn, key="tt_click_mid_res")
 
         self.lock_window = tk.BooleanVar(value=cfg.get("lock_window_resurrect", False))
         self.lock_window.trace_add("write", self._auto_save)
@@ -174,12 +228,12 @@ class DeathWatchTab(tk.Frame):
                        bg=TOKENS["background"], fg=TOKENS["textPrimary"], selectcolor=TOKENS["compareBack"])
         lw_btn.pack(side="left", padx=(6, 0))
         self._locale_widgets.append(("chk", lw_btn, "lock_window_lbl"))
-        ToolTip(lw_btn, "Lock/unlock current game window so minimap clicks don't lose focus (Ctrl+Shift+F8 toggle)")
+        ToolTip(lw_btn, key="tt_lock_window")
 
         self.work_window = VintageWindowPicker(config_frame, Locale.tr("work_window_lbl"), cfg.get("work_window_title", ""), label_key="work_window_lbl")
         self.work_window.pack(fill="x", pady=0)
         self._locale_widgets.append(("picker", self.work_window, "work_window_lbl"))
-        ToolTip(self.work_window, "Window to auto-switch to while dead (e.g. browser, notes, YouTube)")
+        ToolTip(self.work_window, key="tt_work_window")
 
         tk.Frame(config_frame, bg=TOKENS["borderMuted"], height=1).pack(fill="x", pady=3)
 
