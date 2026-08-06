@@ -1,5 +1,8 @@
 # Changelog
 
+## v0.2.2 (2026-08-07)
+- AHK hotkey conflict detection: post-generation scan of the rendered script flags duplicate hotkeys (including collisions with fixed generated hotkeys like the ~*b release handler, ^g anti-AFK, and the ExitApp chord) that AutoHotkey would silently resolve last-wins.
+
 ## v0.2.1 (2026-08-07)
 - Engine unit tests: config-load (valid/missing/corrupt) for all 4 engines, ProcessRunner start/stop/restart lifecycle, hwnd acquisition, region grouping, template scaling.
 

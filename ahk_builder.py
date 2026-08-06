@@ -1403,3 +1403,79 @@ def validate_config(config):
                     warnings.append(f"AFK slot '{s}' not found in minimap config")
 
     return warnings
+
+
+# sc-code <-> canonical base for hotkey comparison. Sc-codes are layout-
+# independent (q is sc010 on any layout); a raw letter hotkey and an sc-code
+# hotkey for the same physical key are the same hotkey to AutoHotkey.
+_SC_TO_CANON = {v: k for k, v in _LATIN_TO_SC.items()}
+
+
+def _canon_hotkey(hotkey):
+    """Normalize an AHK hotkey string to a comparable (mods, base) pair.
+
+    Strips behaviour-only prefixes (~, *, $) but keeps true modifiers
+    (^, !, +, #, <>, L/R variants), folds letter/digit triggers into
+    their sc-code base, and lowercases. Hotkeys that collide on the
+    (mods, base) pair are the same hotkey to AutoHotkey - one silently
+    shadows the other.
+    """
+    h = (hotkey or "").strip()
+    mods = ""
+    while h and h[0] in "~*$!^+#<>":
+        if h[0] in "~*$":
+            h = h[1:]  # behaviour: pass-through / wildcard / force-hook
+        else:
+            mods += h[0]
+            h = h[1:]
+    base = h
+    if base.lower() in _SC_TO_CANON:
+        base = _SC_TO_CANON[base.lower()]
+    elif base.lower().startswith("sc") and base.lower()[2:] in _SC_TO_CANON:
+        base = _SC_TO_CANON[base.lower()[2:]]
+    return mods, base.lower()
+
+
+def check_hotkey_conflicts(script):
+    """Post-generation scan of the rendered AHK script text for hotkey
+    collisions AutoHotkey would resolve silently (last registration wins).
+
+    validate_config only compares config-surface triggers against each
+    other. Fixed generated hotkeys live outside config - autobuy's
+    `~sc030::` (b), manual-aim release keys, the ^g anti-AFK chord, the
+    ~^!+R ExitApp chord - so a user trigger that collides with one of
+    those never appears in validate_config's seen_triggers at all. This
+    scan walks the actual generated text, so both classes surface as one
+    warning: identical (mods, base) hotkeys registered twice *in the same
+    #If context*. The pedal-carry guards (`#If GuardCarry("F13")`) are a
+    deliberate, separate context that shadows nothing, so their duplicate
+    registration is legal and is not flagged.
+    """
+    warnings = []
+    seen = {}  # context -> {(mods, base): (first_hk, first_line)}
+    context = ""
+    lines = script.split("\n")
+    for i, line in enumerate(lines, 1):
+        stripped = line.strip()
+        if stripped.startswith("#If"):
+            context = stripped
+            continue
+        if not stripped or stripped.startswith(";") or "::" not in stripped:
+            continue
+        hk = stripped.split("::", 1)[0].strip()
+        if hk.endswith(" Up"):
+            continue  # companion to the Down registration, not a separate hotkey
+        key = _canon_hotkey(hk)
+        if not key[1]:
+            continue
+        ctx_seen = seen.setdefault(context, {})
+        if key in ctx_seen:
+            first_hk, first_line = ctx_seen[key]
+            warnings.append(
+                f"hotkey conflict: '{hk}' (line {i}) collides with "
+                f"'{first_hk}' (line {first_line}) in same #If context - "
+                f"AutoHotkey keeps only the last"
+            )
+        else:
+            ctx_seen[key] = (hk, i)
+    return warnings

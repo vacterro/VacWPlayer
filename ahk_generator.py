@@ -7,7 +7,7 @@ import pywintypes
 import win32api
 import win32con
 import win32process
-from ahk_builder import generate_script, validate_config
+from ahk_builder import generate_script, validate_config, check_hotkey_conflicts
 
 """Renders wr_runtime.ahk from config and manages its process.
 
@@ -49,6 +49,10 @@ def generate_and_run(config):
             f.write(script)
     except (OSError, UnicodeEncodeError) as e:
         return False, "Failed to write AHK script: %s" % e
+
+    # Post-generation scan: catch hotkey collisions invisible to
+    # validate_config (fixed generated hotkeys live outside config).
+    config_warnings = config_warnings + check_hotkey_conflicts(script)
 
     # Kill any old instance before launching new one
     stop_ahk()
