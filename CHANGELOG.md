@@ -1,5 +1,8 @@
 # Changelog
 
+## v0.2.3 (2026-08-07)
+- digit_reader unit tests: white-text mask (saturation gate), column segmentation (merge/noise), glyph matching, read_number (synthetic digits, min-score, non-numeric). Coverage 16% -> 57%.
+
 ## v0.2.2 (2026-08-07)
 - AHK hotkey conflict detection: post-generation scan of the rendered script flags duplicate hotkeys (including collisions with fixed generated hotkeys like the ~*b release handler, ^g anti-AFK, and the ExitApp chord) that AutoHotkey would silently resolve last-wins.
 
