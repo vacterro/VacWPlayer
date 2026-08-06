@@ -2,6 +2,8 @@
 
 # WildRiftAssistant
 
+**v0.2.0** — [Changelog](CHANGELOG.md)
+
 One vintage-themed GUI over the whole Wild Rift toolkit: pedal combos, per-champion
 rotations, death auto-minimize, and post-game auto-continue — a controllable "super
 AHK" with a UI, no hand-editing scripts.

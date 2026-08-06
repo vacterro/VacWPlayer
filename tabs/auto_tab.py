@@ -1,3 +1,4 @@
+import copy
 import tkinter as tk
 from tkinter import ttk, messagebox
 import os, sys
@@ -35,6 +36,10 @@ class AutoContinueTab(tk.Frame):
         self.cfg_path = os.path.join(BASE, self.CONFIG_NAME)
         cfg = load_json(self.cfg_path)
         self.buttons = [dict(b) for b in cfg["buttons"]]
+        # Keep a pristine copy so Remove is always reversible via Reset.
+        # Deep copy: nested region lists must never be shared with the live
+        # buttons list, so a future in-place edit can't leak into the defaults.
+        self._default_buttons = [copy.deepcopy(b) for b in cfg["buttons"]]
 
 
         form = tk.Frame(self, bg=TOKENS["background"])
@@ -146,6 +151,9 @@ class AutoContinueTab(tk.Frame):
         self.poll_interval.set(str(cfg.get("poll_interval_sec", 0.6)))
         self.click_cooldown.set(str(cfg.get("click_cooldown_sec", 2.5)))
         self.window_picker.title_var.set(cfg.get("window_title", ""))
+        # Undo removes: bring back the buttons the config shipped with.
+        self.buttons = [dict(b) for b in self._default_buttons]
+        self._refresh_tree()
         self._auto_save()
 
     def _trigger_apply(self):

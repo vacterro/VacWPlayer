@@ -2,23 +2,39 @@
     "mode": "ryze",
     "toggles": {
         "mouse_remap": true,
+        "mouse_move_instead_hold": false,
+        "mouse_toggle_hold": true,
+        "release_toggle_on_keys": false,
+        "keep_movement_on_death": true,
+        "rmb_hold_pvp": false,
         "space_spam": true,
         "space_interval": 128,
         "anti_afk_hotkey": true,
         "anti_afk_interval": 5000,
         "stop_key": "s",
         "manual_aim_block": true,
+        "guard_outside_game": true,
+        "exit_when_bs_gone": true,
         "target_exe": "HD-Player.exe"
     },
     "combos": [],
     "champions": {
         "ryze": {
+            "enabled_wave": true,
             "trigger_wave": "F13",
             "keys_wave": "q,e,{Space}",
+            "move_when_pressed_wave": false,
+            "toggle_wave": false,
+            "enabled_jungle": true,
             "trigger_jungle": "F14",
-            "keys_jungle": "q,e,q,w,q,{Space}",
+            "keys_jungle": "q,q,e,q,w,q,{Space}",
+            "move_when_pressed_jungle": false,
+            "toggle_jungle": false,
+            "enabled_pvp": true,
             "trigger_pvp": "F15",
-            "keys_pvp": "e,w,w,q,{Space}",
+            "keys_pvp": "e,w,e,q,w,e,{Space}",
+            "move_when_pressed_pvp": true,
+            "toggle_pvp": true,
             "interval": 16,
             "use_shift": false,
             "qwer_as_uiop": true,
@@ -204,43 +220,48 @@
     "minimap": {
         "top": {
             "trigger": "!F9",
-            "x": 64,
+            "x": 204,
             "y": 137
         },
         "mid": {
             "trigger": "!F2",
-            "x": 116,
+            "x": 270,
             "y": 293
         },
         "bot": {
             "trigger": "!F6",
-            "x": 268,
+            "x": 400,
             "y": 369
         },
         "top_deep": {
             "trigger": "F20",
-            "x": 206,
+            "x": 338,
             "y": 135
         },
         "mid_deep": {
             "trigger": "F21",
-            "x": 233,
-            "y": 182
-        },
-        "bot_deep": {
-            "trigger": "F22",
-            "x": 282,
-            "y": 211
-        },
-        "base": {
-            "trigger": "",
-            "x": 170,
-            "y": 370
+            "x": 350,
+            "y": 203
         },
         "enemy_base": {
             "trigger": "",
-            "x": 80,
-            "y": 80
+            "x": 418,
+            "y": 135
+        },
+        "bot_deep": {
+            "trigger": "F22",
+            "x": 423,
+            "y": 216
+        },
+        "base": {
+            "trigger": "",
+            "x": 159,
+            "y": 396
+        },
+        "custom_1": {
+            "trigger": "",
+            "x": 0,
+            "y": 0
         },
         "_order": [
             "top",
@@ -248,9 +269,10 @@
             "bot",
             "top_deep",
             "mid_deep",
+            "enemy_base",
             "bot_deep",
             "base",
-            "enemy_base"
+            "custom_1"
         ]
     },
     "afkfarm": {
@@ -260,21 +282,44 @@
         "follow_cursor": true,
         "combo_keys": "q,w,e,{Space}",
         "combo_interval": 128,
-        "slots": [
-            "top",
-            "mid",
-            "bot",
-            "top_deep",
-            "mid_deep",
-            "bot_deep"
-        ]
+        "slots": {
+            "top": {
+                "enabled": true,
+                "move_when_pressed": false
+            },
+            "mid": {
+                "enabled": true,
+                "move_when_pressed": false
+            },
+            "bot": {
+                "enabled": true,
+                "move_when_pressed": false
+            },
+            "top_deep": {
+                "enabled": true,
+                "move_when_pressed": false
+            },
+            "mid_deep": {
+                "enabled": true,
+                "move_when_pressed": false
+            },
+            "bot_deep": {
+                "enabled": true,
+                "move_when_pressed": false
+            },
+            "base": {
+                "enabled": false,
+                "move_when_pressed": false
+            },
+            "enemy_base": {
+                "enabled": false,
+                "move_when_pressed": false
+            }
+        }
     },
-    "lang": "ru",
+    "lang": "en",
     "window": {
-        "active_tab": 7,
-        "position": "1936,471"
-    },
-    "auto_accept": {
-        "enabled": false
+        "active_tab": 2,
+        "position": "2009,445"
     }
 }

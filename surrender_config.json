@@ -1,0 +1,19 @@
+{
+  "monitor_enabled": true,
+  "window_title": "",
+  "poll_interval_sec": 5.0,
+  "click_cooldown_sec": 3.0,
+  "auto_accept": false,
+  "templates": [
+    {
+      "name": "Accept",
+      "file": "templates/sur_accept.png",
+      "threshold": 0.75
+    },
+    {
+      "name": "Decline",
+      "file": "templates/sur_decline.png",
+      "threshold": 0.75
+    }
+  ]
+}

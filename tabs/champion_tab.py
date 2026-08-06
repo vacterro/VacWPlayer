@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, messagebox
 
 import champions
 from theme import VintageButton, VintageLabel, VintageEntry, TOKENS, FONT_SM, FONT_MAIN
@@ -182,24 +182,59 @@ class ChampionTab(tk.Frame):
         self._presets = {}
 
         for row, slot in enumerate(("wave", "jungle", "pvp")):
+            ev = tk.BooleanVar(value=cfg.get("enabled_" + slot, True))
             tv = tk.StringVar(value=cfg.get("trigger_" + slot, ""))
             kv = tk.StringVar(value=cfg.get("keys_" + slot, ""))
             mv = tk.BooleanVar(value=cfg.get("move_when_pressed_" + slot, False))
+            tgv = tk.BooleanVar(value=cfg.get("toggle_" + slot, False))
+            self._vars["enabled_" + slot] = ev
             self._vars["trigger_" + slot] = tv
             self._vars["keys_" + slot] = kv
             self._vars["move_when_pressed_" + slot] = mv
+            self._vars["toggle_" + slot] = tgv
 
             # load & normalize presets for this slot
             self._presets[slot] = self._normalize_presets(cfg.get("presets_" + slot, []))
 
+            # enable checkbox: slot (function) can be switched off without
+            # losing its triggers/keys
+            slot_chk = tk.Checkbutton(self._champ_form, text=Locale.tr("champ_slot_enabled"),
+                           variable=ev,
+                           bg=TOKENS["background"], fg=TOKENS["textPrimary"],
+                           selectcolor=TOKENS["compareBack"],
+                           activebackground=TOKENS["background"],
+                           activeforeground=TOKENS["textPrimary"],
+                           font=FONT_SM, highlightthickness=0, bd=0)
+            slot_chk.grid(row=row, column=0, sticky="w", pady=1)
+            self._champ_locale.append(("chk", slot_chk, "champ_slot_enabled"))
+
+            # Toggle mode: press the trigger to start the combo, press again
+            # to stop - it runs on its own while on (no need to hold the key).
+            tg_chk = tk.Checkbutton(self._champ_form, text=Locale.tr("champ_toggle"),
+                           variable=tgv,
+                           bg=TOKENS["background"], fg=TOKENS["textPrimary"],
+                           selectcolor=TOKENS["compareBack"],
+                           activebackground=TOKENS["background"],
+                           activeforeground=TOKENS["textPrimary"],
+                           font=FONT_SM, highlightthickness=0, bd=0)
+            tg_chk.grid(row=row, column=1, sticky="w", padx=(0, 2))
+            self._champ_locale.append(("chk", tg_chk, "champ_toggle"))
+
             slot_lbl = VintageLabel(self._champ_form, text=Locale.tr("slot_" + slot))
-            slot_lbl.grid(row=row, column=0, sticky="w", pady=1)
+            slot_lbl.grid(row=row, column=2, sticky="w", pady=1)
             self._champ_locale.append(("lbl", slot_lbl, "slot_" + slot))
-            VintageEntry(self._champ_form, textvariable=tv, width=6).grid(
-                row=row, column=1, sticky="w", pady=1)
-            BindButton(self._champ_form, tv).grid(row=row, column=2, sticky="w", padx=1)
+            # trigger field accepts several binds, comma-separated: F13,F16
+            VintageEntry(self._champ_form, textvariable=tv, width=12).grid(
+                row=row, column=3, sticky="w", pady=1)
+            BindButton(self._champ_form, tv).grid(row=row, column=4, sticky="w", padx=1)
+            # Bind again (or type ,) to stack several keys on one slot: F13,F16
+            bind_lbl = VintageLabel(self._champ_form,
+                                     text=Locale.tr("bind_add_hint"),
+                                     font=FONT_SM, fg=TOKENS["textMuted"])
+            bind_lbl.grid(row=row, column=5, sticky="w", padx=(2, 0))
+            self._champ_locale.append(("lbl", bind_lbl, "bind_add_hint"))
             VintageEntry(self._champ_form, textvariable=kv, width=22).grid(
-                row=row, column=3, sticky="w", padx=(4, 0), pady=1)
+                row=row, column=6, sticky="w", padx=(4, 0), pady=1)
             
             # Move when pressed checkbox: also hold RButton (move) with the combo
             move_chk = tk.Checkbutton(self._champ_form, text=Locale.tr("champ_move_when_pressed"),
@@ -209,18 +244,18 @@ class ChampionTab(tk.Frame):
                            activebackground=TOKENS["background"],
                            activeforeground=TOKENS["textPrimary"],
                            font=FONT_SM, highlightthickness=0, bd=0)
-            move_chk.grid(row=row, column=4, sticky="w", padx=2)
+            move_chk.grid(row=row, column=7, sticky="w", padx=2)
             self._champ_locale.append(("chk", move_chk, "champ_move_when_pressed"))
 
             # --- 3 preset buttons with trigger label ---
             pframe = tk.Frame(self._champ_form, bg=TOKENS["background"])
-            pframe.grid(row=row, column=5, sticky="w", padx=(3, 2))
+            pframe.grid(row=row, column=8, sticky="w", padx=(3, 2))
             self._build_preset_buttons(pframe, slot, kv, tv)
 
 
 
         row2 = tk.Frame(self._champ_form, bg=TOKENS["background"])
-        row2.grid(row=3, column=0, columnspan=6, sticky="w", pady=4)
+        row2.grid(row=3, column=0, columnspan=9, sticky="w", pady=4)
         self._lbl_interval = VintageLabel(row2, text=Locale.tr("interval_ms_lbl"))
         self._lbl_interval.pack(side="left")
         self._champ_locale.append(("lbl", self._lbl_interval, "interval_ms_lbl"))
@@ -467,6 +502,10 @@ class ChampionTab(tk.Frame):
             return
         key = champions.slug(name)
         if key not in self.champions_data:
+            return
+        if not messagebox.askyesno(
+                Locale.tr("remove_lbl"),
+                Locale.tr("confirm_delete_champ") % name):
             return
         del self.champions_data[key]
         if self._champ_form:

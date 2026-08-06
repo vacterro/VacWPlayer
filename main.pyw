@@ -56,6 +56,7 @@ from tabs.auto_tab import AutoContinueTab
 from tabs.minimap_tab import MinimapTab, MINIMAP_DEFAULTS
 from tabs.afkfarm_tab import AFKFarmTab, AFKFARM_DEFAULTS
 from tabs.accept_tab import AcceptTab
+from tabs.surrender_tab import SurrenderTab
 from combo_browser import ComboBrowser
 from locales import Locale
 
@@ -185,6 +186,7 @@ class WildRiftAssistant:
             ("tab_minimap", "tab_minimap", lambda: MinimapTab(self.notebook, self.config.get("minimap"))),
             ("tab_afkfarm", "tab_afkfarm", lambda: AFKFarmTab(self.notebook, self.config.get("afkfarm"))),
             ("tab_accept", "tab_accept", lambda: AcceptTab(self.notebook)),
+            ("tab_surrender", "tab_surrender", lambda: SurrenderTab(self.notebook)),
         ]
         self._build_all_tabs()
         self._restore_active_tab()
@@ -241,6 +243,16 @@ class WildRiftAssistant:
 
         self._engine_should_run = True
         self.root.after(100, self.apply_and_start)
+
+        toggles = self.config.get("toggles", {})
+        if toggles.get("exit_when_bs_gone", True):
+            exes = [toggles.get("target_exe") or "HD-Player.exe"]
+            single_instance.start_target_watchdog(
+                exes,
+                lambda: self.root.after(0, self.quit_app),
+                interval_sec=3.0,
+                grace_ticks=2,
+                min_uptime_sec=15.0)
 
         self.root.after(3000, self._engine_watchdog)
 

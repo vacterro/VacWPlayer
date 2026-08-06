@@ -1,13 +1,14 @@
-﻿# WildRiftAssistant — Tabs Guide
+# WildRiftAssistant — Tabs Guide
 
+> Draft page from saiwiki (WIKI-003). Target location suggestion: `docs/wiki/tabs-guide.md`.
 
-The main window: 9-tab `VintageNotebook` + bottom bar. All tabs are built at
-startup (no lazy loading); each tab auto-saves its settings (debounced 300ms)
-into `config.json` or its engine config.
+The main window: 9-tab `VintageNotebook` + bottom bar. Tabs load lazily on first
+switch; each tab auto-saves its settings (debounced 300ms) into `config.json` or
+its engine config.
 
 ## General (tabs/main_tab.py) — global input + auto-accept
 
-- Toggles: Mouse remap (LMB=move hold, RMB=tap), Space spam while held, Anti-AFK
+- Toggles: Mouse remap (LMB=move hold, RMB=tap; b, v, a unconditionally release hold), Space spam while held, Anti-AFK
   (Ctrl+G toggles in game), Manual q/w/e/r/d/f pauses combos.
 - Numeric: Stop key (default `s`), Spc ms (space interval), AFK ms (anti-AFK
   interval), Exe (target emulator, dropdown from `EMULATOR_EXES` + manual).
@@ -78,7 +79,7 @@ into `config.json` or its engine config.
 
 ## Bottom bar (main.pyw)
 
-- Language combobox (33 languages, native names), mode combobox (General + champions), Export / Import
+- Lang toggle (RU/EN), mode combobox (General + champions), Export / Import
   (also JSON file drop onto window) / Backup config, Hotkeys viewer, Combo
   browser (opens `combo_browser.py`), status label, AHK running dot
   (green/red), **Apply & Start**, **Stop**, tray icon (Show / Apply & Start /

@@ -158,6 +158,10 @@ class ComboTab(tk.Frame):
         sel = self.tree.selection()
         if not sel:
             return
+        if not messagebox.askyesno(
+                Locale.tr("delete"),
+                Locale.tr("confirm_delete")):
+            return
         del self.combos[int(sel[0])]
         self.refresh_list()
         self._auto_save()

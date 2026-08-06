@@ -3,7 +3,7 @@
   "window_title": "BlueStacks App Player",
   "poll_interval_sec": 0.4,
   "shop_buffer_sec": 0.0,
-  "restore_buffer_sec": 2.0,
+  "restore_buffer_sec": 0.0,
   "match_threshold": 0.75,
   "death_label_region": [
     900,
@@ -28,7 +28,7 @@
     "F14",
     "F15"
   ],
-  "pedal_block_sec": 1.0,
+  "pedal_block_sec": 5.0,
   "switch_to_work_window": false,
   "work_window_title": "WildRiftAssistant",
   "click_mid_on_resurrect": false,

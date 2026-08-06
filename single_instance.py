@@ -9,6 +9,44 @@ import win32event
 import win32process
 import winerror
 
+def _running_pids():
+    try:
+        return win32process.EnumProcesses()
+    except Exception:
+        return []
+
+
+def _process_names():
+    """All running process image names (lowercase base names) - pure win32, no subprocess spawn."""
+    names = set()
+    for pid in _running_pids():
+        try:
+            handle = win32api.OpenProcess(
+                win32con.PROCESS_QUERY_LIMITED_INFORMATION | win32con.PROCESS_VM_READ,
+                False, pid)
+        except Exception:
+            continue
+        try:
+            path = win32process.GetModuleFileNameEx(handle, 0)
+            if path:
+                names.add(os.path.basename(path).lower())
+        except Exception:
+            pass
+        finally:
+            win32api.CloseHandle(handle)
+    return names
+
+
+def _target_any_alive(exe_names):
+    """True when at least one of the given executable names is running."""
+    if not exe_names:
+        return True
+    lower = {n.lower() for n in exe_names if n}
+    if not lower:
+        return True
+    return bool(lower & _process_names())
+
+
 def _parent_alive(pid):
     """Pure win32 liveness probe for a parent PID - no subprocess spawns."""
     if pid <= 0:
@@ -45,6 +83,51 @@ def start_parent_watchdog(interval_sec=2.0):
             if not _parent_alive(parent):
                 print(f"parent {parent} gone - exiting")
                 os._exit(0)
+
+    t = threading.Thread(target=_watch, daemon=True)
+    t.start()
+    return t
+
+
+def start_target_watchdog(exe_names, on_gone, interval_sec=3.0, grace_ticks=2, min_uptime_sec=15.0):
+    """Exit the assistant once the target emulator was seen running and then died.
+
+    `exe_names` - iterable of emulator executable names (e.g. HD-Player.exe).
+    `on_gone`   - callback invoked (from a daemon thread) when the target goes away.
+    `grace_ticks` - consecutive gone-checks required before firing (jitter guard).
+    `min_uptime_sec` - ignore the very first seconds: the GUI may start before
+    BlueStacks, and a not-yet-started emulator must not count as "disappeared".
+
+    Only a target that WAS running triggers shutdown on disappearance - a
+    session that never saw BlueStacks (user launched the assistant alone) is
+    left alone.
+    """
+    seen_alive = False
+    pending_ticks = 0
+    state = {}
+
+    def _watch():
+        nonlocal seen_alive, pending_ticks
+        tick = 0.0
+        while True:
+            time.sleep(interval_sec)
+            tick += interval_sec
+            alive = _target_any_alive(exe_names)
+            if alive:
+                seen_alive = tick >= min_uptime_sec or seen_alive
+                pending_ticks = 0
+                state["alive"] = True
+                continue
+            if not seen_alive:
+                continue
+            pending_ticks += 1
+            state["gone"] = pending_ticks
+            if pending_ticks >= grace_ticks:
+                print(f"target {exe_names} gone - shutting down assistant")
+                try:
+                    on_gone()
+                finally:
+                    os._exit(0)
 
     t = threading.Thread(target=_watch, daemon=True)
     t.start()

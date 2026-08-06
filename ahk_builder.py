@@ -42,8 +42,26 @@ def parse_steps(keys_str, default_interval):
     return steps
 
 def _is_plain_key(trigger):
-    """True for single keys usable with GetKeyState (no hotkey modifiers)."""
-    return bool(trigger and re.fullmatch(r"[A-Za-z0-9]|F\d{1,2}", trigger))
+    """True for single keys usable with GetKeyState (no hotkey modifiers).
+
+    Cyrillic letters are normalized to their physical QWERTY key first, so a
+    combo bound while the Russian layout was active still gets its release
+    cleanup.
+    """
+    t = _to_latin((trigger or "").strip())
+    return bool(t and re.fullmatch(r"[A-Za-z0-9]|F\d{1,2}", t))
+
+
+# Re-engages the LMB toggle-hold after a death-minimize / Alt-Tab once the game
+# window is focused again (see ResetState + FocusWatch). Emitted only when the
+# keep_movement_on_death toggle is on; indentation is 4 spaces in both contexts.
+_KEEP_MOVE_RESTORE = (
+    "    if (KeepMovePending) {\n"
+    "        KeepMovePending := false\n"
+    "        MoveToggle := true\n"
+    "        CheckMovement()\n"
+    "    }\n"
+)
 
 
 _MOD_PREFIX = "!^+#*~$<>"
@@ -52,6 +70,67 @@ _MOD_PREFIX = "!^+#*~$<>"
 def _base_key(trigger):
     """'!F9' -> 'F9'. Strips hotkey modifier/behaviour prefixes."""
     return (trigger or "").strip().lstrip(_MOD_PREFIX)
+
+
+# Cyrillic (ЙЦУКЕН) letter -> physical QWERTY key, so hotkeys bound while the
+# Russian layout was active still resolve to the physical key they were bound
+# on. Everything else (F13-F24, digits, latin letters) passes through.
+_CYRILLIC_TO_LATIN = {
+    "й": "q", "ц": "w", "у": "e", "к": "r", "е": "t", "н": "y",
+    "г": "u", "ш": "i", "щ": "o", "з": "p", "х": "[", "ъ": "]",
+    "ф": "a", "ы": "s", "в": "d", "а": "f", "п": "g", "р": "h",
+    "о": "j", "л": "k", "д": "l", "ж": ";", "э": "'",
+    "я": "z", "ч": "x", "с": "c", "м": "v", "и": "b", "т": "n",
+    "ь": "m", "б": ",", "ю": ".",
+}
+
+# Physical QWERTY letter/digit -> Windows scan code (hex, no 0x). Scan codes
+# are layout-independent: `q` on ЙЦУКЕН is still sc010, so hotkeys written as
+# `sc010::` fire on the same physical key no matter which layout is active.
+_LATIN_TO_SC = {
+    "q": "010", "w": "011", "e": "012", "r": "013", "t": "014",
+    "y": "015", "u": "016", "i": "017", "o": "018", "p": "019",
+    "a": "01E", "s": "01F", "d": "020", "f": "021", "g": "022",
+    "h": "023", "j": "024", "k": "025", "l": "026",
+    "z": "02C", "x": "02D", "c": "02E", "v": "02F", "b": "030",
+    "n": "031", "m": "032",
+    "1": "002", "2": "003", "3": "004", "4": "005", "5": "006",
+    "6": "007", "7": "008", "8": "009", "9": "00A", "0": "00B",
+}
+
+
+def _to_latin(key):
+    """Map a Cyrillic letter to its physical QWERTY key (case-aware)."""
+    if not key or len(key) != 1 or ord(key) < 0x0400:
+        return key
+    low = _CYRILLIC_TO_LATIN.get(key.lower())
+    if low is None:
+        return key
+    return low.upper() if key.isupper() else low
+
+
+def _sc_key(key):
+    """'q' -> 'sc010'; '!q' -> '!sc010'. A layout-independent scan-code
+    hotkey/send form that preserves modifier prefixes.
+
+    F-keys, named keys ({Space}, {Enter}), and anything else pass through
+    unchanged. Cyrillic letters are first mapped back to their physical
+    QWERTY key, so a hotkey bound under the Russian layout still works.
+    """
+    trig = (key or "").strip()
+    if not trig:
+        return key
+    base = _base_key(trig)
+    if not base or base == trig:
+        # No modifier prefix - convert the whole single key.
+        k = _to_latin(trig)
+        sc = _LATIN_TO_SC.get(k.lower()) if len(k) == 1 else None
+        return "sc" + sc if sc else trig
+    mods = trig[:len(trig) - len(base)]
+    sc = _LATIN_TO_SC.get(_to_latin(base).lower())
+    if sc:
+        return mods + "sc" + sc
+    return trig
 
 
 def _guard_variant(trigger):
@@ -91,7 +170,9 @@ def _guarded_triggers(toggles, combos, minimap, afk_k):
     """Ordered, de-duplicated (variant, base_key) pairs for every trigger."""
     if not toggles.get("guard_outside_game", True):
         return []
-    trigs = [c.get("trigger", "") for c in combos]
+    trigs = []
+    for c in combos:
+        trigs.extend(c.get("triggers") or [c.get("trigger", "")])
     if isinstance(minimap, dict):
         for key, entry in minimap.items():
             if key == "_order" or not isinstance(entry, dict):
@@ -116,13 +197,49 @@ def _carry_set(trigger, value):
     return 'Carry["%s"] := %s' % (base, "true" if value else "false")
 
 
-def _send_for(key, shift):
-    """Shift-wrap ability letters (self-cast in Wild Rift), send others raw."""
-    if shift and key.lower() in ("q", "w", "e", "r", "u", "i", "o", "p"):
-        return "{Blind}{Shift down}" + key + "{Shift up}"
-    return "{Blind}" + key
+def _send_key(key):
+    """'q' -> '{sc010}' for SendInput; 'F13' -> '{F13}'; '{Space}' unchanged.
 
-def _hotkey_block(trig, flag, last, step_var, guarded=True, move_when_pressed=False):
+    Scan-code sends are layout-independent: the same physical key reaches the
+    game whether ЙЦУКЕН or QWERTY is active. Named keys are braced so AHK
+    sends the key, not the literal characters F,1,3.
+    """
+    sc = _sc_key(key)
+    if sc != key:
+        return "{" + sc + "}"
+    if key.startswith("{"):
+        return key
+    return "{" + key + "}"
+
+
+def _send_for(key, shift):
+    """Shift-wrap ability letters (self-cast in Wild Rift), send others raw.
+
+    Keys are emitted as scan codes so a combo typed as q,w,e still lands on
+    the physical Q/W/E keys under any active keyboard layout.
+    """
+    k = _send_key(key)
+    if shift and key.lower() in ("q", "w", "e", "r", "u", "i", "o", "p"):
+        return "{Blind}{Shift down}" + k + "{Shift up}"
+    return "{Blind}" + k
+
+def _hotkey_block(trig, flag, last, step_var, guarded=True, move_when_pressed=False,
+                  rmb_guard=False, siblings=(), toggle_mode=False):
+    """Combo trigger hotkey + Up handler.
+
+    rmb_guard marks the PVP combo when the right-button hold can drive it:
+    its Up must then leave the flag alone while RMB_PvpActive, otherwise a
+    quick F15 tap would kill a combo the held RMB is still running.
+
+    siblings lists the other triggers bound to the same function: the flag
+    survives one trigger's release while a sibling key is still physically
+    down, so two binds on one combo share it cleanly.
+
+    toggle_mode: the press flips the combo on/off instead of latching while
+    held, and the Up is swallowed. The combo keeps running until the same
+    trigger is pressed again (sibling triggers flip it too - they share the
+    flag, so any bound key toggles the same state).
+    """
     nd = flag + "_NextDelay"
     # Carry is what tells the outside-the-game guard "this press began in the
     # game" - set on every down, cleared on the matching up.
@@ -138,8 +255,52 @@ def _hotkey_block(trig, flag, last, step_var, guarded=True, move_when_pressed=Fa
         move_on = "        MoveRefs += 1\n        CheckMovement()\n"
         move_off = "    MoveRefs := (MoveRefs > 0 ? MoveRefs - 1 : 0)\n    CheckMovement()\n"
 
+    not_down = [('!GetKeyState("%s", "P")' % _sc_key(s)) for s in siblings]
+    if rmb_guard:
+        not_down.append("!RMB_PvpActive")
+    if not_down:
+        cond = " && ".join(not_down)
+        clear = "    if (" + cond + ") {\n"
+        indent = "        "
+    else:
+        clear = ""
+        indent = "    "
+    up_body = (
+        clear
+        + indent + flag + "_Held := false\n"
+        + indent + step_var + " := 0\n"
+        + move_off.replace("    ", indent)
+        + (indent + "}\n" if not_down else "")
+    )
+
+    if toggle_mode:
+        # Press: flip the combo. Re-press stops it - no physical-hold
+        # tracking, no Up body (it is swallowed). MoveRefs follows the flag
+        # so move-while-combo still works for a toggle. Carry tracks the
+        # toggle state: set when the combo turns on, cleared when it turns
+        # off - there is no Up to clear it, so the toggle-off clears it.
+        carry_on = ("        " + _carry_set(trig, True) + "\n") if guarded else ""
+        carry_off = ("        " + _carry_set(trig, False) + "\n") if guarded else ""
+        return (
+            "*" + _sc_key(trig) + "::\n"
+            + "    if (!" + flag + "_Held) {\n"
+            + carry_on +
+            "        " + flag + "_Held := true\n"
+            "        " + last + " := 0\n"
+            "        " + step_var + " := 0\n"
+            "        " + nd + " := 0\n"
+            + move_on +
+            "        SetTimer, MasterSpammer, 15\n"
+            "    } else {\n"
+            + carry_off +
+            "        " + flag + "_Held := false\n"
+            "        " + step_var + " := 0\n"
+            + move_off.replace("    ", "        ") +
+            "    }\n"
+            "return\n"
+        )
     return (
-        "*" + trig + "::\n"
+        "*" + _sc_key(trig) + "::\n"
         + set_on +
         "    if (!" + flag + "_Held) {\n"
         "        " + flag + "_Held := true\n"
@@ -150,11 +311,9 @@ def _hotkey_block(trig, flag, last, step_var, guarded=True, move_when_pressed=Fa
         "        SetTimer, MasterSpammer, 15\n"
         "    }\n"
         "return\n"
-        "*" + trig + " Up::\n"
+        "*" + _sc_key(trig) + " Up::\n"
         + set_off +
-        "    " + flag + "_Held := false\n"
-        "    " + step_var + " := 0\n"
-        + move_off +
+        up_body +
         "return\n"
     )
 
@@ -162,17 +321,32 @@ def _tag(mode):
     """AHK variable names allow only word chars, champion slugs already are."""
     return "".join(ch if (ch.isalnum() or ch == "_") else "_" for ch in mode)
 
+def _split_triggers(raw):
+    """'F13,F16' or 'F13' -> ['F13', 'F16']. Empty string -> []."""
+    out = []
+    for t in (raw or "").split(","):
+        t = t.strip()
+        if t and t not in out:
+            out.append(t)
+    return out
+
+
 def _active_combos(config):
     """Champion mode decides which combo set is live - exactly one owner per
-    trigger key, so F13-F15 never collide between General and any champion."""
+    trigger key, so F13-F15 never collide between General and any champion.
+
+    A combo may have several trigger keys (comma-separated): every trigger
+    binds to the same function and shares its flags/steps.
+    """
     mode = config.get("mode", "general")
     combos = []
     if mode == "general":
         for i, c in enumerate(config.get("combos", [])):
             keys = parse_steps(c.get("keys", ""), int(c.get("interval", 50)))
-            if c.get("trigger") and keys:
+            trigs = _split_triggers(c.get("trigger"))
+            if trigs and keys:
                 combos.append({
-                    "trigger": c["trigger"], "steps": keys,
+                    "trigger": trigs[0], "triggers": trigs, "steps": keys,
                     "shift": bool(c.get("shift", True)), "tag": "gen%d" % i,
                     "move_when_pressed": bool(c.get("move_when_pressed", False)),
                 })
@@ -183,7 +357,9 @@ def _active_combos(config):
         qwer_uiop = bool(cfg.get("qwer_as_uiop", False))
         
         for slot in ("wave", "jungle", "pvp"):
-            trig = cfg.get("trigger_" + slot)
+            if not cfg.get("enabled_" + slot, True):
+                continue
+            trigs = _split_triggers(cfg.get("trigger_" + slot))
             keys_raw = cfg.get("keys_" + slot, "")
             keys = parse_steps(keys_raw, interval)
             move_when_pressed = cfg.get("move_when_pressed_" + slot, False)
@@ -192,22 +368,25 @@ def _active_combos(config):
                 m = {"q":"u", "w":"i", "e":"o", "r":"p", "Q":"U", "W":"I", "E":"O", "R":"P"}
                 keys = [(m.get(k, k), d) for k, d in keys]
 
-            if trig and keys:
+            if trigs and keys:
                 combos.append({
-                    "trigger": trig, "steps": keys, "shift": use_shift,
-                    "tag": _tag(mode) + "_" + slot,
+                    "trigger": trigs[0], "triggers": trigs, "steps": keys,
+                    "shift": use_shift, "tag": _tag(mode) + "_" + slot,
                     "move_when_pressed": move_when_pressed,
+                    "toggle": bool(cfg.get("toggle_" + slot, False)),
+                    "siblings": trigs[1:],
                 })
     seen, unique, dropped = set(), [], []
     for c in combos:
-        if c["trigger"] in seen:
+        if any(t in seen for t in c["triggers"]):
             dropped.append(c["tag"])
             continue
-        seen.add(c["trigger"])
+        for t in c["triggers"]:
+            seen.add(t)
         unique.append(c)
     return unique, dropped
 
-def _gen_header(a, target_exe, combos, afk):
+def _gen_header(a, target_exe, combos, afk, toggles):
     """Prologue: directives, legacy cleanup, globals, watchdog timer."""
     a.append("#NoEnv")
     a.append("#SingleInstance Force")
@@ -249,6 +428,11 @@ def _gen_header(a, target_exe, combos, afk):
     a.append("global MoveToggle := false")
     a.append("global MoveRefs := 0")
     a.append("global LMB_Pass := false")
+    a.append("global RMB_Held := false")
+    a.append("global RMB_PressTime := 0")
+    a.append("global RMB_PvpActive := false")
+    if toggles.get("keep_movement_on_death"):
+        a.append("global KeepMovePending := false")
     for c in combos:
         flag = "P_" + c["tag"]
         a.append("global " + flag + "_Held := false")
@@ -301,7 +485,8 @@ def _gen_autobuy(a, target_exe, config):
             qb_vk = qb_key
         controlsend = dw_cfg.get("controlsend_z", False)
         a.append(f"#IfWinActive, {win_title}")
-        a.append("~b::")
+        a.append("~" + _sc_key("b") + "::")
+        a.append("    ReleaseMoveToggle()")
         a.append("    SetTimer, DoAutoBuy, Off")
         a.append(f"    SetTimer, DoAutoBuy, -{buy_delay_ms}")
         a.append("return\n")
@@ -379,6 +564,8 @@ def _gen_focus_watch(a, target_exe, toggles, guard_bases=()):
     a.append("        } else if (NeedCleanup) {")
     a.append("            NeedCleanup := false")
     a.append("            ReleaseAll()")
+    if toggles.get("keep_movement_on_death"):
+        a.append(_KEEP_MOVE_RESTORE.rstrip())
     a.append("        }")
     a.append("    }")
     a.append("    if (!_fw_act)")
@@ -485,30 +672,99 @@ def _gen_hotkeys(a, target_exe, toggles, combos, minimap, afk_k):
             a.append("    LMB_Held := false")
             a.append("    CheckMovement()")
             a.append("return")
-        a.append("*RButton::")
-        a.append("    SendInput {LButton down}")
-        a.append("return")
-        a.append("*RButton Up::")
-        a.append("    SendInput {LButton up}")
-        a.append("return\n")
+        pvp = next((c for c in combos if c["tag"].endswith("_pvp")), None)
+        rmb_pvp = bool(pvp) and toggles.get("rmb_hold_pvp", True)
+        if rmb_pvp:
+            hold_ms = max(50, int(toggles.get("rmb_hold_ms", 300)))
+            tag = pvp["tag"]
+            move = pvp.get("move_when_pressed", False)
+            trigs = pvp.get("triggers") or [pvp.get("trigger", "")]
+            # The RMB-hold owns the combo while RMB_PvpActive; releasing the
+            # trigger key must not kill it. With several binds on the PVP combo
+            # a release only stops the combo when none of them is down.
+            pvp_release = " && ".join(
+                '!GetKeyState("%s", "P")' % _sc_key(t) for t in trigs)
+            # RMB = tap attack; holding it >= hold_ms switches into the PVP
+            # combo (the same one the PVP hotkey runs). The tap starts at once
+            # so short clicks stay instant; only a sustained press escalates.
+            a.append("*RButton::")
+            a.append("    RMB_Held := true")
+            a.append("    RMB_PressTime := A_TickCount")
+            a.append("    RMB_PvpActive := false")
+            a.append("    SendInput {LButton down}")
+            a.append("    SetTimer, RMBHoldCheck, 20")
+            a.append("return")
+            a.append("*RButton Up::")
+            a.append("    RMB_Held := false")
+            a.append("    SetTimer, RMBHoldCheck, Off")
+            a.append("    if (RMB_PvpActive) {")
+            a.append("        RMB_PvpActive := false")
+            a.append("        if (" + pvp_release + ") {")
+            a.append("            P_" + tag + "_Held := false")
+            a.append("            Step_" + tag + " := 0")
+            if move:
+                a.append("            MoveRefs := (MoveRefs > 0 ? MoveRefs - 1 : 0)")
+                a.append("            CheckMovement()")
+            a.append("        }")
+            a.append("    }")
+            a.append("    SendInput {LButton up}")
+            a.append("return")
+            a.append("")
+            a.append("RMBHoldCheck:")
+            a.append("    if (!RMB_Held)")
+            a.append("        return")
+            a.append("    if (A_TickCount - RMB_PressTime < " + str(hold_ms) + ")")
+            a.append("        return")
+            a.append("    if (RMB_PvpActive)")
+            a.append("        return")
+            a.append("    RMB_PvpActive := true")
+            a.append("    SetTimer, RMBHoldCheck, Off")
+            # Only start the combo when its trigger key is NOT already held:
+            # if F15 is down, _hotkey_block already owns the flag AND added
+            # its MoveRefs - starting here again would double-count the hold
+            # and leak a stuck MoveRefs on release.
+            a.append("    if (!P_" + tag + "_Held) {")
+            a.append("        P_" + tag + "_Held := true")
+            a.append("        Last_" + tag + " := 0")
+            a.append("        Step_" + tag + " := 0")
+            a.append("        P_" + tag + "_NextDelay := 0")
+            if move:
+                a.append("        MoveRefs += 1")
+                a.append("        CheckMovement()")
+            a.append("    }")
+            a.append("    SetTimer, MasterSpammer, 15")
+            a.append("    ; un-tap so the champion is not double-attacking")
+            a.append("    SendInput {LButton up}")
+            a.append("return")
+            a.append("")
+        else:
+            a.append("*RButton::")
+            a.append("    SendInput {LButton down}")
+            a.append("return")
+            a.append("*RButton Up::")
+            a.append("    SendInput {LButton up}")
+            a.append("return\n")
 
     stop_key = (toggles.get("stop_key") or "").strip()
     if stop_key:
-        a.append("*" + stop_key + "::")
+        a.append("*" + _sc_key(stop_key) + "::")
+        a.append("    ReleaseMoveToggle()")
         a.append("    if (!StopActive) {")
         a.append("        StopActive := true")
-        a.append("        SendInput " + stop_key)
+        a.append("        SendInput " + _send_key(stop_key))
         a.append("        CheckMovement()")
         a.append("        SetTimer, MasterSpammer, 15")
         a.append("    }")
         a.append("return")
-        a.append("*" + stop_key + " Up::")
+        a.append("*" + _sc_key(stop_key) + " Up::")
         a.append("    StopActive := false")
         a.append("    CheckMovement()")
         a.append("return")
 
     if toggles.get("space_spam", True):
         a.append("*Space::")
+        if toggles.get("release_toggle_on_keys", False):
+            a.append("    ReleaseMoveToggle()")
         a.append("    if (!SpaceActive) {")
         a.append("        SpaceActive := true")
         a.append("        SendInput {Space}")
@@ -521,34 +777,84 @@ def _gen_hotkeys(a, target_exe, toggles, combos, minimap, afk_k):
         a.append("return")
 
     if toggles.get("anti_afk_hotkey", True):
-        a.append("^g::")
+        a.append("^" + _sc_key("g") + "::")
         a.append("    AntiAFK := !AntiAFK")
         a.append("    if (AntiAFK)")
         a.append("        LastAntiAFK := A_TickCount")
         a.append("return")
 
     if toggles.get("manual_aim_block", True):
-        for k in ("q", "w", "e", "r", "d", "f"):
-            a.append("*" + k + "::")
+        # Manual ability/summoner keys. Pressing any of them must always reach
+        # the game even while a combo trigger is held: it pauses the combo
+        # (ManualAimActive) and releases the LMB toggle-hold so the cast lands
+        # while the champion stands still.
+        for k in ("q", "w", "e", "r", "d", "f", "c"):
+            a.append("*" + _sc_key(k) + "::")
             a.append("    ManualAimActive := true")
-            a.append("    SendInput {" + k + " down}")
+            if toggles.get("release_toggle_on_keys", False):
+                # Casting manually releases the toggle-hold movement only when
+                # the user asked for it (checkbox on) - otherwise the champion
+                # keeps running while you cast.
+                a.append("    ReleaseMoveToggle()")
+            a.append("    SendInput {" + _sc_key(k) + " down}")
             a.append("return")
-        for k in ("q", "w", "e", "r", "d", "f"):
-            a.append("*" + k + " Up::")
-            a.append("    SendInput {" + k + " up}")
-            cond = " && ".join('!GetKeyState("%s", "P")' % k for k in ("q", "w", "e", "r", "d", "f"))
+        for k in ("q", "w", "e", "r", "d", "f", "c"):
+            a.append("*" + _sc_key(k) + " Up::")
+            a.append("    SendInput {" + _sc_key(k) + " up}")
+            cond = " && ".join('!GetKeyState("%s", "P")' % _sc_key(k) for k in ("q", "w", "e", "r", "d", "f", "c"))
             a.append("    if (" + cond + ") {")
             a.append("        ManualAimActive := false")
             a.append("    }")
             a.append("return")
 
+    if toggles.get("mouse_toggle_hold", False):
+        # ORDER SENSITIVE: these ~* stacked labels must stay AFTER the ^g
+        # anti-AFK hotkey above - in AHK v1 the last matching definition wins
+        # for a given chord, and reordering would make Ctrl+G fire this
+        # release instead of toggling AFK. Same reasoning as ~*b vs the
+        # autobuy ~b (a different #IfWinActive context): the plain key keeps
+        # its own handler, this stack only covers the keys nobody intercepts.
+        #
+        # B (recall), V (ping), A (attack-move) ALWAYS release the toggle-hold:
+        # pressing any of them stands the champion still no matter what.
+        for k in ("b", "v", "a"):
+            a.append("~*" + _sc_key(k) + "::")
+            a.append("    ReleaseMoveToggle()")
+            a.append("return")
+            a.append("")
+        if toggles.get("release_toggle_on_keys", False):
+            # Every other action key (1-7 items/pots, G vision, and when
+            # manual-aim interception is off the ability/summoner keys) releases
+            # the toggle-hold only when this checkbox is on. Pass-through ("~")
+            # so the key still reaches the game; stacked labels share one body.
+            release_keys = ["1", "2", "3", "4", "5", "6", "7", "g"]
+            if not toggles.get("manual_aim_block", True):
+                release_keys += ["q", "w", "e", "r", "d", "f", "c"]
+            for k in release_keys:
+                a.append("~*" + _sc_key(k) + "::")
+            a.append("    ReleaseMoveToggle()")
+            a.append("return")
+            a.append("")
+
     guards = _guarded_triggers(toggles, combos, minimap, afk_k)
     guarded_bases = {b for _, b in guards}
+    pvp_tag = None
+    if toggles.get("rmb_hold_pvp", True):
+        for c in combos:
+            if c["tag"].endswith("_pvp"):
+                pvp_tag = c["tag"]
+                break
     for c in combos:
-        a.append(_hotkey_block(c["trigger"], "P_" + c["tag"],
-                               "Last_" + c["tag"], "Step_" + c["tag"],
-                               guarded=_base_key(c["trigger"]) in guarded_bases,
-                               move_when_pressed=c.get("move_when_pressed", False)))
+        trigs = c.get("triggers") or [c["trigger"]]
+        for trig in trigs:
+            siblings = [t for t in trigs if t != trig]
+            a.append(_hotkey_block(trig, "P_" + c["tag"],
+                                   "Last_" + c["tag"], "Step_" + c["tag"],
+                                   guarded=_base_key(trig) in guarded_bases,
+                                   move_when_pressed=c.get("move_when_pressed", False),
+                                   rmb_guard=pvp_tag is not None and c["tag"] == pvp_tag,
+                                   siblings=siblings,
+                                   toggle_mode=c.get("toggle", False)))
 
     mm_iter = [k for k in minimap if k != "_order"] if isinstance(minimap, dict) else []
     for mk in mm_iter:
@@ -557,7 +863,7 @@ def _gen_hotkeys(a, target_exe, toggles, combos, minimap, afk_k):
         x = int(entry.get("x", 0))
         y = int(entry.get("y", 0))
         if trig and x >= 0 and y >= 0:
-            a.append("*" + trig + "::")
+            a.append("*" + _sc_key(trig) + "::")
             if _base_key(trig) in guarded_bases:
                 a.append("    " + _carry_set(trig, True))
             a.append('    if (!WinActive("ahk_exe ' + target_exe + '"))')
@@ -570,7 +876,7 @@ def _gen_hotkeys(a, target_exe, toggles, combos, minimap, afk_k):
             a.append("")
 
     if afk_k:
-        a.append("*" + afk_k + "::")
+        a.append("*" + _sc_key(afk_k) + "::")
         if _base_key(afk_k) in guarded_bases:
             a.append("    " + _carry_set(afk_k, True))
         a.append("    P_afk_Active := !P_afk_Active")
@@ -608,6 +914,11 @@ def _gen_hotkeys(a, target_exe, toggles, combos, minimap, afk_k):
 def _gen_master_spammer(a, target_exe, toggles, combos):
     """MasterSpammer timer: guards, anti-afk, space spam, combo step logic."""
     a.append("MasterSpammer:")
+    # Critical: a combo tick must run atomically. Without it a manual key press
+    # (flash/ignite) could preempt the tick AFTER it passed the ManualAimActive
+    # check, letting a combo step land right behind the manual key - the race
+    # that made summoners feel eaten while a combo trigger was held.
+    a.append("    Critical")
     cond_list = ["LMB_Held", "StopActive", "SpaceActive"]
     for c in combos:
         cond_list.append("P_" + c["tag"] + "_Held")
@@ -630,10 +941,29 @@ def _gen_master_spammer(a, target_exe, toggles, combos):
     a.append("        LMB_Held := false")
     a.append("        CheckMovement()")
     a.append("    }")
+    # The PVP combo can be driven by the right-button hold instead of its own
+    # hotkey - in that case its physical trigger key is never down, so the
+    # release-by-physical-key cleanup below must not kill it. Guard only that
+    # one combo; every other combo still clears the moment its key lifts.
+    pvp_tag = None
+    if toggles.get("rmb_hold_pvp", True):
+        for c in combos:
+            if c["tag"].endswith("_pvp"):
+                pvp_tag = c["tag"]
+                break
     for c in combos:
-        trig = (c.get("trigger") or "").strip()
-        if _is_plain_key(trig):
-            a.append('    if (P_' + c["tag"] + '_Held && !GetKeyState("' + trig + '", "P")) {')
+        # Toggle combos keep running until their trigger is pressed again:
+        # the key being physically up must NOT clear them.
+        if c.get("toggle"):
+            continue
+        trigs = [t for t in (c.get("triggers") or [c.get("trigger", "")])
+                 if _is_plain_key(t)]
+        if trigs:
+            cond = 'P_' + c["tag"] + '_Held' + "".join(
+                ' && !GetKeyState("%s", "P")' % _sc_key(t) for t in trigs)
+            if pvp_tag and c["tag"] == pvp_tag:
+                cond += " && !RMB_PvpActive"
+            a.append("    if (" + cond + ") {")
             a.append("        P_" + c["tag"] + "_Held := false")
             a.append("        Step_" + c["tag"] + " := 0")
             if c.get("move_when_pressed", False):
@@ -642,7 +972,7 @@ def _gen_master_spammer(a, target_exe, toggles, combos):
             a.append("    }")
     stop_key = (toggles.get("stop_key") or "").strip()
     if _is_plain_key(stop_key):
-        a.append('    if (StopActive && !GetKeyState("' + stop_key + '", "P")) {')
+        a.append('    if (StopActive && !GetKeyState("' + _sc_key(stop_key) + '", "P")) {')
         a.append("        StopActive := false")
         a.append("        CheckMovement()")
         a.append("    }")
@@ -849,7 +1179,7 @@ def _gen_afk_farm(a, target_exe, config, afk, afk_k):
     a.append("        P_afk_LastCombo := currentTime")
     for idx, (key, delay) in enumerate(steps):
         a.append("        if (P_afk_Step == " + str(idx) + ") {")
-        a.append("            SendEvent {Blind}" + key)
+        a.append("            SendEvent {Blind}" + _send_key(key))
         a.append("            P_afk_NextDelay := " + str(delay))
         a.append("        }")
     a.append("        P_afk_Step := Mod(P_afk_Step + 1, " + str(len(steps) if steps else 1) + ")")
@@ -870,28 +1200,56 @@ def _gen_helper_funcs(a, combos, afk_k, target_exe, toggles):
     a.append("        SendEvent {RButton up}")
     a.append("}")
     a.append("")
+    a.append("ReleaseMoveToggle() {")
+    a.append("    global MoveToggle")
+    # Pressing any action key (ability, summoner, recall, item) cancels the LMB
+    # toggle-hold so the cast lands while the champion stands still. Only the
+    # toggle is dropped - combo move-hold (MoveRefs) and LMB press-hold keep
+    # their own movement.
+    a.append("    if (MoveToggle) {")
+    a.append("        MoveToggle := false")
+    a.append("        CheckMovement()")
+    a.append("    }")
+    a.append("}")
+    a.append("")
+    rmb_pvp = bool(toggles.get("rmb_hold_pvp", True) and
+                    any(c["tag"].endswith("_pvp") for c in combos))
     a.append("ResetState(killAfk := true) {")
     g = ["LMB_Held", "StopActive", "SpaceActive", "ManualAimActive", "NeedCleanup",
-         "MoveToggle", "MoveRefs"]
+         "MoveToggle", "MoveRefs", "LMB_Pass", "RMB_Held", "RMB_PressTime",
+         "RMB_PvpActive"]
+    if toggles.get("keep_movement_on_death"):
+        g.append("KeepMovePending")
     for c in combos:
         g.append("P_" + c["tag"] + "_Held")
     if afk_k:
         g.append("P_afk_Active")
     a.append("    global " + ", ".join(g))
     held = ["LMB_Held", "StopActive", "SpaceActive", "ManualAimActive",
-            "MoveToggle", "MoveRefs > 0"]
+            "MoveToggle", "MoveRefs > 0", "RMB_PvpActive"]
     for c in combos:
         held.append("P_" + c["tag"] + "_Held")
     # Nothing was down -> nothing to release. Without this test every single
     # Alt-Tab back into the game would fire a burst of synthetic button-ups,
     # which BlueStacks reads as real clicks.
     a.append("    held := (" + " || ".join(held) + ")")
+    if toggles.get("keep_movement_on_death"):
+        # Remember the LMB toggle-hold before dropping it, so FocusWatch can
+        # re-engage it the moment the game is back in front - respawn restores
+        # the champion straight into its move-hold instead of standing still.
+        a.append("    KeepMovePending := KeepMovePending || MoveToggle")
     a.append("    StopActive := false")
     a.append("    LMB_Held := false")
     a.append("    SpaceActive := false")
     a.append("    ManualAimActive := false")
     a.append("    MoveToggle := false")
     a.append("    MoveRefs := 0")
+    a.append("    LMB_Pass := false")
+    a.append("    RMB_Held := false")
+    a.append("    RMB_PressTime := 0")
+    a.append("    RMB_PvpActive := false")
+    if rmb_pvp:
+        a.append("    SetTimer, RMBHoldCheck, Off")
     for c in combos:
         a.append("    P_" + c["tag"] + "_Held := false")
     if afk_k:
@@ -904,22 +1262,27 @@ def _gen_helper_funcs(a, combos, afk_k, target_exe, toggles):
     a.append("        return")
     # Releasing into a window that is already gone lands nowhere, so remember
     # the debt and pay it in FocusWatch the moment the game is back in front.
-    a.append('    if (WinActive("ahk_exe ' + target_exe + '"))')
+    a.append('    if (WinActive("ahk_exe ' + target_exe + '")) {')
     a.append("        ReleaseAll()")
-    a.append("    else")
+    if toggles.get("keep_movement_on_death"):
+        # Game is in front: restore the move-hold right away. The deferred path
+        # (NeedCleanup) restores from FocusWatch after its own ReleaseAll, so
+        # the champion walks again the moment the respawn window is focused.
+        a.append(_KEEP_MOVE_RESTORE)
+    a.append("    } else")
     a.append("        NeedCleanup := true")
     a.append("}")
     a.append("")
     a.append("ReleaseAll() {")
     a.append("    SendEvent {Blind}{LButton up}{RButton up}")
     if toggles.get("manual_aim_block", True):
-        ups = "".join("{%s up}" % k for k in ("q", "w", "e", "r", "d", "f"))
+        ups = "".join("{%s up}" % _sc_key(k) for k in ("q", "w", "e", "r", "d", "f", "c", "v", "a"))
         a.append("    SendEvent {Blind}" + ups)
     if toggles.get("space_spam", True):
         a.append("    SendEvent {Blind}{Space up}")
     stop_key = (toggles.get("stop_key") or "").strip()
     if _is_plain_key(stop_key):
-        a.append("    SendEvent {Blind}{" + stop_key + " up}")
+        a.append("    SendEvent {Blind}{" + _sc_key(stop_key) + " up}")
     # Only force a modifier up when the foot/hand is not actually on it -
     # blindly releasing a physically held Shift makes the next keystroke wrong.
     a.append('    Loop, Parse, % "Shift,Ctrl,Alt,LWin,RWin", `,')
@@ -940,7 +1303,7 @@ def generate_script(config):
     minimap = config.get("minimap", {})
 
     a = []
-    _gen_header(a, target_exe, combos, afk)
+    _gen_header(a, target_exe, combos, afk, toggles)
     _gen_autobuy(a, target_exe, config)
     _gen_watchdog(a)
     guard_bases = [b for _, b in _guarded_triggers(toggles, combos, minimap, afk_k)]
@@ -975,10 +1338,10 @@ def validate_config(config):
         if not combos:
             warnings.append("General mode: no combos configured")
         for i, c in enumerate(combos):
-            trig = c.get("trigger", "")
-            _check(trig, f"general combo #{i + 1}")
-            if trig and not c.get("keys", "").strip():
-                warnings.append(f"Combo #{i + 1} trigger '{trig}' has no keys")
+            for trig in _split_triggers(c.get("trigger")):
+                _check(trig, f"general combo #{i + 1}")
+            if c.get("trigger", "").strip() and not c.get("keys", "").strip():
+                warnings.append(f"Combo #{i + 1} trigger '{c.get('trigger')}' has no keys")
     else:
         # Check champion mode
         entry = config.get("champions", {}).get(mode, {})
@@ -987,13 +1350,13 @@ def validate_config(config):
         else:
             has_any = False
             for slot in ("wave", "jungle", "pvp"):
-                trig = entry.get("trigger_" + slot, "")
+                trigs = _split_triggers(entry.get("trigger_" + slot))
                 keys = entry.get("keys_" + slot, "")
-                if trig:
+                for trig in trigs:
                     has_any = True
                     _check(trig, f"champion {slot}")
-                    if not keys.strip():
-                        warnings.append(f"{slot}: trigger '{trig}' has no keys")
+                if trigs and not keys.strip():
+                    warnings.append(f"{slot}: trigger '{entry.get('trigger_' + slot)}' has no keys")
             if not has_any:
                 warnings.append(f"Mode '{mode}': no triggers configured for wave/jungle/pvp")
 
