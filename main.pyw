@@ -11,7 +11,7 @@ import shutil
 from datetime import datetime
 from tkinterdnd2 import TkinterDnD
 
-VERSION = "0.0.7"
+VERSION = "0.2.1"
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 PARENT = os.path.dirname(BASE)

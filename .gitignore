@@ -15,6 +15,9 @@ crash.log
 *.bak
 .locks/
 .pytest_cache/
+.coverage
+htmlcov/
+
 
 # OS droppings
 .DS_Store

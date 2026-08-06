@@ -1,5 +1,8 @@
 # Changelog
 
+## v0.2.1 (2026-08-07)
+- Engine unit tests: config-load (valid/missing/corrupt) for all 4 engines, ProcessRunner start/stop/restart lifecycle, hwnd acquisition, region grouping, template scaling.
+
 ## v0.2.0 (2026-08-05)
 
 ### Features
