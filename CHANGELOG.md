@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.3.13 (2026-08-07)
+- Fix: hotkey conflict scan canonicalizes modifier order — `_canon_hotkey` now normalizes modifiers via `_canon_mods` (sorted tokens; `<^`/`>^` L/R variants kept distinct), so `^!x` vs `!^x` (one chord to AutoHotkey, exit 2 "Duplicate hotkey") is caught instead of silently passing. Generated script with that collision previously refused to start at all.
+- Tests: 3 new conflict-scan regression tests (modifier-order twins, triple variants, L/R distinctness). Suite 222 → 225.
+
 ## v0.3.12 (2026-08-07)
 - Fix: engine configs type-checked on load — `engine_config.validate_engine_config` rejects wrong-typed values (`window_title: 12345`, `poll_interval_sec: "abc"`, `buttons: "notalist"`) with the same FATAL/`SystemExit(1)` path as corrupt JSON, instead of loading silently and crashing mid-loop (`time.sleep("abc")` TypeError, `find_window(12345)`). Wired into `poller_engine.load_config` (accept/surrender/autocontinue) and `deathwatch.load_config`; deathwatch gained module-level `CONFIG_PATH` for uniformity.
 - Tests: 14 new wrong-type regression tests (all 4 engines × window_title/poll_interval/templates + valid-types pass + CONFIG_PATH). Suite 206 → 222.
