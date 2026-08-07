@@ -66,9 +66,63 @@ def test_done_event_lines_update_last_line():
     finally:
         pr.stop()
 
-    pr.q.put(("line", "hello-world"))
+    pr.q.put(("line", pr._gen, "hello-world"))
     pr.poll_log()
     assert last.value == "hello-world"
+
+
+def test_stale_generation_line_ignored():
+    """A line from an older pump must never overwrite the current UI line
+    (T-085: stale events carry a generation and poll_log discards them)."""
+    status, last, check = FakeVar(), FakeVar(), FakeVar()
+    pr = process_runner.ProcessRunner("_stub_engine.py", status, last, check)
+    pr.start([])
+    gen = pr._gen
+    try:
+        assert pr.is_running()
+    finally:
+        pr.stop()
+
+    pr.last_line_var.value = "current"
+    pr.q.put(("line", gen - 1, "stale line from old process"))
+    pr.poll_log()
+    assert last.value == "current"  # untouched by the stale event
+
+
+def test_stale_generation_done_ignored():
+    """A done marker from an older pump must not stop the current process
+    (T-085 regression)."""
+    status, last, check = FakeVar(), FakeVar(), FakeVar()
+    pr = process_runner.ProcessRunner("_stub_engine.py", status, last, check)
+    pr.start([])
+    gen = pr._gen
+    try:
+        assert pr.is_running()
+        pr.q.put(("done", gen - 1))
+        pr.poll_log()
+        assert pr.is_running()          # still running
+        assert status.value == "Running"
+    finally:
+        pr.stop()
+
+
+def test_spawn_failure_leaves_coherent_stopped_state(monkeypatch):
+    """Popen failure: self.proc stays None, status shows a diagnostic, the
+    checkbox cannot remain Running, and no stale generation is left behind."""
+    status, last, check = FakeVar(), FakeVar(), FakeVar()
+    pr = process_runner.ProcessRunner("_stub_engine.py", status, last, check)
+
+    def boom(*a, **k):
+        raise OSError("python not found")
+
+    monkeypatch.setattr(process_runner.subprocess, "Popen", boom)
+    ok = pr.start([])
+
+    assert ok is False
+    assert pr.proc is None
+    assert pr.is_running() is False
+    assert status.value.startswith("Error:")
+    assert check.value is False
 
 
 def test_real_child_death_triggers_done():

@@ -169,7 +169,9 @@ def test_stop_posts_quit_to_alive_thread(monkeypatch):
     assert kb._thread is None
 
 
-def test_stop_skips_dead_thread(monkeypatch):
+def test_stop_always_clears_thread_reference(monkeypatch):
+    """stop() must leave _thread=None even when the pump thread is already
+    dead - a stale reference would poison every future start (T-089)."""
     monkeypatch.setattr(kb, "_hook_handle", None)
     fake = type("FakeThread", (), {})()
     fake.ident = 0xBB
@@ -180,4 +182,39 @@ def test_stop_skips_dead_thread(monkeypatch):
     monkeypatch.setattr(kb, "_thread", fake)
     kb.stop()
     assert posted == []
-    assert kb._thread is fake  # dead thread: left alone, not nulled
+    assert kb._thread is None
+
+
+def test_start_restarts_after_dead_thread(monkeypatch):
+    """start() is a no-op ONLY for a live thread - a dead thread (e.g. a
+    failed hook install) is cleared and a fresh pump starts (T-089)."""
+    dead = type("FakeThread", (), {})()
+    dead.is_alive = lambda: False
+    monkeypatch.setattr(kb, "_thread", dead)
+    monkeypatch.setattr(kb, "_hook_handle", None)
+    monkeypatch.setattr(kb, "_blocked_vk", set())
+
+    started = []
+    monkeypatch.setattr(kb, "_pump", lambda: None)
+    monkeypatch.setattr(threading.Thread, "start",
+                        lambda self: started.append(self._target))
+
+    kb.start(["F13"])
+    assert len(started) == 1  # a fresh thread was created
+
+
+def test_restart_clears_block_state(monkeypatch):
+    """Transient block/release state must not survive a stop/restart cycle:
+    a stale _block_until or pending release tracking would swallow the next
+    session's keys (T-089)."""
+    monkeypatch.setattr(kb, "_hook_handle", None)
+    monkeypatch.setattr(kb, "_thread", None)
+    monkeypatch.setattr(kb, "_block_until", time.time() + 999)
+    monkeypatch.setattr(kb, "_block_until_released_vk", {0x7C})
+    monkeypatch.setattr(kb, "_blocked_vk", set())
+    monkeypatch.setattr(kb, "_pump", lambda: None)
+    monkeypatch.setattr(threading.Thread, "start", lambda self: None)
+
+    kb.start(["F13"])
+    assert kb._block_until == 0.0
+    assert kb._block_until_released_vk == set()

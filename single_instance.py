@@ -1,4 +1,5 @@
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -143,6 +144,38 @@ def _pid_file(name):
     return os.path.join(LOCK_DIR, f"{name}.pid")
 
 
+# Map of single-instance name -> the script it runs. Identity proof for a
+# holder pid: its command line must reference this script, distinguishing our
+# engine from any unrelated process (e.g. python.exe) that reused the pid.
+_NAME_TO_SCRIPT = {
+    "accept": "accept.py",
+    "surrender": "surrender.py",
+    "autocontinue": "autocontinue.py",
+    "deathwatch": "deathwatch.py",
+    "wr_assistant": "main.pyw",
+}
+
+
+def _pid_runs_our_script(pid, name):
+    """Command-line identity probe: True only when `pid`'s process command
+    line carries the script this single-instance name launches. Windows PIDs
+    get reused, so an alive PID behind a stale pid file is never proof of
+    identity - this probe is what distinguishes ours from theirs."""
+    script = _NAME_TO_SCRIPT.get(name)
+    if script is None:
+        return False
+    try:
+        out = subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             "Get-CimInstance Win32_Process -Filter \"ProcessId = %d\" | "
+             "Select-Object -ExpandProperty CommandLine" % pid],
+            capture_output=True, timeout=10,
+            creationflags=0x08000000).stdout.decode("utf-8", errors="replace")
+    except Exception:
+        return False
+    return script.lower() in out.lower()
+
+
 def _write_pid(name):
     try:
         os.makedirs(LOCK_DIR, exist_ok=True)
@@ -154,13 +187,21 @@ def _write_pid(name):
 
 def _kill_previous_holder(name, timeout_sec=5):
     """Best-effort: terminate whatever process wrote the pid file for `name`
-    and wait for it to actually exit (so the mutex it holds is released)."""
+    and wait for it to actually exit (so the mutex it holds is released).
+
+    The pid file is only a hint - a live PID behind it is killed only when a
+    command-line probe proves it runs OUR script. A stale reused PID pointing
+    at an unrelated process is never terminated (T-088)."""
     path = _pid_file(name)
     if not os.path.isfile(path):
         return
     try:
         pid = int(open(path).read().strip())
     except (ValueError, OSError):
+        return
+    if not _pid_runs_our_script(pid, name):
+        print(f"single_instance: refusing to kill pid {pid} for '{name}': "
+              f"process identity not proven", file=sys.stderr)
         return
     try:
         handle = win32api.OpenProcess(win32con.PROCESS_TERMINATE | win32con.SYNCHRONIZE, False, pid)

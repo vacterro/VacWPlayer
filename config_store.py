@@ -58,18 +58,26 @@ def restore_backup(path):
 
 
 def validate_config(data):
-    """Light structural check. Returns list of problem strings ([] = fine).
+    """Total structural check. Returns list of problem strings ([] = fine).
 
-    Not a full schema: config.json carries user-added minimap slots and
-    champion entries, so a strict schema would reject valid files. This only
-    catches top-level shape corruption worth surfacing to the user.
+    Never raises: malformed-but-valid JSON must be rejected or ignored, never
+    crash startup (T-086). Verifies the exact top-level section shapes the
+    merge path expects - wrong shapes must be caught BEFORE any migration or
+    merge, so a hostile section is never merged into the live config.
     """
     problems = []
     if not isinstance(data, dict):
         return ["root is not an object"]
-    for key in ("toggles", "combos", "champions", "minimap", "afkfarm"):
-        if key in data and not isinstance(data[key], (dict, list)):
-            problems.append("'%s' is not an object" % key)
+    _SECTION_SHAPES = {
+        "toggles": "object", "combos": "list", "champions": "object",
+        "minimap": "object", "afkfarm": "object",
+    }
+    for key, shape in _SECTION_SHAPES.items():
+        if key in data:
+            ok = isinstance(data[key], dict) if shape == "object" \
+                else isinstance(data[key], list)
+            if not ok:
+                problems.append("'%s' is not %s" % (key, shape))
     for key in ("mode", "lang"):
         if key in data and not isinstance(data[key], str):
             problems.append("'%s' is not a string" % key)
@@ -112,15 +120,85 @@ def split_volatile(config):
     return stable, local
 
 
+def _clean_window(raw):
+    """Whitelist the only two window fields the app reads, with exact types:
+    active_tab int (bool is int in Python - reject it), position str. Anything
+    else is dropped so bad local state is ignored, never merged."""
+    clean = {}
+    if not isinstance(raw, dict):
+        return clean
+    at = raw.get("active_tab")
+    if isinstance(at, int) and not isinstance(at, bool):
+        clean["active_tab"] = at
+    pos = raw.get("position")
+    if isinstance(pos, str):
+        clean["position"] = pos
+    return clean
+
+
 def merge_volatile(config, local):
-    """Overlay the gitignored runtime state back onto a loaded config."""
+    """Overlay the gitignored runtime state back onto a loaded config.
+
+    Total: hostile local shapes are ignored, never raised on (T-086) - the
+    caller validates first, this stays defensive as the second gate.
+    """
     if not isinstance(local, dict):
         return config
-    if isinstance(local.get("window"), dict):
-        config.setdefault("window", {}).update(local["window"])
-    if isinstance(local.get("champions"), dict):
-        for slug, entry in local["champions"].items():
-            if isinstance(entry, dict) and isinstance(
-                    config.get("champions", {}).get(slug), dict):
-                config["champions"][slug].update(entry)
+    window = _clean_window(local.get("window"))
+    if window:
+        current = config.get("window")
+        if isinstance(current, dict):
+            current.update(window)
+        else:
+            config["window"] = window
+    champs = local.get("champions")
+    if isinstance(champs, dict):
+        cfg_champs = config.get("champions")
+        if not isinstance(cfg_champs, dict):
+            return config
+        for slug, entry in champs.items():
+            if not isinstance(entry, dict):
+                continue
+            target = cfg_champs.get(slug)
+            if not isinstance(target, dict):
+                continue
+            for k, v in entry.items():
+                if _is_volatile(k) and isinstance(v, bool):
+                    target[k] = v
     return config
+
+
+def validate_local_config(local):
+    """Total structural check of config.local.json. Returns problem strings.
+
+    Root must be a dict; window must be a dict with int (not bool) active_tab
+    and string position; champions must be a dict of dicts whose volatile
+    flags are booleans. Bad local state is ignored/recovered, never a startup
+    crash (T-086)."""
+    problems = []
+    if not isinstance(local, dict):
+        return ["local root is not an object"]
+    if "window" in local:
+        w = local["window"]
+        if not isinstance(w, dict):
+            problems.append("local 'window' is not an object")
+        else:
+            if "active_tab" in w and (not isinstance(w["active_tab"], int)
+                                      or isinstance(w["active_tab"], bool)):
+                problems.append("local window.active_tab is not an int")
+            if "position" in w and not isinstance(w["position"], str):
+                problems.append("local window.position is not a string")
+    if "champions" in local:
+        c = local["champions"]
+        if not isinstance(c, dict):
+            problems.append("local 'champions' is not an object")
+        else:
+            for slug, entry in c.items():
+                if not isinstance(entry, dict):
+                    problems.append("local champions.%s is not an object" % slug)
+                    continue
+                for k, v in entry.items():
+                    if _is_volatile(k) and not isinstance(v, bool):
+                        problems.append(
+                            "local champions.%s.%s is not a bool" % (slug, k))
+    return problems

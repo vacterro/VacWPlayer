@@ -2,22 +2,13 @@ import copy
 import tkinter as tk
 from tkinter import ttk, messagebox
 import os, sys
-import json
 from theme import VintageSunken, VintageButton, VintageLabel, TOKENS, FONT_MAIN, FONT_SM
 from vintage_widgets import VintageWindowPicker, grid_row
 from process_runner import ProcessRunner
 from locales import Locale
+from tabs.tab_config import load_json, save_json
 
 BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-def load_json(path):
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-def save_json(path, data):
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
-        f.write("\n")
 
 class AutoContinueTab(tk.Frame):
     CONFIG_NAME = "autocontinue_config.json"
@@ -35,11 +26,11 @@ class AutoContinueTab(tk.Frame):
         super().__init__(parent, bg=TOKENS["background"])
         self.cfg_path = os.path.join(BASE, self.CONFIG_NAME)
         cfg = load_json(self.cfg_path)
-        self.buttons = [dict(b) for b in cfg["buttons"]]
+        self.buttons = [dict(b) for b in cfg.get("buttons", [])]
         # Keep a pristine copy so Remove is always reversible via Reset.
         # Deep copy: nested region lists must never be shared with the live
         # buttons list, so a future in-place edit can't leak into the defaults.
-        self._default_buttons = [copy.deepcopy(b) for b in cfg["buttons"]]
+        self._default_buttons = [copy.deepcopy(b) for b in self.buttons]
 
 
         form = tk.Frame(self, bg=TOKENS["background"])
@@ -70,15 +61,15 @@ class AutoContinueTab(tk.Frame):
         config_frame = tk.Frame(self, bg=TOKENS["background"])
         config_frame.pack(fill="x", padx=4)
 
-        self.window_picker = VintageWindowPicker(config_frame, Locale.tr("window_title_lbl"), cfg["window_title"], label_key="window_title_lbl")
+        self.window_picker = VintageWindowPicker(config_frame, Locale.tr("window_title_lbl"), cfg.get("window_title", ""), label_key="window_title_lbl")
         self.window_picker.pack(fill="x", pady=1)
         self._locale_widgets.append(("picker", self.window_picker, "window_title_lbl"))
 
         params_frame = tk.Frame(config_frame, bg=TOKENS["background"])
         params_frame.pack(fill="x", pady=1)
-        self.poll_interval = tk.StringVar(value=cfg["poll_interval_sec"])
+        self.poll_interval = tk.StringVar(value=cfg.get("poll_interval_sec", 0.6))
         self.poll_interval.trace_add("write", self._auto_save)
-        self.click_cooldown = tk.StringVar(value=cfg["click_cooldown_sec"])
+        self.click_cooldown = tk.StringVar(value=cfg.get("click_cooldown_sec", 2.5))
         self.click_cooldown.trace_add("write", self._auto_save)
         self._locale_widgets.extend(grid_row(params_frame, 0, ("poll_interval_s", self.poll_interval, 6), ("click_cooldown_s", self.click_cooldown, 6), pad=(6, 2), pady=1))
 
@@ -142,15 +133,7 @@ class AutoContinueTab(tk.Frame):
         self.tree.heading("threshold", text=Locale.tr("match_lbl"))
 
     def reset_defaults(self):
-        import json
-        try:
-            with open(self.cfg_path) as f:
-                cfg = json.load(f)
-        except FileNotFoundError:
-            cfg = {}
-        except (json.JSONDecodeError, OSError) as e:
-            messagebox.showwarning("Config Error", f"Could not load config: {e}\nUsing defaults.")
-            cfg = {}
+        cfg = load_json(self.cfg_path)
         self.poll_interval.set(str(cfg.get("poll_interval_sec", 0.6)))
         self.click_cooldown.set(str(cfg.get("click_cooldown_sec", 2.5)))
         self.window_picker.title_var.set(cfg.get("window_title", ""))

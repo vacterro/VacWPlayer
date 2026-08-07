@@ -1,21 +1,12 @@
 import tkinter as tk
 import os, sys
-import json
 from tkinter import messagebox
 from theme import VintageButton, VintageLabel, VintageEntry, TOKENS, FONT_SM
 from tabs.death_tab import ToolTip
 from locales import Locale
+from tabs.tab_config import load_json, save_json
 
 BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-def load_json(path):
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-def save_json(path, data):
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
-        f.write("\n")
 
 class BuyTab(tk.Frame):
     CONFIG_NAME = "deathwatch_config.json"
@@ -49,7 +40,7 @@ class BuyTab(tk.Frame):
         self._lbl_qkey = VintageLabel(form, text=Locale.tr("quickbuy_key_lbl"), font=FONT_SM)
         self._lbl_qkey.grid(row=r, column=0, sticky="w", pady=1)
         self._locale_widgets.append(("lbl", self._lbl_qkey, "quickbuy_key_lbl"))
-        self.quickbuy_key = tk.StringVar(value=cfg["quickbuy_key"])
+        self.quickbuy_key = tk.StringVar(value=cfg.get("quickbuy_key", "Z"))
         self.quickbuy_key.trace_add("write", self._auto_save)
         qk_entry = VintageEntry(form, textvariable=self.quickbuy_key, width=4)
         qk_entry.grid(row=r, column=1, sticky="w")
@@ -58,14 +49,14 @@ class BuyTab(tk.Frame):
         self._lbl_presses = VintageLabel(form, text=Locale.tr("presses_lbl"), font=FONT_SM)
         self._lbl_presses.grid(row=r, column=2, sticky="w", padx=(6, 1))
         self._locale_widgets.append(("lbl", self._lbl_presses, "presses_lbl"))
-        self.quickbuy_presses = tk.StringVar(value=cfg["quickbuy_presses"])
+        self.quickbuy_presses = tk.StringVar(value=cfg.get("quickbuy_presses", 5))
         self.quickbuy_presses.trace_add("write", self._auto_save)
         VintageEntry(form, textvariable=self.quickbuy_presses, width=4).grid(row=r, column=3, sticky="w")
 
         self._lbl_wms = VintageLabel(form, text=Locale.tr("window_ms_lbl"), font=FONT_SM)
         self._lbl_wms.grid(row=r, column=4, sticky="w", padx=(6, 1))
         self._locale_widgets.append(("lbl", self._lbl_wms, "window_ms_lbl"))
-        self.quickbuy_window_ms = tk.StringVar(value=cfg["quickbuy_window_ms"])
+        self.quickbuy_window_ms = tk.StringVar(value=cfg.get("quickbuy_window_ms", 10.0))
         self.quickbuy_window_ms.trace_add("write", self._auto_save)
         qw_entry = VintageEntry(form, textvariable=self.quickbuy_window_ms, width=6)
         qw_entry.grid(row=r, column=5, sticky="w")

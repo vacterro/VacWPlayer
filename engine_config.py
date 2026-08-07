@@ -4,9 +4,16 @@ The four engines (accept, surrender, autocontinue, deathwatch) poll their
 config file's mtime each loop iteration and reload when it changes, and each
 must survive wrong-typed config values loudly instead of crashing mid-loop.
 Both checks are identical in all four, so they live here once.
+
+The validator is TOTAL: it gathers problems without ever throwing on a
+malformed value (no int()/float() on unchecked objects, bool is never numeric,
+numerics must be finite). The load path turns any problems into the existing
+FATAL SystemExit policy.
 """
 
+import math
 import os
+import re
 
 
 def mtime_changed(path, last_mtime):
@@ -23,53 +30,168 @@ def mtime_changed(path, last_mtime):
     return cur, cur != last_mtime
 
 
-# Expected JSON types per engine-config key. Absent keys are fine (optional);
-# present keys of the wrong type previously loaded silently and crashed the
-# engine mid-loop (time.sleep("abc") TypeError, find_window(12345)).
-_CFG_TYPES = {
-    "monitor_enabled": bool,
-    "auto_accept": bool,
-    "window_title": str,
-    "work_window_title": str,
-    "death_label_template": str,
-    "poll_interval_sec": (int, float),
-    "click_cooldown_sec": (int, float),
-    "shop_buffer_sec": (int, float),
-    "restore_buffer_sec": (int, float),
-    "match_threshold": (int, float),
-    "templates": list,
-    "buttons": list,
-    "death_label_region": list,
-    "timer_digits_region": list,
-}
+# Which single-instance/engine key map is real: blocked keys are F13-F24
+# (key_blocker.VK_MAP), and the quickbuy key is a single letter/digit or a
+# vkNN hex code (window_ctl.key_vk / the AHK autobuy block).
+_BLOCKED_KEY_NAMES = frozenset("F%d" % n for n in range(13, 25))
+_QUICKBUY_KEY_RE = re.compile(r"^vk[0-9a-fA-F]{1,2}$")
+
+
+def _is_number(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _is_finite(v):
+    return _is_number(v) and math.isfinite(v)
+
+
+def _valid_quickbuy_key(k):
+    if not isinstance(k, str) or not k:
+        return False
+    if len(k) == 1 and k.isalnum():
+        return True
+    return bool(_QUICKBUY_KEY_RE.fullmatch(k))
+
+
+def _collect_problems(cfg, name):
+    """Total semantic validation. Returns a list of problem strings; never
+    raises, whatever hostile values the JSON carries."""
+    problems = []
+    if not isinstance(cfg, dict):
+        return ["config root is not a JSON object"]
+
+    def _p(fmt, *args):
+        problems.append(("%s: " + fmt) % ((name,) + args))
+
+    def _check_bool(key):
+        if key in cfg and not isinstance(cfg[key], bool):
+            _p("key %r must be a boolean, got %r", key, cfg[key])
+
+    def _check_str(key):
+        if key in cfg and not isinstance(cfg[key], str):
+            _p("key %r must be a string, got %r", key, cfg[key])
+
+    def _check_number(key, minimum=None, positive=False):
+        if key not in cfg:
+            return
+        v = cfg[key]
+        if not _is_finite(v):
+            _p("key %r must be a finite number, got %r", key, v)
+            return
+        if minimum is not None and v < minimum:
+            _p("key %r must be >= %s, got %r", key, minimum, v)
+            return
+        if positive and v <= 0:
+            _p("key %r must be positive, got %r", key, v)
+
+    def _check_region(key):
+        if key not in cfg:
+            return
+        r = cfg[key]
+        if not isinstance(r, list) or len(r) != 4 or not all(_is_finite(x) for x in r):
+            _p("key %r must be a list of exactly 4 finite numbers, got %r", key, r)
+            return
+        x0, y0, x1, y1 = r
+        if x1 <= x0 or y1 <= y0:
+            _p("key %r region must satisfy x1>x0 and y1>y0, got %r", key, r)
+
+    def _check_template_list(key):
+        if key not in cfg:
+            return
+        items = cfg[key]
+        if not isinstance(items, list):
+            _p("key %r must be a list, got %r", key, items)
+            return
+        for i, item in enumerate(items):
+            if not isinstance(item, dict):
+                _p("key %r[%d] must be an object, got %r", key, i, item)
+                continue
+            if "name" in item and not isinstance(item["name"], str):
+                _p("key %r[%d].name must be a string, got %r", key, i, item["name"])
+            if "file" in item and not isinstance(item["file"], str):
+                _p("key %r[%d].file must be a string, got %r", key, i, item["file"])
+            if "template" in item and not isinstance(item["template"], str):
+                _p("key %r[%d].template must be a string, got %r", key, i, item["template"])
+            if "threshold" in item:
+                t = item["threshold"]
+                if not _is_finite(t) or not (0.0 <= t <= 1.0):
+                    _p("key %r[%d].threshold must be a finite number in 0..1, got %r",
+                       key, i, t)
+            if "region" in item:
+                r = item["region"]
+                if not isinstance(r, list) or len(r) != 4 or not all(_is_finite(x) for x in r):
+                    _p("key %r[%d].region must be a list of exactly 4 finite "
+                       "numbers, got %r", key, i, r)
+                else:
+                    x0, y0, x1, y1 = r
+                    if x1 <= x0 or y1 <= y0:
+                        _p("key %r[%d].region must satisfy x1>x0 and y1>y0, got %r",
+                           key, i, r)
+
+    # Shared surface across the poller engines and deathwatch.
+    _check_bool("monitor_enabled")
+    _check_str("window_title")
+    _check_str("work_window_title")
+    _check_str("death_label_template")
+    _check_str("digit_templates_dir")
+    _check_number("poll_interval_sec", positive=True)
+    _check_number("click_cooldown_sec", minimum=0)
+    _check_number("shop_buffer_sec", minimum=0)
+    _check_number("restore_buffer_sec", minimum=0)
+    _check_number("match_threshold", minimum=0)
+    _check_template_list("templates")
+    _check_template_list("buttons")
+
+    # Deathwatch-specific fields - every consumed value is validated.
+    _check_region("death_label_region")
+    _check_region("timer_digits_region")
+    _check_number("max_death_wait_sec", positive=True)
+    _check_number("pedal_block_sec", minimum=0)
+    _check_number("quickbuy_window_ms", minimum=0)
+    _check_number("buy_after_b_delay_sec", minimum=0)
+    _check_number("autobuy_then_mid_delay_sec", minimum=0)
+    for key in ("switch_to_work_window", "click_mid_on_resurrect",
+                "lock_window_resurrect", "autobuy_after_b", "autobuy_then_mid",
+                "controlsend_z"):
+        _check_bool(key)
+
+    if "quickbuy_presses" in cfg:
+        v = cfg["quickbuy_presses"]
+        if not isinstance(v, int) or isinstance(v, bool) or v < 1:
+            _p("key 'quickbuy_presses' must be a positive integer, got %r", v)
+
+    if "quickbuy_key" in cfg and not _valid_quickbuy_key(cfg["quickbuy_key"]):
+        _p("key 'quickbuy_key' must be a single letter/digit or vkNN hex, got %r",
+           cfg["quickbuy_key"])
+
+    if "blocked_keys" in cfg:
+        bk = cfg["blocked_keys"]
+        if not isinstance(bk, list):
+            _p("key 'blocked_keys' must be a list, got %r", bk)
+        else:
+            for k in bk:
+                if not (isinstance(k, str) and k.upper() in _BLOCKED_KEY_NAMES):
+                    _p("key 'blocked_keys' item %r is not a supported F13-F24 key", k)
+
+    if "match_threshold" in cfg and _is_finite(cfg["match_threshold"]):
+        t = cfg["match_threshold"]
+        if not (0.0 <= t <= 1.0):
+            _p("key 'match_threshold' must be in 0..1, got %r", t)
+
+    return problems
 
 
 def validate_engine_config(cfg, config_name):
-    """Type-check an engine config after json.load; exit on wrong types.
+    """Semantically validate an engine config after json.load; exit on any
+    problem.
 
-    Mirrors the corrupt-JSON FATAL path: a wrong-typed value is a config
+    Mirrors the corrupt-JSON FATAL path: a bad config value is a config
     error, not something the engine can keep running through, so it prints
-    the same FATAL line and raises SystemExit(1).
+    the same FATAL line and raises SystemExit(1). Total by construction -
+    the problem-gatherer above never throws.
     """
-    if not isinstance(cfg, dict):
-        print("FATAL: failed to load %s: config root is not a JSON object" % config_name)
+    problems = _collect_problems(cfg, config_name)
+    if problems:
+        print("FATAL: failed to load %s: %s" % (config_name, "; ".join(problems)))
         raise SystemExit(1)
-    for key, expected in _CFG_TYPES.items():
-        if key not in cfg:
-            continue
-        value = cfg[key]
-        if expected is bool:
-            ok = isinstance(value, bool)
-            why = "must be a boolean"
-        elif isinstance(expected, tuple):
-            # bool is a subclass of int in Python - reject it for numerics.
-            ok = not isinstance(value, bool) and isinstance(value, expected)
-            why = "must be numeric"
-        else:
-            ok = isinstance(value, expected)
-            why = "must be %s" % expected.__name__
-        if not ok:
-            print("FATAL: failed to load %s: key %r %s, got %r"
-                  % (config_name, key, why, value))
-            raise SystemExit(1)
     return cfg

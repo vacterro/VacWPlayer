@@ -1,11 +1,11 @@
 import tkinter as tk
 import os, sys
-import json
 from tkinter import messagebox
 from theme import VintageButton, TOKENS, FONT_MAIN
 from vintage_widgets import VintageWindowPicker, grid_row
 from process_runner import ProcessRunner
 from locales import Locale
+from tabs.tab_config import load_json, save_json
 
 
 class ToolTip:
@@ -105,15 +105,6 @@ class ToolTip:
 
 BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-def load_json(path):
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-def save_json(path, data):
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
-        f.write("\n")
-
 class DeathWatchTab(tk.Frame):
     """Death detection + actions on resurrect.
 
@@ -165,20 +156,20 @@ class DeathWatchTab(tk.Frame):
         config_frame = tk.Frame(self, bg=TOKENS["background"])
         config_frame.pack(fill="x", padx=4)
 
-        self.window_picker = VintageWindowPicker(config_frame, Locale.tr("window_title_lbl"), cfg["window_title"], label_key="window_title_lbl")
+        self.window_picker = VintageWindowPicker(config_frame, Locale.tr("window_title_lbl"), cfg.get("window_title", ""), label_key="window_title_lbl")
         self.window_picker.pack(fill="x", pady=0)
         self._locale_widgets.append(("picker", self.window_picker, "window_title_lbl"))
         ToolTip(self.window_picker, key="tt_death_window")
 
         params_frame1 = tk.Frame(config_frame, bg=TOKENS["background"])
         params_frame1.pack(fill="x", pady=0)
-        self.poll_interval = tk.StringVar(value=cfg["poll_interval_sec"])
+        self.poll_interval = tk.StringVar(value=cfg.get("poll_interval_sec", 0.4))
         self.poll_interval.trace_add("write", self._auto_save)
-        self.shop_buffer = tk.StringVar(value=cfg["shop_buffer_sec"])
+        self.shop_buffer = tk.StringVar(value=cfg.get("shop_buffer_sec", 0.0))
         self.shop_buffer.trace_add("write", self._auto_save)
-        self.restore_buffer = tk.StringVar(value=cfg["restore_buffer_sec"])
+        self.restore_buffer = tk.StringVar(value=cfg.get("restore_buffer_sec", 2.0))
         self.restore_buffer.trace_add("write", self._auto_save)
-        self.match_threshold = tk.StringVar(value=cfg["match_threshold"])
+        self.match_threshold = tk.StringVar(value=cfg.get("match_threshold", 0.75))
         self.match_threshold.trace_add("write", self._auto_save)
         self._locale_widgets.extend(grid_row(params_frame1, 0,
                  ("poll_interval_s", self.poll_interval, 6),
@@ -187,7 +178,7 @@ class DeathWatchTab(tk.Frame):
 
         params_frame2 = tk.Frame(config_frame, bg=TOKENS["background"])
         params_frame2.pack(fill="x", pady=0)
-        self.max_wait = tk.StringVar(value=cfg["max_death_wait_sec"])
+        self.max_wait = tk.StringVar(value=cfg.get("max_death_wait_sec", 90.0))
         self.max_wait.trace_add("write", self._auto_save)
         self.pedal_block_sec = tk.StringVar(value=cfg.get("pedal_block_sec", 0))
         self.pedal_block_sec.trace_add("write", self._auto_save)
@@ -323,10 +314,10 @@ class DeathWatchTab(tk.Frame):
             cfg["shop_buffer_sec"] = float(self.shop_buffer.get())
             cfg["restore_buffer_sec"] = float(self.restore_buffer.get())
             cfg["match_threshold"] = float(self.match_threshold.get())
-            cfg["death_label_region"] = self._static_cfg["death_label_region"]
-            cfg["timer_digits_region"] = self._static_cfg["timer_digits_region"]
-            cfg["death_label_template"] = self._static_cfg["death_label_template"]
-            cfg["digit_templates_dir"] = self._static_cfg["digit_templates_dir"]
+            cfg["death_label_region"] = self._static_cfg.get("death_label_region", [900, 118, 1165, 145])
+            cfg["timer_digits_region"] = self._static_cfg.get("timer_digits_region", [955, 143, 1035, 170])
+            cfg["death_label_template"] = self._static_cfg.get("death_label_template", "templates/death_label.png")
+            cfg["digit_templates_dir"] = self._static_cfg.get("digit_templates_dir", "templates/digits")
             cfg["max_death_wait_sec"] = float(self.max_wait.get())
             raw = self.blocked_keys.get()
             cfg["blocked_keys"] = [k.strip().upper() for k in raw.split(",") if k.strip()]

@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.3.15 (2026-08-07)
+- Fix: AHK replacement is now transactional — the candidate script is rendered and validated in memory (parse `ValueError`, same-context hotkey duplicates = fatal, best-effort real-AHK syntax preflight on a temp copy) before the live script file is touched, the old runtime is stopped, or a launch happens. A rejected candidate never kills or clobbers the last-good runtime; the GUI's status dot reflects the actual runtime state instead of the apply result.
+- Fix: engine watchdog no longer auto-restarts in a loop — the PID scan's PowerShell query had a backtick before `$_.CommandLine` (treated as a command name → scan always returned an empty set) and a double-backslash `-like` pattern that never matched a real command line. Both replaced with plain member access + `re.escape` regex `-match`. Live-verified.
+- Fix: AHK process identity verified before kill/report — the PID file is a hint only; a tracked PID is killed only when a command-line scan proves it runs `wr_runtime.ahk` (stale reused PIDs are never terminated). Same for `single_instance` (engine script in the command line required before terminating a previous holder).
+- Fix: throttle is not "no process" — a skipped PID scan reuses the last verified result; explicit stop always force-scans.
+- Fix: `ProcessRunner` isolates process generations — the pump captures the child locally, tags every line/done event with its generation, and `poll_log` drops stale events; a spawn failure leaves a coherent stopped/error state.
+- Fix: config validation before merge — `config.json` sections are shape-checked (toggles dict / combos list / champions dict / minimap dict / afkfarm dict) and malformed-but-valid JSON is rejected before any migration or merge; `config.local.json` is validated and bad local state ignored. Config import validates before overwriting the live file.
+- Fix: engine configs fully semantically validated (finite numerics, bool-not-numeric, thresholds 0..1, region extents, quickbuy key/presses, blocked keys, bool/str fields); hot reload uses the same validator; deathwatch template reloads are transactional; `run_poller`/deathwatch load before probing mtime.
+- Fix: click at (0,0) — template-match sentinels use explicit `is None`; a threshold-passing match at the top-left corner clicks.
+- Fix: surrender tab lifecycle parity with its siblings (`_tick` polls the runner, `save()` guards invalid input, apply saves first); key_blocker recovers after a dead pump thread; scaled-template build clamps dimensions ≥ 1 (1×1 template + 0.8 scale no longer produces a zero-size resize).
+- Tests: suite 225 → 320 (+95).
+
 ## v0.3.14 (2026-08-07)
 - Refactor: `tabs/champ_tab.py` renamed to `tabs/bind_button.py` — the file held only `BindButton` since the legacy `ChampTab` class was removed; the old name misled. 4 importers updated (afkfarm/champion/combo/minimap tabs); `tabs.bind_button` added to the import smoke test.
 

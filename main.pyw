@@ -12,7 +12,7 @@ from datetime import datetime
 from tkinterdnd2 import TkinterDnD
 import config_store
 
-VERSION = "0.3.14"
+VERSION = "0.3.15"
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 PARENT = os.path.dirname(BASE)
@@ -108,23 +108,38 @@ def load_config():
             config_warning = "corrupt"
     else:
         config_warning = None
-        cfg = load_config_merge(data, cfg)
-        for problem in config_store.validate_config(data):
-            print("config_store: config.json warning: %s" % problem, file=sys.stderr)
+        problems = config_store.validate_config(data)
+        if problems:
+            # Malformed-but-valid JSON is rejected BEFORE any migration or
+            # merge (T-086): the file is left untouched for review, the app
+            # runs on defaults, and no malformed section ever reaches the
+            # live config.
+            for problem in problems:
+                print("config_store: config.json rejected: %s" % problem, file=sys.stderr)
+            config_warning = "corrupt"
+        else:
+            cfg = load_config_merge(data, cfg)
 
     local_data, local_err = config_store.read_raw(CONFIG_LOCAL_FILE)
     if local_err == "corrupt":
         print("config_store: config.local.json corrupt, ignoring runtime state",
               file=sys.stderr)
     elif local_err is None:
-        cfg = config_store.merge_volatile(cfg, local_data)
+        local_problems = config_store.validate_local_config(local_data)
+        if local_problems:
+            for p in local_problems:
+                print("config_store: config.local.json ignored: %s" % p, file=sys.stderr)
+        else:
+            cfg = config_store.merge_volatile(cfg, local_data)
     return cfg
 
 
 def load_config_merge(on_disk, cfg):
     if "mode" not in on_disk:
-        ryze_on = on_disk.get("ryze", {}).get("enabled", True)
-        xin_on = on_disk.get("xin", {}).get("enabled", False)
+        ryze = on_disk.get("ryze", {})
+        xin = on_disk.get("xin", {})
+        ryze_on = ryze.get("enabled", True) if isinstance(ryze, dict) else True
+        xin_on = xin.get("enabled", False) if isinstance(xin, dict) else False
         on_disk["mode"] = "ryze" if ryze_on else ("xin" if xin_on else "general")
         on_disk.pop("ryze", None)
         on_disk.pop("xin", None)
@@ -445,6 +460,13 @@ class VacWPlayer:
         except (OSError, ValueError) as e:
             messagebox.showerror(Locale.tr("import_failed"), str(e))
             return
+        # Validate BEFORE save: a structurally-bad import must never overwrite
+        # the user's live config (T-092).
+        problems = config_store.validate_config(imported)
+        if problems:
+            messagebox.showerror(
+                Locale.tr("import_failed"), "; ".join(problems[:3]))
+            return
         if not messagebox.askyesno(Locale.tr("import_config_title"),
                                    Locale.tr("import_config_confirm") + "\n%s?" % os.path.basename(path)):
             return
@@ -525,13 +547,22 @@ class VacWPlayer:
         threading.Thread(target=self._apply_worker, daemon=True).start()
 
     def _apply_worker(self):
-        ok, msg = ahk_generator.generate_and_run(self.config)
+        try:
+            ok, msg = ahk_generator.generate_and_run(self.config)
+        except Exception as e:
+            print("ahk apply worker failed: %s" % e, file=sys.stderr)
+            ok, msg = False, "Apply failed: %s" % e
         self.root.after(0, lambda: self._apply_done(ok, msg))
 
     def _apply_done(self, ok, msg):
+        # A rejected candidate must not paint the last-good runtime dead: the
+        # AHK dot reflects the ACTUAL runtime state, not the apply result.
+        running = ok or ahk_generator.is_running()
+        if not ok and running:
+            msg = msg + " - last-good AHK still running"
         self.status_lbl.config(text=msg,
                                fg=TOKENS["success"] if ok else TOKENS["danger"])
-        self._update_ahk_dot(ok)
+        self._update_ahk_dot(running)
         self._applying = False
 
     def stop_engine(self):
@@ -552,12 +583,17 @@ class VacWPlayer:
             pass
 
     def _watchdog_worker(self):
-        ok, msg = ahk_generator.generate_and_run(self.config)
+        try:
+            ok, msg = ahk_generator.generate_and_run(self.config)
+        except Exception as e:
+            print("ahk watchdog worker failed: %s" % e, file=sys.stderr)
+            ok, msg = False, "Auto-restart failed: %s" % e
         self.root.after(0, lambda: self._watchdog_done(ok, msg))
 
     def _watchdog_done(self, ok, msg):
+        running = ok or ahk_generator.is_running()
         self.status_lbl.config(text=Locale.tr("auto_restarted") + " " + msg, fg=TOKENS["warning"])
-        self._update_ahk_dot(ok)
+        self._update_ahk_dot(running)
         self._applying = False
 
     def _show_hotkeys(self):

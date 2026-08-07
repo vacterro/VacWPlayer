@@ -20,21 +20,15 @@
     "combos": [],
     "champions": {
         "ryze": {
-            "enabled_wave": true,
             "trigger_wave": "F13",
             "keys_wave": "q,e,{Space}",
             "move_when_pressed_wave": false,
-            "toggle_wave": false,
-            "enabled_jungle": true,
             "trigger_jungle": "F14",
             "keys_jungle": "q,q,e,q,w,q,{Space}",
             "move_when_pressed_jungle": false,
-            "toggle_jungle": false,
-            "enabled_pvp": true,
-            "trigger_pvp": "F15",
+            "trigger_pvp": "F15,mbutton",
             "keys_pvp": "e,w,e,q,w,e,{Space}",
             "move_when_pressed_pvp": true,
-            "toggle_pvp": true,
             "interval": 16,
             "use_shift": false,
             "qwer_as_uiop": true,
@@ -317,9 +311,5 @@
             }
         }
     },
-    "lang": "en",
-    "window": {
-        "active_tab": 2,
-        "position": "2009,445"
-    }
+    "lang": "en"
 }

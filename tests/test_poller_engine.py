@@ -192,3 +192,26 @@ def test_lost_window_resets_and_reacquires(monkeypatch):
 
     # every lost window resets hwnd and re-acquires on the next iteration
     assert len(find_calls) == 3
+
+
+# --- T-083: (0,0) is a valid match location ---------------------------------
+
+def test_click_template_match_clicks_at_top_left(monkeypatch):
+    """A threshold-passing match at the top-left corner (0,0) MUST click -
+    loc=(0,0) is a real location, not a 'no match' sentinel."""
+    clicks = []
+    monkeypatch.setattr(poller_engine, "best_template_match",
+                        lambda gray, entry: (0.9, (0, 0), (10, 20)))
+    monkeypatch.setattr(poller_engine.window_ctl, "click_at",
+                        lambda h, x, y, button="left": clicks.append((x, y)))
+    entry = {"name": "t", "threshold": 0.75}
+    assert poller_engine.click_template_match(123, "gray", entry) is True
+    assert clicks == [(10, 5)]  # cx = 0 + 20//2, cy = 0 + 10//2
+
+
+def test_click_template_match_no_match_returns_false(monkeypatch):
+    """loc/size None means no template matched - no click."""
+    monkeypatch.setattr(poller_engine, "best_template_match",
+                        lambda gray, entry: (0.0, None, None))
+    entry = {"name": "t", "threshold": 0.75}
+    assert poller_engine.click_template_match(123, "gray", entry) is False

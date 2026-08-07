@@ -108,15 +108,31 @@ def start(blocked_keys=None):
     window the callback does one timestamp comparison and passes everything
     through via CallNextHookExW.
 
+    No-op ONLY while a live pump thread exists. A dead thread - e.g. a failed
+    SetWindowsHookExW install - is cleared (and any orphaned hook handle
+    released) so the next start actually succeeds instead of silently doing
+    nothing (T-089). Restart also clears transient block/release state so the
+    next session never inherits stale blocked-key debt.
+
     Windows calls the most-recently-installed low-level hook first, so as
     long as this starts after wr.ahk is already running (the normal case -
     wr.ahk is the long-running script, deathwatch gets started/restarted
      per session) this intercepts configured keys before wr.ahk's own hotkey hook
     ever sees them.
     """
-    global _thread, _blocked_vk
-    if _thread is not None:
+    global _thread, _blocked_vk, _hook_handle, _block_until
+    if _thread is not None and _thread.is_alive():
         return
+    if _thread is not None:  # dead thread: clear it and any orphaned hook
+        _thread = None
+        if _hook_handle:
+            try:
+                user32.UnhookWindowsHookEx(_hook_handle)
+            except Exception:
+                pass
+            _hook_handle = None
+    _block_until = 0.0
+    _block_until_released_vk.clear()
     if blocked_keys:
         _blocked_vk = {VK_MAP[k] for k in blocked_keys if k in VK_MAP}
     else:
@@ -153,14 +169,21 @@ def unblock():
 
 
 def stop():
-    """Remove the hook and stop the message-pump thread."""
-    global _hook_handle, _thread
+    """Remove the hook and stop the message-pump thread.
+
+    ALWAYS leaves _thread=None, live thread or dead: a stale reference would
+    make the next start() a silent no-op (T-089). Also clears transient
+    block/release state so no blocked-key debt survives the restart."""
+    global _hook_handle, _thread, _block_until
     if _hook_handle:
         user32.UnhookWindowsHookEx(_hook_handle)
         _hook_handle = None
-    if _thread and _thread.is_alive():
-        tid = _thread.ident
+    t = _thread
+    _thread = None
+    if t is not None and t.is_alive():
+        tid = t.ident
         if tid:
             user32.PostThreadMessageW(tid, WM_QUIT, 0, 0)
-        _thread.join(timeout=2.0)
-        _thread = None
+        t.join(timeout=2.0)
+    _block_until = 0.0
+    _block_until_released_vk.clear()

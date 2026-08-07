@@ -2,24 +2,13 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 import os
 import sys
-import json
 from theme import VintageSunken, VintageButton, VintageLabel, VintageEntry, TOKENS, FONT_MAIN, FONT_SM
 from vintage_widgets import VintageWindowPicker
 from process_runner import ProcessRunner
 from locales import Locale
+from tabs.tab_config import load_json, save_json
 
 BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-
-def load_json(path):
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-
-def save_json(path, data):
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
-        f.write("\n")
 
 
 SURRENDER_DEFAULTS = {
@@ -89,7 +78,7 @@ class SurrenderTab(tk.Frame):
         config_frame = tk.Frame(self, bg=TOKENS["background"])
         config_frame.pack(fill="x", padx=4)
 
-        self.window_picker = VintageWindowPicker(config_frame, Locale.tr("window_title_lbl"), cfg["window_title"], label_key="window_title_lbl")
+        self.window_picker = VintageWindowPicker(config_frame, Locale.tr("window_title_lbl"), cfg.get("window_title", ""), label_key="window_title_lbl")
         self.window_picker.pack(fill="x", pady=1)
         self._locale_widgets.append(("picker", self.window_picker, "window_title_lbl"))
 
@@ -234,6 +223,9 @@ class SurrenderTab(tk.Frame):
             self._refresh_tree()
 
     def _trigger_apply(self):
+        self.save()
+        if self.monitor_var.get():
+            self.runner.start(["--replace"])
         try:
             self.event_generate("<<ApplyStart>>")
         except tk.TclError:
@@ -241,9 +233,16 @@ class SurrenderTab(tk.Frame):
 
     def toggle_monitor(self):
         if self.monitor_var.get():
+            self.save()
             self.runner.start(["--replace"])
         else:
             self.runner.stop()
+            self.save_monitor_state()
+
+    def save_monitor_state(self):
+        cfg = load_json(self.cfg_path)
+        cfg["monitor_enabled"] = self.monitor_var.get()
+        save_json(self.cfg_path, cfg)
 
     def stop_all(self):
         self.runner.stop()
@@ -253,19 +252,26 @@ class SurrenderTab(tk.Frame):
             print("surrender_tab: reset monitor toggle failed: %s" % e, file=sys.stderr)
 
     def _tick(self):
-        self.after(100, self._tick)
+        if not self.winfo_exists():
+            return
+        try:
+            self.runner.poll_log()
+        except Exception as e:
+            print(f"surrender_tab _tick: poll_log error: {e}", file=sys.stderr)
+        self._tick_id = self.after(1000, self._tick)
 
     def save(self, silent=False):
-        cfg = {
-            "monitor_enabled": self.monitor_var.get(),
-            "window_title": self.window_picker.get(),
-            "poll_interval_sec": float(self.poll_interval.get()),
-            "click_cooldown_sec": float(self.click_cooldown.get()),
-            "auto_accept": self.auto_accept_var.get(),
-            "templates": []
-        }
-        cfg_data = load_json(self.cfg_path)
-        cfg["templates"] = cfg_data.get("templates", [])
+        try:
+            cfg = load_json(self.cfg_path)
+            cfg["monitor_enabled"] = self.monitor_var.get()
+            cfg["window_title"] = self.window_picker.get()
+            cfg["poll_interval_sec"] = float(self.poll_interval.get())
+            cfg["click_cooldown_sec"] = float(self.click_cooldown.get())
+            cfg["auto_accept"] = self.auto_accept_var.get()
+        except ValueError as e:
+            if silent:
+                print(f"Surrender save skipped (invalid input): {e}", file=sys.stderr)
+            else:
+                messagebox.showerror(Locale.tr("invalid_value"), str(e))
+            return
         save_json(self.cfg_path, cfg)
-        if not silent:
-            print("surrender config saved")

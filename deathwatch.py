@@ -207,17 +207,18 @@ def main(replace=False):
     single_instance.start_parent_watchdog()
     window_ctl.set_dpi_aware()
     cfg_path = os.path.join(BASE, "deathwatch_config.json")
+    # Guarded load FIRST (missing/corrupt -> deterministic FATAL, not a raw
+    # getmtime traceback), then seed the mtime probe (T-082).
     cfg = load_config()
     key_blocker.start(cfg.get("blocked_keys", []))
     try:
-        cfg_last_mtime = 0.0
-        loaded_window_title = ""
-        loaded_digits_dir = ""
-        loaded_label_path = ""
-
         cfg_last_mtime = os.path.getmtime(cfg_path)
         hwnd = None
         loaded_window_title = cfg["window_title"]
+        loaded_digits_dir = ""
+        loaded_label_path = ""
+        loaded_blocked_keys = list(cfg.get("blocked_keys", []))
+
         templates = digit_reader.load_templates(os.path.join(BASE, cfg["digit_templates_dir"]))
         loaded_digits_dir = cfg["digit_templates_dir"]
         was_dead = False
@@ -234,13 +235,20 @@ def main(replace=False):
             try:
                 cfg_last_mtime, changed = engine_config.mtime_changed(cfg_path, cfg_last_mtime)
                 if changed:
-                    with open(cfg_path) as f:
-                        cfg = json.load(f)
+                    # Same validator as the initial load - the candidate cfg is
+                    # committed only after it fully validates (T-082).
+                    cfg = load_config()
 
                 if cfg["window_title"] != loaded_window_title:
                     loaded_window_title = cfg["window_title"]
                     hwnd = None
                     print(f"window title changed, now watching '{loaded_window_title}'")
+
+                if cfg.get("blocked_keys", []) != loaded_blocked_keys:
+                    key_blocker.stop()
+                    key_blocker.start(cfg.get("blocked_keys", []))
+                    loaded_blocked_keys = list(cfg.get("blocked_keys", []))
+                    print(f"reloaded blocked keys: {loaded_blocked_keys}")
 
                 if not hwnd or not win32gui.IsWindow(hwnd):
                     try:
@@ -254,15 +262,37 @@ def main(replace=False):
                     time.sleep(cfg["poll_interval_sec"])
                     continue
 
+                # Template reloads are transactional: a candidate that fails to
+                # load never commits, so the engine keeps the last-good
+                # templates instead of falling into the "lost window" path.
                 if cfg["digit_templates_dir"] != loaded_digits_dir:
-                    templates = digit_reader.load_templates(os.path.join(BASE, cfg["digit_templates_dir"]))
-                    loaded_digits_dir = cfg["digit_templates_dir"]
-                    print("reloaded digit templates")
+                    try:
+                        candidate = digit_reader.load_templates(
+                            os.path.join(BASE, cfg["digit_templates_dir"]))
+                    except OSError as e:
+                        print("WARN: digit templates load failed (%s); "
+                              "keeping previous from '%s'"
+                              % (e, loaded_digits_dir))
+                        candidate = {}
+                    if candidate:
+                        templates = candidate
+                        loaded_digits_dir = cfg["digit_templates_dir"]
+                        print("reloaded digit templates")
+                    else:
+                        print("WARN: no usable digit templates in '%s'; "
+                              "keeping previous" % cfg["digit_templates_dir"])
 
                 if cfg["death_label_template"] != loaded_label_path:
-                    label_template = cv2.imread(os.path.join(BASE, cfg["death_label_template"]), cv2.IMREAD_GRAYSCALE)
-                    loaded_label_path = cfg["death_label_template"]
-                    print("reloaded death label template")
+                    candidate = cv2.imread(
+                        os.path.join(BASE, cfg["death_label_template"]),
+                        cv2.IMREAD_GRAYSCALE)
+                    if candidate is not None:
+                        label_template = candidate
+                        loaded_label_path = cfg["death_label_template"]
+                        print("reloaded death label template")
+                    else:
+                        print("WARN: death label template not found: '%s'; "
+                              "keeping previous" % cfg["death_label_template"])
 
                 if capture.is_minimized(hwnd):
                     time.sleep(cfg["poll_interval_sec"])

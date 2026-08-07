@@ -42,7 +42,10 @@ def build_scaled_templates(cfg, base_dir):
         scaled_templates = [tmpl]
         for scale in [0.8, 0.9, 1.1, 1.2]:
             h, w = tmpl.shape[:2]
-            scaled_templates.append(cv2.resize(tmpl, (int(w * scale), int(h * scale))))
+            # Clamp to >=1: a 1x1 template scaled down computes 0 and
+            # cv2.resize(0,0) raises (T-091). Normal-size behavior unchanged.
+            scaled_templates.append(cv2.resize(
+                tmpl, (max(1, int(w * scale)), max(1, int(h * scale)))))
         loaded.append({
             "name": entry.get("name", "?"),
             "templates": scaled_templates,
@@ -71,7 +74,9 @@ def best_template_match(gray, entry):
 def click_template_match(hwnd, gray, entry):
     """Click the best matching scaled-template location in a full-window gray image."""
     score, loc, size = best_template_match(gray, entry)
-    if score < entry["threshold"] or not loc or not size:
+    # loc/size are None only when no template matched at all - a real match at
+    # the top-left corner is (0, 0), which must NOT be treated as falsy (T-083).
+    if score < entry["threshold"] or loc is None or size is None:
         return False
     th, tw = size
     cx, cy = loc[0] + tw // 2, loc[1] + th // 2
@@ -89,8 +94,11 @@ def run_poller(name, config_path, config_name, build_targets, scan_targets,
     single_instance.start_parent_watchdog()
     window_ctl.set_dpi_aware()
 
-    cfg_last_mtime = os.path.getmtime(config_path)
+    # Guarded load FIRST (missing/corrupt config -> deterministic FATAL, not a
+    # raw getmtime traceback), then seed the mtime probe from the file we just
+    # read (T-082).
     cfg = load_config(config_path, config_name)
+    cfg_last_mtime = os.path.getmtime(config_path)
     hwnd = None
     loaded_window_title = cfg["window_title"]
     targets = build_targets(cfg)

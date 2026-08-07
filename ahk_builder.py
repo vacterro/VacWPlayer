@@ -1416,8 +1416,15 @@ def validate_config(config):
                 continue
             trig = entry.get("trigger", "")
             _check(trig, f"minimap '{key}'")
-            x = int(entry.get("x", 0))
-            y = int(entry.get("y", 0))
+            # Validator is total: hostile coordinates must not make it throw
+            # (a "validator that itself throws" turns a config bug into a
+            # crash far from the real cause).
+            try:
+                x = int(entry.get("x", 0))
+                y = int(entry.get("y", 0))
+            except (TypeError, ValueError):
+                warnings.append(f"minimap '{key}': coordinates are not numeric")
+                continue
             if trig and (x < 0 or y < 0 or x > 2000 or y > 2000):
                 warnings.append(f"minimap '{key}': suspicious coordinates ({x}, {y})")
 

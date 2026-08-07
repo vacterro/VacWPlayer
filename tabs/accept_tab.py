@@ -1,24 +1,13 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
 import os, sys
-import json
 from theme import VintageSunken, VintageButton, VintageLabel, VintageEntry, TOKENS, FONT_MAIN, FONT_SM
 from vintage_widgets import VintageWindowPicker
 from process_runner import ProcessRunner
 from locales import Locale
+from tabs.tab_config import load_json, save_json
 
 BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-
-def load_json(path):
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-
-def save_json(path, data):
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
-        f.write("\n")
 
 
 class AcceptTab(tk.Frame):
@@ -69,7 +58,7 @@ class AcceptTab(tk.Frame):
         config_frame = tk.Frame(self, bg=TOKENS["background"])
         config_frame.pack(fill="x", padx=4)
 
-        self.window_picker = VintageWindowPicker(config_frame, Locale.tr("window_title_lbl"), cfg["window_title"], label_key="window_title_lbl")
+        self.window_picker = VintageWindowPicker(config_frame, Locale.tr("window_title_lbl"), cfg.get("window_title", ""), label_key="window_title_lbl")
         self.window_picker.pack(fill="x", pady=1)
         self._locale_widgets.append(("picker", self.window_picker, "window_title_lbl"))
 
