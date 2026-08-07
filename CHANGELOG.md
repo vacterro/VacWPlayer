@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.2.6 (2026-08-07)
+- Tests: window_ctl unit coverage 22% → 100% (click/press/release, foreground fallback, key_vk, dpi).
+- Tests: key_blocker coverage 42% → 78% (VK map, hook proc block/pass/release-window, block_pedals, start/stop lifecycle).
+- 40 new tests, suite 46 → 89.
+
 ## v0.2.5 (2026-08-07)
 - Rebrand: WildRiftAssistant → VacWPlayer across all 46 files (app title, window, tray, error dialogs, READMEs, docs, launchers, locale bundles).
 - Terminology: Anti-AFK → Idle Prevention, AFK Farm → Rotating Farm, AFK ms → Idle ms, Enable AFK Farm → Enable Rotating Farm (33 locale JSONs + locales.py).
