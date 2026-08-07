@@ -12,6 +12,12 @@ change), lang toggle, quit. Loaded by `load_config()` with deep-merge over defau
 (`main.pyw:default_config()`); legacy `ryze`/`xin` sections auto-migrated to
 `mode` + `champions`.
 
+**Runtime state lives in `config.local.json` (gitignored).** Window geometry
+(`window.active_tab`, `window.position`) and per-champion checkbox flags
+(`enabled_*` / `toggle_*`) are split out on save and overlaid back on load, so
+`config.json` only carries settings worth committing. Missing or corrupt
+`config.local.json` is silently ignored — it is expendable by design.
+
 | Field | Type | Default | Meaning |
 |---|---|---|---|
 | `mode` | str | `"ryze"` | Active combo set: `general` or champion key (slug) |

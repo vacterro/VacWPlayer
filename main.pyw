@@ -12,7 +12,7 @@ from datetime import datetime
 from tkinterdnd2 import TkinterDnD
 import config_store
 
-VERSION = "0.3.5"
+VERSION = "0.3.6"
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 PARENT = os.path.dirname(BASE)
@@ -62,6 +62,7 @@ from combo_browser import ComboBrowser
 from locales import Locale
 
 CONFIG_FILE = os.path.join(BASE, "config.json")
+CONFIG_LOCAL_FILE = os.path.join(BASE, "config.local.json")
 GENERAL = "General"
 
 config_warning = None
@@ -92,21 +93,31 @@ def load_config():
     data, err = config_store.read_raw(CONFIG_FILE)
     if err == "missing":
         config_warning = None
-        return cfg
-    if err == "corrupt":
+    elif err == "corrupt":
         if config_store.restore_backup(CONFIG_FILE):
             data, err = config_store.read_raw(CONFIG_FILE)
             if err is None:
                 print("config_store: config.json corrupt, restored from .bak")
                 config_warning = "restored"
-                return load_config_merge(data, cfg)
-        print("config_store: config.json corrupt, no usable .bak, using defaults")
-        config_warning = "corrupt"
-        return cfg
-    config_warning = None
-    cfg = load_config_merge(data, cfg)
-    for problem in config_store.validate_config(data):
-        print("config_store: config.json warning: %s" % problem, file=sys.stderr)
+                cfg = load_config_merge(data, cfg)
+            else:
+                print("config_store: config.json corrupt, no usable .bak, using defaults")
+                config_warning = "corrupt"
+        else:
+            print("config_store: config.json corrupt, no usable .bak, using defaults")
+            config_warning = "corrupt"
+    else:
+        config_warning = None
+        cfg = load_config_merge(data, cfg)
+        for problem in config_store.validate_config(data):
+            print("config_store: config.json warning: %s" % problem, file=sys.stderr)
+
+    local_data, local_err = config_store.read_raw(CONFIG_LOCAL_FILE)
+    if local_err == "corrupt":
+        print("config_store: config.local.json corrupt, ignoring runtime state",
+              file=sys.stderr)
+    elif local_err is None:
+        cfg = config_store.merge_volatile(cfg, local_data)
     return cfg
 
 
@@ -152,7 +163,9 @@ def load_config_merge(on_disk, cfg):
 
 
 def save_config(config):
-    config_store.atomic_write(CONFIG_FILE, config)
+    stable, local = config_store.split_volatile(config)
+    config_store.atomic_write(CONFIG_FILE, stable)
+    config_store.atomic_write(CONFIG_LOCAL_FILE, local)
 
 
 def display_name(key, entry):

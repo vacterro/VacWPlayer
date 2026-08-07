@@ -1,5 +1,8 @@
 # Changelog
 
+## v0.3.6 (2026-08-07)
+- Config: volatile runtime state (window geometry, per-champion `enabled_*`/`toggle_*`) split into gitignored `config.local.json` on save, overlaid on load — `config.json` stays commitable, no per-user dirty diffs from a GUI run. Legacy volatile keys migrate on first save.
+
 ## v0.3.5 (2026-08-07)
 - Tests: `poller_engine.run_poller` behavioral coverage (7 tests) — acquire/scan/click sleep pattern, grab-failure retry keeps hwnd, config reload rebuilds targets, window-title change re-acquires, acquire-failure retry, lost-window reset. Suite 178 → 185.
 

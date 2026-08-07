@@ -74,3 +74,53 @@ def validate_config(data):
         if key in data and not isinstance(data[key], str):
             problems.append("'%s' is not a string" % key)
     return problems
+
+
+def _is_volatile(key):
+    """Runtime state that belongs in the gitignored local file, not the
+    committed config.json: per-champion checkbox flags and window geometry."""
+    return key.startswith("enabled_") or key.startswith("toggle_")
+
+
+def split_volatile(config):
+    """Return (stable, local). Window geometry and per-champion runtime flags
+    move to the local half; everything else stays in config.json.
+
+    Keeps the committed config.json free of per-user state so a GUI run does
+    not dirty the working tree. On load merge_volatile() puts it back.
+    """
+    stable = {k: v for k, v in config.items() if k != "window"}
+    local = {}
+    if isinstance(config.get("window"), dict) and config["window"]:
+        local["window"] = config["window"]
+    champs = config.get("champions")
+    if isinstance(champs, dict):
+        local_champs = {}
+        stable_champs = {}
+        for slug, entry in champs.items():
+            if not isinstance(entry, dict):
+                stable_champs[slug] = entry
+                continue
+            volatile = {k: v for k, v in entry.items() if _is_volatile(k)}
+            stable_champs[slug] = {k: v for k, v in entry.items()
+                                   if not _is_volatile(k)}
+            if volatile:
+                local_champs[slug] = volatile
+        stable["champions"] = stable_champs
+        if local_champs:
+            local["champions"] = local_champs
+    return stable, local
+
+
+def merge_volatile(config, local):
+    """Overlay the gitignored runtime state back onto a loaded config."""
+    if not isinstance(local, dict):
+        return config
+    if isinstance(local.get("window"), dict):
+        config.setdefault("window", {}).update(local["window"])
+    if isinstance(local.get("champions"), dict):
+        for slug, entry in local["champions"].items():
+            if isinstance(entry, dict) and isinstance(
+                    config.get("champions", {}).get(slug), dict):
+                config["champions"][slug].update(entry)
+    return config

@@ -61,6 +61,8 @@ main.pyw  (TkinterDnD root, single instance via single_instance.py)
 - `config.json` (BASE dir): `mode`, `toggles` (TOGGLE_DEFAULTS), `combos`
   (LEGACY_COMBOS), `champions` (per-key: triggers/keys per slot), `minimap`
   (MINIMAP_DEFAULTS + `_order`), `afkfarm` (AFKFARM_DEFAULTS), `lang`, `window`.
+  Volatile runtime state (window geometry, per-champion `enabled_*`/`toggle_*`)
+  is split into the gitignored `config.local.json` on save and overlaid on load.
 - `load_config()`: defaults merged over disk; migration from legacy `ryze`/`xin`
   top-level sections to `mode` + `champions`; stale `*_pixel` keys and
   `ryze_smart_logic` pruned.

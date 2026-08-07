@@ -29,6 +29,7 @@ Thumbs.db
 # user data
 .freebuff/
 backups/
+config.local.json
 
 # generated
 wr_runtime.ahk
