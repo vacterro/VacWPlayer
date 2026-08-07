@@ -1,5 +1,8 @@
 # Changelog
 
+## v0.3.5 (2026-08-07)
+- Tests: `poller_engine.run_poller` behavioral coverage (7 tests) — acquire/scan/click sleep pattern, grab-failure retry keeps hwnd, config reload rebuilds targets, window-title change re-acquires, acquire-failure retry, lost-window reset. Suite 178 → 185.
+
 ## v0.3.4 (2026-08-07)
 - Fix: RMB remap/PVP-hold now gated on cursor-inside-window (`MouseIsOver`) like LMB — cursor off the game (desktop/taskbar/second monitor) while PVP runs no longer produces left-clicks on the desktop. Pass-through preserves the real right-click.
 
