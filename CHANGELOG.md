@@ -1,5 +1,8 @@
 # Changelog
 
+## v0.3.9 (2026-08-07)
+- CI: GitHub Actions workflow (`.github/workflows/ci.yml`) — pytest + pyflakes on push/PR (windows-latest, Python 3.11, pip cache, concurrency cancel). Repo had zero CI despite 193 tests and 6 releases; regressions were only caught locally.
+
 ## v0.3.8 (2026-08-07)
 - Docs: root README mirrors (ee/ja/ded) re-synced to current README.md content — Disclaimer sections added, AFK Farm / Buy-Accept-Surrender / Minimap feature bullets, idle-prevention terms; all 4 source-digest markers re-stamped to b1c6e5b71595a204 (SAIT-006 collect).
 
