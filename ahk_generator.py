@@ -106,7 +106,6 @@ def _find_our_pids():
     if now - _last_scan_ts < 10:
         return []
     _last_scan_ts = now
-    ours = []
     script_abs = os.path.abspath(AHK_PATH).replace("\\", "\\\\")
     ps_cmd = (
         "Get-CimInstance Win32_Process -Filter \"name like '%AutoHotkey%'\" | "
@@ -114,16 +113,33 @@ def _find_our_pids():
         "Select-Object -ExpandProperty ProcessId"
     ).format(script=script_abs)
     try:
-        out = subprocess.run(
-            ["powershell", "-NoProfile", "-Command", ps_cmd],
-            capture_output=True, creationflags=0x08000000,
-            timeout=10).stdout.decode("utf-8", errors="replace")
-        for line in out.splitlines():
-            line = line.strip()
-            if line.isdigit():
-                ours.append(int(line))
-    except Exception:
-        pass
+        return _probe_pids(ps_cmd)
+    except subprocess.TimeoutExpired:
+        print("ahk_generator: PID scan timed out (10s), retrying once", file=sys.stderr)
+        try:
+            return _probe_pids(ps_cmd)
+        except subprocess.TimeoutExpired:
+            print("ahk_generator: PID scan timed out again, giving up", file=sys.stderr)
+            return []
+        except Exception as e:
+            print(f"ahk_generator: PID scan failed: {e}", file=sys.stderr)
+            return []
+    except Exception as e:
+        print(f"ahk_generator: PID scan failed: {e}", file=sys.stderr)
+        return []
+
+
+def _probe_pids(ps_cmd):
+    """Run the PowerShell probe once and parse its PID lines."""
+    out = subprocess.run(
+        ["powershell", "-NoProfile", "-Command", ps_cmd],
+        capture_output=True, creationflags=0x08000000,
+        timeout=10).stdout.decode("utf-8", errors="replace")
+    ours = []
+    for line in out.splitlines():
+        line = line.strip()
+        if line.isdigit():
+            ours.append(int(line))
     return ours
 
 def _stop_pids(pids, wait_ms=500):

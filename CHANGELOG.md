@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.3.1 (2026-08-07)
+- Fix: `_find_our_pids` swallow-all `except Exception: pass` removed — probe failures now log to stderr; timeout retries once then gives up. Watchdog no longer goes blind on a failed PowerShell probe.
+- Tests: PID-scan paths (probe parse/empty, throttle, timeout-retry, double-timeout, other-exception) — 8 tests. Suite 167 → 175.
+
 ## v0.3.0 (2026-08-07)
 - Config resilience: atomic writes with `.bak` backup before every save; corrupt config.json restored from `.bak` on load (messagebox notifies user); light structural validation with stderr warnings; corrupt-without-backup falls back to defaults with a warning instead of silent data loss.
 - Tests: `config_store` unit coverage (read/atomic-write/restore/validate) + `load_config` corrupt/missing paths — 21 tests. Suite 146 → 167.
