@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.2.7 (2026-08-07)
+- Tests: ahk_builder E-120 carry-guard direct coverage (GuardCarry, FocusWatch stale-carry sweep, guard variant emission, _guard_variant/_guarded_triggers/_carry_set/_base_key).
+- 40 new tests, suite 89 → 129.
+
 ## v0.2.6 (2026-08-07)
 - Tests: window_ctl unit coverage 22% → 100% (click/press/release, foreground fallback, key_vk, dpi).
 - Tests: key_blocker coverage 42% → 78% (VK map, hook proc block/pass/release-window, block_pedals, start/stop lifecycle).
