@@ -1,5 +1,8 @@
 # Changelog
 
+## v0.3.8 (2026-08-07)
+- Docs: root README mirrors (ee/ja/ded) re-synced to current README.md content — Disclaimer sections added, AFK Farm / Buy-Accept-Surrender / Minimap feature bullets, idle-prevention terms; all 4 source-digest markers re-stamped to b1c6e5b71595a204 (SAIT-006 collect).
+
 ## v0.3.7 (2026-08-07)
 - Fix: silent `except: pass` removed from 4 engine-tab `stop_all()` methods — monitor-toggle reset failures now log to stderr (HUNT cat-4). Remaining silent-except sites audited: 24 benign-by-design (Tk teardown idiom, probes, cleanup).
 

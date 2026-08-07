@@ -2,15 +2,18 @@
 
 # VacWPlayer
 
-**v0.3.7** — [Muudatused](CHANGELOG.md)
+**v0.3.8** — [Muudatused](CHANGELOG.md)
 
 Üks vanaaegse teemaga GUI kogu Wild Rifti tööriistakomplektile: pedaalide kombod, meistripõhised rotatsioonid, automaatne minimeerimine surma korral ja automaatne jätkamine pärast mängu – juhitav "super AHK" koos kasutajaliidesega, ilma skriptide käsitsi redigeerimiseta.
 
 ## Funktsioonid
 
-- **Vahekaart Main (Peamine)** – globaalsed sisendi lülitid (hiire ümberkaardistamine, tühiku spämm, anti-AFK, peatamise klahv, käsitsi sihtimise paus, sihtmärk exe) pluss General-režiimi kohandatud kombode loend: lisa, kustuta, tühjenda, seo päästik klahvivajutusega, taasta pärandseaded.
+- **Vahekaart Main (Peamine)** – globaalsed sisendi lülitid (hiire ümberkaardistamine, tühiku spämm, jõudeoleku ennetamine, peatamise klahv, käsitsi sihtimise paus, sihtmärk exe) pluss General-režiimi kohandatud kombode loend: lisa, kustuta, tühjenda, seo päästik klahvivajutusega, taasta pärandseaded.
 - **Vahekaart Champions** – meistripõhised Wave / Jungle / PVP rotatsioonid. Eellaaditud tõelised kombod Ryze'ile, Xin Zhaole, Yasuole, Master Yile jt; ülejäänud Wild Rifti rosterile redigeeritavad kohahoidjad.
+- **Vahekaart AFK Farm** – tsüklida läbi minikaardi positsioonide, liigu + kombo, korda.
 - **Vahekaardid Death Watch / Auto Continue** – juhivad olemasolevaid mootoreid `deathwatch.py` / `autocontinue.py` (testrežiimi lüliti, reaalajas olek), mis võtavad puhtalt üle käsuga `--replace`.
+- **Vahekaardid Buy / Accept / Surrender** – kullapõhine auto-ost pärast tagasikutsumist (`digit_reader`), matši auto-vastuvõtt ja allaandmise hääletus, igaüks oma mootoriga (`deathwatch_config.json`, `accept.py`, `surrender.py`).
+- **Vahekaart Minimap** – kliki-ja-liigu kiirklahvid seotud raja positsioonidega, read ümberjärjestatavad.
 - **Tšempioni režiim** (rippmenüü valib täpselt ühe aktiivse kombokomplekti), et F13–F15 ei satuks kunagi kangelaste vahel konflikti.
 - **Sammupõhised viivitused** – süntaks `klahv:ms`, nt `q,e:120,{Space}:200`.
 - **Süsteemisalve ikoon** – X peidab salve, mootor jätkab tööd; Quit peatab kõik.
@@ -33,6 +36,13 @@ Või käsitsi:
 
 Vaikimisi kombokomplekt (Ryze) käivitub automaatselt. Muuda mis tahes vahekaarti, vali tšempion ja vajuta **Käivita**.
 
+## Vastutusest
+
+See tööriist automatiseerib mängu sisendeid (klahvivajutused, hiireklõpsud, ekraanituvastus).
+**Automatiseerimistarkvara kasutamine mängus League of Legends: Wild Rift rikub Riot Games'i
+kasutustingimusi.** Funktsioonid nagu Rotating Farm, Idle Prevention, auto-vastuvõtt/allaandmine
+ja surmaautomaatika võivad kaasa tuua konto peatamise või jäädava keelu. Kasutad omal vastutusel.
+
 ## Testid
 
 ```
@@ -52,4 +62,4 @@ Viis konfiguratsiooni, igaühel üks töö: `config.json` (kombod, režiim, lül
 
 Komadega eraldatud klahvid. `{Space}`, `f`, tähed. Oskuste tähed q/w/e/r valatakse Shiftiga (enda peale valamine), kui "Shift-cast" pole välja lülitatud. Lisa `:ms` klahvile, et määrata selle sammu viivitus; vastasel juhul rakendub kombo intervall. Hoidke päästikut all, et tsüklit korrata.
 
-<!-- source-digest: README.md sha256:d41ad183277d5cf0 -->
+<!-- source-digest: README.md sha256:b1c6e5b71595a204 -->
