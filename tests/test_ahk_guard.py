@@ -154,3 +154,50 @@ def test_guard_dedupe_in_generated_script():
     script, _ = ab.generate_script(
         _cfg(combos=[{"trigger": "F13", "keys": "q"}, {"trigger": "*F13", "keys": "w"}]))
     assert script.count('#If GuardCarry("F13")') == 1
+
+
+def _pvp_cfg(toggles=None):
+    cfg = _cfg(toggles=toggles)
+    cfg["mode"] = "ryze"
+    cfg["champions"] = {"ryze": {
+        "trigger_pvp": "F15",
+        "keys_pvp": "q,w,e",
+        "move_when_pressed_pvp": True,
+        "toggle_pvp": False,
+    }}
+    return cfg
+
+
+def _rmb_down_handler(script):
+    """The *RButton:: down-handler body, from hotkey to the matching Up."""
+    idx = script.index("*RButton::")
+    end = script.index("*RButton Up::", idx)
+    return script[idx:end]
+
+
+def _assert_rmb_guarded(script):
+    assert 'global RMB_Pass := false' in script
+    handler = _rmb_down_handler(script)
+    # cursor-outside guard must gate the remap, symmetric to LMB
+    assert '!MouseIsOver("ahk_exe HD-Player.exe")' in handler
+    assert 'RMB_Pass := true' in handler
+    assert 'SendEvent {RButton down}' in handler
+    # bypass runs before the remap click
+    assert handler.index("!MouseIsOver") < handler.index("SendInput {LButton down}")
+    # Up releases the passed-through click before any PVP combo logic
+    assert 'if (RMB_Pass) {' in script
+    assert 'SendInput {RButton up}' in script
+
+
+def test_rmb_hold_pvp_guarded_like_lmb():
+    # RMB-hold drives the PVP combo: cursor outside the game must pass the
+    # real right-click through (like LMB does) instead of remapping it into
+    # an LButton click that lands on the desktop.
+    _assert_rmb_guarded(ab.generate_script(_pvp_cfg())[0])
+
+
+def test_rmb_plain_remap_guarded_when_rmb_hold_off():
+    _assert_rmb_guarded(ab.generate_script(_cfg(toggles={
+        "target_exe": "HD-Player.exe",
+        "rmb_hold_pvp": False,
+    }))[0])

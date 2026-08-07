@@ -1,5 +1,8 @@
 # Changelog
 
+## v0.3.4 (2026-08-07)
+- Fix: RMB remap/PVP-hold now gated on cursor-inside-window (`MouseIsOver`) like LMB — cursor off the game (desktop/taskbar/second monitor) while PVP runs no longer produces left-clicks on the desktop. Pass-through preserves the real right-click.
+
 ## v0.3.3 (2026-08-07)
 - Refactor: extracted shared template-poller engine (`poller_engine.py`) — accept/surrender/autocontinue now share the poll loop (single-instance, parent watchdog, config mtime reload, window acquisition, template-match click). Net -183 lines, behavior preserved, +1 structural test (176 suite).
 - Docs: architecture.md notes `poller_engine`.
