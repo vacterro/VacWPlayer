@@ -12,7 +12,7 @@ from datetime import datetime
 from tkinterdnd2 import TkinterDnD
 import config_store
 
-VERSION = "0.3.6"
+VERSION = "0.3.7"
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 PARENT = os.path.dirname(BASE)

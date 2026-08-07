@@ -1,6 +1,7 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
 import os
+import sys
 import json
 from theme import VintageSunken, VintageButton, VintageLabel, VintageEntry, TOKENS, FONT_MAIN, FONT_SM
 from vintage_widgets import VintageWindowPicker
@@ -248,8 +249,8 @@ class SurrenderTab(tk.Frame):
         self.runner.stop()
         try:
             self.monitor_var.set(False)
-        except Exception:
-            pass
+        except Exception as e:
+            print("surrender_tab: reset monitor toggle failed: %s" % e, file=sys.stderr)
 
     def _tick(self):
         self.after(100, self._tick)

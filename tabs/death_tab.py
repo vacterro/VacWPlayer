@@ -302,8 +302,8 @@ class DeathWatchTab(tk.Frame):
         self.runner.stop()
         try:
             self.monitor_var.set(False)
-        except Exception:
-            pass
+        except Exception as e:
+            print("death_tab: reset monitor toggle failed: %s" % e, file=sys.stderr)
 
     def _tick(self):
         if not self.winfo_exists():

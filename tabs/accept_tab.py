@@ -213,8 +213,8 @@ class AcceptTab(tk.Frame):
         self.runner.stop()
         try:
             self.monitor_var.set(False)
-        except Exception:
-            pass
+        except Exception as e:
+            print("accept_tab: reset monitor toggle failed: %s" % e, file=sys.stderr)
 
     def _trigger_apply(self):
         self.save()

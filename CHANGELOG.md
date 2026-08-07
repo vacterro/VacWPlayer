@@ -1,5 +1,8 @@
 # Changelog
 
+## v0.3.7 (2026-08-07)
+- Fix: silent `except: pass` removed from 4 engine-tab `stop_all()` methods — monitor-toggle reset failures now log to stderr (HUNT cat-4). Remaining silent-except sites audited: 24 benign-by-design (Tk teardown idiom, probes, cleanup).
+
 ## v0.3.6 (2026-08-07)
 - Config: volatile runtime state (window geometry, per-champion `enabled_*`/`toggle_*`) split into gitignored `config.local.json` on save, overlaid on load — `config.json` stays commitable, no per-user dirty diffs from a GUI run. Legacy volatile keys migrate on first save.
 

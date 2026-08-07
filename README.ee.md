@@ -2,7 +2,7 @@
 
 # VacWPlayer
 
-**v0.3.6** — [Muudatused](CHANGELOG.md)
+**v0.3.7** — [Muudatused](CHANGELOG.md)
 
 Üks vanaaegse teemaga GUI kogu Wild Rifti tööriistakomplektile: pedaalide kombod, meistripõhised rotatsioonid, automaatne minimeerimine surma korral ja automaatne jätkamine pärast mängu – juhitav "super AHK" koos kasutajaliidesega, ilma skriptide käsitsi redigeerimiseta.
 
@@ -52,4 +52,4 @@ Viis konfiguratsiooni, igaühel üks töö: `config.json` (kombod, režiim, lül
 
 Komadega eraldatud klahvid. `{Space}`, `f`, tähed. Oskuste tähed q/w/e/r valatakse Shiftiga (enda peale valamine), kui "Shift-cast" pole välja lülitatud. Lisa `:ms` klahvile, et määrata selle sammu viivitus; vastasel juhul rakendub kombo intervall. Hoidke päästikut all, et tsüklit korrata.
 
-<!-- source-digest: README.md sha256:284eabd4e828e03e -->
+<!-- source-digest: README.md sha256:d41ad183277d5cf0 -->
