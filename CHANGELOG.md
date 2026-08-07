@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.3.12 (2026-08-07)
+- Fix: engine configs type-checked on load — `engine_config.validate_engine_config` rejects wrong-typed values (`window_title: 12345`, `poll_interval_sec: "abc"`, `buttons: "notalist"`) with the same FATAL/`SystemExit(1)` path as corrupt JSON, instead of loading silently and crashing mid-loop (`time.sleep("abc")` TypeError, `find_window(12345)`). Wired into `poller_engine.load_config` (accept/surrender/autocontinue) and `deathwatch.load_config`; deathwatch gained module-level `CONFIG_PATH` for uniformity.
+- Tests: 14 new wrong-type regression tests (all 4 engines × window_title/poll_interval/templates + valid-types pass + CONFIG_PATH). Suite 206 → 222.
+
 ## v0.3.11 (2026-08-07)
 - Fix: malformed combo keys rejected at generation — `parse_steps` now validates every step against an AHK send-name whitelist (letters/digits incl. Cyrillic, F1-F24, `{named}` keys) and raises a clear `ValueError` on junk like `q:`, `q:-100`, `ц:{Space}:50`. Previously these rendered as `{q:}`/`{q:-100}` send-names that AutoHotkey silently ignored (exit 0) — a dead combo with no error. Note: modifier-prefixed step keys (`!q`) were undocumented and are now rejected.
 - Tests: 11 new `parse_steps` regression tests (valid whitelist, 6 junk cases, comma-only, `generate_script` rejection). Suite 195 → 206.

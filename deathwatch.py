@@ -13,16 +13,17 @@ import single_instance
 import window_ctl
 
 BASE = os.path.dirname(__file__)
+CONFIG_PATH = os.path.join(BASE, "deathwatch_config.json")
 
 
 def load_config():
-    path = os.path.join(BASE, "deathwatch_config.json")
     try:
-        with open(path) as f:
-            return json.load(f)
+        with open(CONFIG_PATH) as f:
+            cfg = json.load(f)
     except (OSError, ValueError) as e:
         print("FATAL: failed to load deathwatch_config.json: %s" % e)
         raise SystemExit(1)
+    return engine_config.validate_engine_config(cfg, "deathwatch_config.json")
 
 
 def label_match_score(region_bgr, template_gray):

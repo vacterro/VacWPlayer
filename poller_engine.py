@@ -23,10 +23,11 @@ import window_ctl
 def load_config(config_path, config_name):
     try:
         with open(config_path) as f:
-            return json.load(f)
+            cfg = json.load(f)
     except (OSError, ValueError) as e:
         print("FATAL: failed to load %s: %s" % (config_name, e))
         raise SystemExit(1)
+    return engine_config.validate_engine_config(cfg, config_name)
 
 
 def build_scaled_templates(cfg, base_dir):

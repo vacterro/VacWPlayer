@@ -54,6 +54,55 @@ def test_load_config_corrupt_exits(engine, monkeypatch):
         engine.load_config()
 
 
+# --- engine config wrong-type rejection (SAIT-003 / T-079) --------------------
+
+
+@pytest.mark.parametrize("engine", ENGINES, ids=lambda m: m.__name__)
+def test_load_config_wrongtype_window_title_exits(engine, monkeypatch):
+    def wrong_json(*a, **k):
+        return {"window_title": 12345, "poll_interval_sec": 0.5}
+    monkeypatch.setattr("json.load", wrong_json)
+    with pytest.raises(SystemExit):
+        engine.load_config()
+
+
+@pytest.mark.parametrize("engine", ENGINES, ids=lambda m: m.__name__)
+def test_load_config_wrongtype_poll_interval_exits(engine, monkeypatch):
+    def wrong_json(*a, **k):
+        return {"window_title": "X", "poll_interval_sec": "abc"}
+    monkeypatch.setattr("json.load", wrong_json)
+    with pytest.raises(SystemExit):
+        engine.load_config()
+
+
+@pytest.mark.parametrize("engine", ENGINES, ids=lambda m: m.__name__)
+def test_load_config_valid_types_pass(engine, monkeypatch):
+    good = {
+        "monitor_enabled": False,
+        "window_title": "BlueStacks App Player",
+        "poll_interval_sec": 1.0,
+        "click_cooldown_sec": 3.0,
+        "templates": [],
+        "buttons": [],
+    }
+    monkeypatch.setattr("json.load", lambda *a, **k: good)
+    cfg = engine.load_config()
+    assert cfg["window_title"] == "BlueStacks App Player"
+
+
+@pytest.mark.parametrize("engine", ENGINES, ids=lambda m: m.__name__)
+def test_load_config_wrongtype_templates_exits(engine, monkeypatch):
+    def wrong_json(*a, **k):
+        return {"window_title": "X", "poll_interval_sec": 0.5, "templates": "notalist"}
+    monkeypatch.setattr("json.load", wrong_json)
+    with pytest.raises(SystemExit):
+        engine.load_config()
+
+
+def test_deathwatch_has_module_config_path():
+    assert deathwatch.CONFIG_PATH.endswith("deathwatch_config.json")
+
+
 def test_process_runner_start_stop_restart():
     stub = "tests/_stub_engine.py"
     status, last, check = FakeVar(), FakeVar(), FakeVar()
