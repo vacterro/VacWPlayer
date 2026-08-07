@@ -1,6 +1,6 @@
 """Champion roster and default combos.
 
-Roster is the real Wild Rift champion list (wildriftcore.com/en/champions,
+Roster is the real Wild Rift champion list (wildrift.leagueoflegends.com/en-us/champions,
 fetched 16.07.26). Combos are a different matter and the honesty rule here is
 strict:
 

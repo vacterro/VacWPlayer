@@ -1,4 +1,4 @@
-﻿# WildRiftAssistant — Configuration Reference
+# VacWPlayer — Configuration Reference
 
 
 All configs are JSON in the project root (`BASE` = script dir). The GUI owns
@@ -100,7 +100,7 @@ disabled slot.
 | `blocked_keys` | `["F13","F14","F15"]` | Keys blocked while dead (key_blocker) |
 | `pedal_block_sec` | 1.0 | Pedal block duration |
 | `switch_to_work_window` | false | Switch to work window (e.g. this GUI) |
-| `work_window_title` | `"WildRiftAssistant"` | |
+| `work_window_title` | `"VacWPlayer"` | |
 | `click_mid_on_resurrect` | false | Click minimap mid on respawn |
 | `lock_window_resurrect` | false | Lock window until respawn |
 | `autobuy_after_b` | false | Auto-buy after recalling (B) |

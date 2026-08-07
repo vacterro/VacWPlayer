@@ -1,7 +1,7 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-title WildRiftAssistant
+title VacWPlayer
 
 rem --- find a usable Python ---------------------------------------------------
 rem Priority: real system pythonw (the local venv's pythonw.exe on this machine
@@ -40,12 +40,12 @@ if not exist "main.pyw" (
     exit /b 1
 )
 
-rem --- diagnostic check: WildRiftAssistant.bat --check ------------------------
+rem --- diagnostic check: VacWPlayer.bat --check ------------------------
 if "%~1"=="--check" (
     echo OK: %PYW%
     exit /b 0
 )
 
-echo Starting WildRiftAssistant...
+echo Starting VacWPlayer...
 start "" "%PYW%" main.pyw
 endlocal

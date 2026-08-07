@@ -11,7 +11,7 @@ import shutil
 from datetime import datetime
 from tkinterdnd2 import TkinterDnD
 
-VERSION = "0.2.4"
+VERSION = "0.2.5"
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 PARENT = os.path.dirname(BASE)
@@ -28,7 +28,7 @@ def _excepthook(exc_type, exc_val, exc_tb):
         pass
     try:
         import tkinter.messagebox
-        tkinter.messagebox.showerror("WildRiftAssistant - Unhandled Error",
+        tkinter.messagebox.showerror("VacWPlayer - Unhandled Error",
                                      "An error occurred:\n\n%s\n\nSee crash.log for details." % exc_val)
     except Exception:
         pass
@@ -146,13 +146,13 @@ def display_name(key, entry):
     return key.replace("_", " ").title()
 
 
-class WildRiftAssistant:
+class VacWPlayer:
     def __init__(self):
         self.config = load_config()
         self._applying = False
 
         self.root = TkinterDnD.Tk()
-        self.root.title("WildRiftAssistant")
+        self.root.title("VacWPlayer")
         self.root.geometry(self._restore_geometry())
         self.root.resizable(True, True)
         apply_base_theme(self.root)
@@ -630,8 +630,8 @@ class WildRiftAssistant:
             pystray.MenuItem(Locale.tr("tray_stop"), lambda: self.root.after(0, self.stop_engine)),
             pystray.MenuItem(Locale.tr("tray_quit"), self.quit_app),
         )
-        self.tray_icon = pystray.Icon("WildRiftAssistant", self._tray_image(),
-                                      "WildRiftAssistant", menu)
+        self.tray_icon = pystray.Icon("VacWPlayer", self._tray_image(),
+                                      "VacWPlayer", menu)
         threading.Thread(target=self.tray_icon.run, daemon=True).start()
 
     def show_window(self, icon=None, item=None):
@@ -654,6 +654,6 @@ class WildRiftAssistant:
 
 if __name__ == "__main__":
     single_instance.ensure_single_instance("wr_assistant", replace=True)
-    app = WildRiftAssistant()
+    app = VacWPlayer()
     atexit.register(app.stop_everything)
     app.run()

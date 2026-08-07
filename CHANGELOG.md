@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.2.5 (2026-08-07)
+- Rebrand: WildRiftAssistant → VacWPlayer across all 46 files (app title, window, tray, error dialogs, READMEs, docs, launchers, locale bundles).
+- Terminology: Anti-AFK → Idle Prevention, AFK Farm → Rotating Farm, AFK ms → Idle ms, Enable AFK Farm → Enable Rotating Farm (33 locale JSONs + locales.py).
+- README: Fixed outdated Ryze/Xin Zhao tab references → Champions/Rotating Farm tabs. Added ToS disclaimer (EN + RU).
+- Docs: Architecture tab count 9→10 (added surrender engine). BlueStacks references generalized in capture.py, deathwatch.py, window_ctl.py.
+- Champions: Source URL fixed (wildriftcore.com → wildrift.leagueoflegends.com).
+
 ## v0.2.4 (2026-08-07)
 - Hunt+fix wave: 5 defect tickets from 6-category sweep.
   - P0: `_write_pid` OSError crashes app at startup (disk full/permission denied). Added error handling.

@@ -1,4 +1,4 @@
-﻿# WildRiftAssistant — Developer Guide
+# VacWPlayer — Developer Guide
 
 
 ## Setup
@@ -12,13 +12,13 @@
 - AutoHotkey v1: `AutoHotkeyU64.exe` next to the app if present, else the
   standard install under `C:\Program Files\AutoHotkey\` — runtime dependency,
   never pip-installable. See `ahk_generator.find_ahk_exe()`.
-- Git repo: `github.com/vacterro/WildRiftAssistant`, branch `main`, tagged
+- Git repo: `github.com/vacterro/VacWPlayer`, branch `main`, tagged
   releases (`v0.1.0`+).
 
 ## Run
 
 ```
-WildRiftAssistant.bat   (or: pythonw.exe main.pyw with system Python 3.11)
+VacWPlayer.bat   (or: pythonw.exe main.pyw with system Python 3.11)
 ```
 
 - Single instance enforced (`single_instance.ensure_single_instance("wr_assistant", replace=True)`) —

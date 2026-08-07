@@ -1,6 +1,6 @@
 🇪🇪 [Eesti](README.ee.md) | 🇷🇺 [Русский](README.ru.md) | 🇺🇸 [English](README.md) | 👴 **Дед-Мод** | 🇯🇵 [日本語](README.ja.md)
 
-# WildRiftAssistant
+# VacWPlayer
 
 **v0.2.3** — [Что поменялось](CHANGELOG.md)
 
@@ -25,7 +25,7 @@
 
 ## Как заводить
 
-Дважды щёлкни **`WildRiftAssistant.vbs`** (консоль спрятана, запускается тихо). Нужны ошибки на экране — жми **`WildRiftAssistant.bat`** (плюс `--check`). Оба сами найдут venv.
+Дважды щёлкни **`VacWPlayer.vbs`** (консоль спрятана, запускается тихо). Нужны ошибки на экране — жми **`VacWPlayer.bat`** (плюс `--check`). Оба сами найдут venv.
 Или вручную:
 
 ```
@@ -50,4 +50,4 @@ python -m pytest tests/ -v
 
 Через запятую. `{Space}`, `f`, буквы. Скиллы (q/w/e/r) кастуются на себя (с шифтом), если рубильник не выключишь. Пиши `:ms` после кнопки для паузы. Зажмешь педаль — будет лупить по кругу.
 
-<!-- source-digest: README.md sha256:64a14fd91deee05c -->
+<!-- source-digest: README.md sha256:0fda76391edf1020 -->

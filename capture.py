@@ -8,7 +8,7 @@ PW_CLIENTONLY = 1
 PW_RENDERFULLCONTENT = 2
 
 
-def find_window(title="BlueStacks App Player"):
+def find_window(title="HD-Player"):
     hwnd = win32gui.FindWindow(None, title)
     if not hwnd:
         raise RuntimeError(f"window not found: {title}")

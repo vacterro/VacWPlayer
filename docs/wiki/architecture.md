@@ -1,4 +1,4 @@
-﻿# WildRiftAssistant — Architecture
+# VacWPlayer — Architecture
 
 
 ## Overview
@@ -14,7 +14,7 @@ subprocesses driven by their own config files.
 
 ```
 main.pyw  (TkinterDnD root, single instance via single_instance.py)
- ├── tabs/            UI layer — 9 tabs, all built at startup
+ ├── tabs/            UI layer — 10 tabs, all built at startup
  ├── theme.py / vintage_widgets.py   vintage look + pickers
  ├── locales.py       33-language UI strings (bundles in locales/*.json)
  ├── config.json      <-> main config (autosave debounce 300ms)
@@ -23,17 +23,18 @@ main.pyw  (TkinterDnD root, single instance via single_instance.py)
  ├── process_runner.py  subprocess wrapper for AHK
  ├── combo_browser.py / champ_picker.py   helper dialogs
  └── engines (own subprocesses, own configs):
-     deathwatch.py      deathwatch_config.json  (py win32 API capture)
-     autocontinue.py    autocontinue_config.json
-     accept.py          accept_config.json
+      deathwatch.py      deathwatch_config.json  (py win32 API capture)
+      autocontinue.py    autocontinue_config.json
+      accept.py          accept_config.json
+      surrender.py       surrender_config.json
 ```
 
 ## Lifecycle
 
 - Entry: `main.pyw` → `single_instance.ensure_single_instance("wr_assistant", replace=True)`
   (kills previous holder PID); `atexit` registers `stop_everything()`.
-- `WildRiftAssistant.__init__`: loads config, builds theme, creates `VintageNotebook`
-  with all 9 tabs, restores last active tab, sets up tray.
+- `VacWPlayer.__init__`: loads config, builds theme, creates `VintageNotebook`
+  with all 10 tabs, restores last active tab, sets up tray.
 - 100ms after start: `apply_and_start()` auto-runs (Ryze assist auto-starts).
 - `_engine_watchdog` every 3000ms: if engine was supposed to run and
   `ahk_generator.is_running()` is false → regenerate + relaunch (auto-restart).

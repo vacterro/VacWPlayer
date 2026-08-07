@@ -32,7 +32,7 @@ def label_match_score(region_bgr, template_gray):
 
 
 def toggle_mouse_lock(hwnd=None):
-    """Send BlueStacks' Ctrl+Shift+F8 mouse-lock chord.
+    """Send the emulator's mouse-lock chord (Ctrl+Shift+F8).
 
     keybd_event is system-wide: it lands on whatever window owns keyboard
     focus. Firing it while the game is not in front planted a real Ctrl+Shift

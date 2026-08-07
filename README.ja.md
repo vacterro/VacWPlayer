@@ -1,6 +1,6 @@
 🇪🇪 [Eesti](README.ee.md) | 🇷🇺 [Русский](README.ru.md) | 🇺🇸 [English](README.md) | 👴 [Дед-Мод](README.ded.md) | 🇯🇵 **日本語**
 
-# WildRiftAssistant
+# VacWPlayer
 
 **v0.2.3** — [変更履歴](CHANGELOG.md)
 
@@ -25,7 +25,7 @@ Wild Rift ツールキット全体を覆うヴィンテージ風GUI：ペダル�
 
 ## 起動
 
-**`WildRiftAssistant.vbs`** をダブルクリック（コンソール非表示で静かに起動）。エラー表示が必要なら **`WildRiftAssistant.bat`** を手動実行（`--check` 診断対応）。どちらもvenvを自動検出。
+**`VacWPlayer.vbs`** をダブルクリック（コンソール非表示で静かに起動）。エラー表示が必要なら **`VacWPlayer.bat`** を手動実行（`--check` 診断対応）。どちらもvenvを自動検出。
 手動の場合は:
 
 ```

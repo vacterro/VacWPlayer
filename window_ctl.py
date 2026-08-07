@@ -28,7 +28,7 @@ def maximize_and_focus(hwnd):
 
 def switch_to(hwnd):
     """Bring an already-open window to the front for the death window, without
-    forcing its size - unlike BlueStacks (always maximized), a work window
+    forcing its size - unlike the game window (always maximized), a work window
     (editor, browser, etc.) should reappear at whatever size/position it was
     left at, just un-minimized if needed."""
     if win32gui.IsIconic(hwnd):

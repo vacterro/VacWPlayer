@@ -1,6 +1,6 @@
 🇪🇪 **Eesti** | 🇷🇺 [Русский](README.ru.md) | 🇺🇸 [English](README.md) | 👴 [Дед-Мод](README.ded.md) | 🇯🇵 [日本語](README.ja.md)
 
-# WildRiftAssistant
+# VacWPlayer
 
 **v0.2.3** — [Muudatused](CHANGELOG.md)
 
@@ -25,7 +25,7 @@
 
 ## Käivitamine
 
-Topeltklõps **`WildRiftAssistant.vbs`** (varjatud konsool, käivitub vaikselt) või käivita **`WildRiftAssistant.bat`** käsitsi (nähtavad vead / `--check`). Mõlemad leiavad venv-i ise.
+Topeltklõps **`VacWPlayer.vbs`** (varjatud konsool, käivitub vaikselt) või käivita **`VacWPlayer.bat`** käsitsi (nähtavad vead / `--check`). Mõlemad leiavad venv-i ise.
 Või käsitsi:
 
 ```
@@ -53,4 +53,4 @@ Kolm konfiguratsiooni, igaühel üks töö: `config.json` (kombod, režiim, lül
 
 Komadega eraldatud klahvid. `{Space}`, `f`, tähed. Oskuste tähed q/w/e/r valatakse Shiftiga (enda peale valamine), kui "Shift-cast" pole välja lülitatud. Lisa `:ms` klahvile, et määrata selle sammu viivitus; vastasel juhul rakendub kombo intervall. Hoidke päästikut all, et tsüklit korrata.
 
-<!-- source-digest: README.md sha256:64a14fd91deee05c -->
+<!-- source-digest: README.md sha256:0fda76391edf1020 -->

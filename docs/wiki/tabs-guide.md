@@ -1,4 +1,4 @@
-# WildRiftAssistant — Tabs Guide
+# VacWPlayer — Tabs Guide
 
 > Draft page from saiwiki (WIKI-003). Target location suggestion: `docs/wiki/tabs-guide.md`.
 

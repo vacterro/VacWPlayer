@@ -1,4 +1,4 @@
-# WildRiftAssistant GUI deps (install into the project venv)
+# VacWPlayer GUI deps (install into the project venv)
 mss
 opencv-python
 numpy
