@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.3.3 (2026-08-07)
+- Refactor: extracted shared template-poller engine (`poller_engine.py`) — accept/surrender/autocontinue now share the poll loop (single-instance, parent watchdog, config mtime reload, window acquisition, template-match click). Net -183 lines, behavior preserved, +1 structural test (176 suite).
+- Docs: architecture.md notes `poller_engine`.
+
 ## v0.3.2 (2026-08-07)
 - Docs: fixed doc-drift cluster from MARKHUNT — README + 4 locale mirrors (ded/ee/ja/ru) back to v0.3.1, per-champion tabs (Ryze/Xin removed), 5 configs, missing Buy/Accept/Surrender/Minimap features; docs/wiki: 10 tabs (no lazy load), 33-language combobox, mutex-based single-instance, surrender_config.json reference, Surrender tab section. saiwiki kitchen docs re-synced; CHANGELOG + saiwiki OUTBOX encoding repaired.
 

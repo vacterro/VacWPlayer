@@ -1,13 +1,12 @@
-import json
+"""Post-game continue poller. Watches region-grouped buttons via PrintWindow capture."""
+
 import os
-import time
+import sys
 
 import cv2
-import win32gui
 
 import capture
-import engine_config
-import single_instance
+import poller_engine
 import window_ctl
 
 BASE = os.path.dirname(__file__)
@@ -15,12 +14,7 @@ CONFIG_PATH = os.path.join(BASE, "autocontinue_config.json")
 
 
 def load_config():
-    try:
-        with open(CONFIG_PATH) as f:
-            return json.load(f)
-    except (OSError, ValueError) as e:
-        print("FATAL: failed to load autocontinue_config.json: %s" % e)
-        raise SystemExit(1)
+    return poller_engine.load_config(CONFIG_PATH, "autocontinue_config.json")
 
 
 def match_score(region_bgr, template_gray):
@@ -53,82 +47,51 @@ def build_buttons(cfg):
     return buttons
 
 
-def main(replace=False):
-    single_instance.ensure_single_instance("autocontinue", replace=replace)
-    single_instance.start_parent_watchdog()
-    window_ctl.set_dpi_aware()
-
-    cfg_last_mtime = os.path.getmtime(CONFIG_PATH)
-    cfg = load_config()
-    hwnd = None
-    loaded_window_title = cfg["window_title"]
+def _build_targets(cfg):
     buttons = build_buttons(cfg)
-    region_groups = group_by_region(buttons)
-    loaded_buttons_raw = cfg["buttons"]
-    print(f"watching for window '{loaded_window_title}' "
-          f"across {len(region_groups)} screen region(s), ctrl+c to stop")
+    return buttons, group_by_region(buttons)
 
-    while True:
-        try:
-            cfg_last_mtime, changed = engine_config.mtime_changed(CONFIG_PATH, cfg_last_mtime)
-            if changed:
-                cfg = load_config()
 
-            if cfg["window_title"] != loaded_window_title:
-                loaded_window_title = cfg["window_title"]
-                hwnd = None
-                print(f"window title changed, now watching '{loaded_window_title}'")
+def _startup(cfg, targets):
+    return ("watching for window '%s' across %d screen region(s), "
+            "ctrl+c to stop" % (cfg["window_title"], len(targets[1])))
 
-            if not hwnd or not win32gui.IsWindow(hwnd):
-                try:
-                    hwnd = capture.find_window(cfg["window_title"])
-                    print(f"acquired hwnd={hwnd}")
-                except RuntimeError:
-                    time.sleep(1.0)
-                    continue
 
-            if cfg["buttons"] != loaded_buttons_raw:
-                buttons = build_buttons(cfg)
-                region_groups = group_by_region(buttons)
-                loaded_buttons_raw = cfg["buttons"]
-                print(f"reloaded button config ({len(buttons)} buttons, {len(region_groups)} regions)")
+def _reload(cfg, targets):
+    return "reloaded button config (%d buttons, %d regions)" % (len(targets[0]), len(targets[1]))
 
-            if capture.is_minimized(hwnd):
-                time.sleep(cfg["poll_interval_sec"])
-                continue
 
-            clicked = False
-            for region, group in region_groups.items():
-                needs_scan = any(b["tmpl"] is not None for b in group)
-                crop = capture.grab_region(hwnd, region) if needs_scan else None
-                for b in group:
-                    x0, y0, x1, y1 = region
-                    cx, cy = (x0 + x1) // 2, (y0 + y1) // 2
-                    if b["tmpl"] is None:
-                        print(f"blind-click '{b['name']}' at ({cx},{cy})")
-                        window_ctl.click_at(hwnd, cx, cy, button="left")
-                        clicked = True
-                        break
-                    score = match_score(crop, b["tmpl"])
-                    if score >= b["threshold"]:
-                        print(f"matched '{b['name']}' (score={score:.2f}), clicking ({cx},{cy})")
-                        window_ctl.click_at(hwnd, cx, cy, button="left")
-                        clicked = True
-                        break
-                if clicked:
-                    break
+def _scan(hwnd, cfg, targets):
+    buttons, region_groups = targets
+    for region, group in region_groups.items():
+        needs_scan = any(b["tmpl"] is not None for b in group)
+        crop = capture.grab_region(hwnd, region) if needs_scan else None
+        for b in group:
+            x0, y0, x1, y1 = region
+            cx, cy = (x0 + x1) // 2, (y0 + y1) // 2
+            if b["tmpl"] is None:
+                print("blind-click '%s' at (%d,%d)" % (b["name"], cx, cy))
+                window_ctl.click_at(hwnd, cx, cy, button="left")
+                return True
+            score = match_score(crop, b["tmpl"])
+            if score >= b["threshold"]:
+                print("matched '%s' (score=%.2f), clicking (%d,%d)" % (b["name"], score, cx, cy))
+                window_ctl.click_at(hwnd, cx, cy, button="left")
+                return True
+    return False
 
-            time.sleep(cfg["click_cooldown_sec"] if clicked else cfg["poll_interval_sec"])
-        except KeyboardInterrupt:
-            print("stopped")
-            break
-        except Exception as e:
-            print(f"lost window ({e}); will try to re-acquire...")
-            hwnd = None
-            time.sleep(1.0)
+
+def main(replace=False):
+    poller_engine.run_poller(
+        "autocontinue", CONFIG_PATH, "autocontinue_config.json",
+        build_targets=_build_targets,
+        scan_targets=_scan,
+        startup=_startup,
+        reload_msg=_reload,
+        poll_default=0.6,
+        replace=replace,
+    )
 
 
 if __name__ == "__main__":
-    import sys
-
     main(replace="--replace" in sys.argv)

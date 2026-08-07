@@ -13,6 +13,7 @@ import accept
 import autocontinue
 import capture
 import deathwatch
+import poller_engine
 import process_runner
 import surrender
 
@@ -125,3 +126,16 @@ def test_accept_build_templates_skips_missing():
     cfg = {"templates": [{"name": "Ghost", "file": "templates/nonexistent.png"}]}
     loaded = accept.build_templates(cfg)
     assert loaded == []
+
+
+def test_engines_share_poller(monkeypatch):
+    calls = []
+    monkeypatch.setattr(poller_engine, "run_poller", lambda *a, **k: calls.append((a, k)))
+    accept.main()
+    surrender.main()
+    autocontinue.main()
+    assert len(calls) == 3
+    names = {c[0][0] for c in calls}
+    assert names == {"accept", "surrender", "autocontinue"}
+    configs = {c[0][2] for c in calls}
+    assert configs == {"accept_config.json", "surrender_config.json", "autocontinue_config.json"}

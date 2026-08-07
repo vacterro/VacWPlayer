@@ -82,6 +82,9 @@ main.pyw  (TkinterDnD root, single instance via single_instance.py)
   (200ms idle / 15ms active dynamic timer), AFK farm logic, helper funcs.
 - `process_runner.ProcessRunner`: polls subprocess output; `finally`-guaranteed
   `done` event (fix T-009).
+- `poller_engine`: shared template-poller loop for accept/surrender/autocontinue
+  (single-instance, parent watchdog, config mtime reload, window acquisition,
+  template-match click).
 - `key_blocker`: global KBDLL low-level hook (`ctypes`), blocks configured VK set,
   pedal blocking window (used by deathwatch mouse lock / death handling).
 - `window_ctl`: DPI awareness, minimize/maximize/focus/click-at, `press_key_burst`.

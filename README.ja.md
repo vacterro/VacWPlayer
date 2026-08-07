@@ -2,7 +2,7 @@
 
 # VacWPlayer
 
-**v0.3.2** — [変更履歴](CHANGELOG.md)
+**v0.3.3** — [変更履歴](CHANGELOG.md)
 
 Wild Rift ツールキット全体を覆うヴィンテージ風GUI：ペダルコンボ、チャンピオン別ローテーション、死亡時の自動最小化、試合後の自動継続 — 手作業でスクリプトを編集せずに使える「スーパーAHK」。
 
@@ -52,4 +52,4 @@ GUI自身はキーをフックしない — `config.json` から `ahk_generator.
 
 カンマ区切りのキー列。`{Space}`、`f`、英字。能力キー q/w/e/r は「Shift-cast」がオフでなければシフトキャスト（自キャスト）。キーに `:ms` を付けるとそのステップ固有の遅延。それ以外はコンボ間隔が適用。トリガーペダルを押しっぱなしでループ。
 
-<!-- source-digest: README.md sha256:b5ec17d1ddcef120 -->
+<!-- source-digest: README.md sha256:1d45c88a5c4063cc -->
