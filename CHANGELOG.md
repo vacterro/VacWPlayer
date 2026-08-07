@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.3.0 (2026-08-07)
+- Config resilience: atomic writes with `.bak` backup before every save; corrupt config.json restored from `.bak` on load (messagebox notifies user); light structural validation with stderr warnings; corrupt-without-backup falls back to defaults with a warning instead of silent data loss.
+- Tests: `config_store` unit coverage (read/atomic-write/restore/validate) + `load_config` corrupt/missing paths — 21 tests. Suite 146 → 167.
+
 ## v0.2.9 (2026-08-07)
 - Tests: MinimapTab dynamic-slot logic (merge/order/add/remove/get_data) — 10 tests via Tk-free stub. Feature itself shipped in initial release; this closes the coverage gap.
 - Suite 136 → 146.

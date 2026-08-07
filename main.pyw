@@ -10,8 +10,9 @@ import traceback
 import shutil
 from datetime import datetime
 from tkinterdnd2 import TkinterDnD
+import config_store
 
-VERSION = "0.2.9"
+VERSION = "0.3.0"
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 PARENT = os.path.dirname(BASE)
@@ -63,6 +64,8 @@ from locales import Locale
 CONFIG_FILE = os.path.join(BASE, "config.json")
 GENERAL = "General"
 
+config_warning = None
+
 
 def default_config():
     return {
@@ -84,13 +87,30 @@ def default_config():
 
 
 def load_config():
+    global config_warning
     cfg = default_config()
-    try:
-        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-            on_disk = json.load(f)
-    except (OSError, ValueError):
+    data, err = config_store.read_raw(CONFIG_FILE)
+    if err == "missing":
+        config_warning = None
         return cfg
+    if err == "corrupt":
+        if config_store.restore_backup(CONFIG_FILE):
+            data, err = config_store.read_raw(CONFIG_FILE)
+            if err is None:
+                print("config_store: config.json corrupt, restored from .bak")
+                config_warning = "restored"
+                return load_config_merge(data, cfg)
+        print("config_store: config.json corrupt, no usable .bak, using defaults")
+        config_warning = "corrupt"
+        return cfg
+    config_warning = None
+    cfg = load_config_merge(data, cfg)
+    for problem in config_store.validate_config(data):
+        print("config_store: config.json warning: %s" % problem, file=sys.stderr)
+    return cfg
 
+
+def load_config_merge(on_disk, cfg):
     if "mode" not in on_disk:
         ryze_on = on_disk.get("ryze", {}).get("enabled", True)
         xin_on = on_disk.get("xin", {}).get("enabled", False)
@@ -132,9 +152,7 @@ def load_config():
 
 
 def save_config(config):
-    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-        json.dump(config, f, indent=4)
-        f.write("\n")
+    config_store.atomic_write(CONFIG_FILE, config)
 
 
 def display_name(key, entry):
@@ -167,6 +185,7 @@ class VacWPlayer:
         self.root.bind("<<AutoSave>>", self._on_auto_save)
         self.root.bind("<<ApplyStart>>", lambda e: self.apply_and_start())
         self._auto_save_timer = None
+        self._show_config_warning()
 
         bar = tk.Frame(self.root, bg=TOKENS["background"])
         bar.pack(side="bottom", fill="x", padx=4, pady=(0, 4))
@@ -446,6 +465,20 @@ class VacWPlayer:
                                    fg=TOKENS["success"])
         except OSError as e:
             messagebox.showerror(Locale.tr("backup_failed"), str(e))
+
+    def _show_config_warning(self):
+        if config_warning == "corrupt":
+            messagebox.showwarning(
+                Locale.tr("config_error_title", fallback="Config Error"),
+                Locale.tr("config_corrupt_no_backup",
+                          fallback="config.json was unreadable and no usable "
+                                   "backup was found. Settings were reset to defaults."))
+        elif config_warning == "restored":
+            messagebox.showinfo(
+                Locale.tr("config_restored_title", fallback="Config Restored"),
+                Locale.tr("config_restored",
+                          fallback="config.json was unreadable; restored from "
+                                   "the last good backup (.bak)."))
 
     def _rebuild_ui(self):
         if self.tab_death:
