@@ -810,9 +810,9 @@ def _gen_hotkeys(a, target_exe, toggles, combos, minimap, afk_k):
         a.append("return")
 
     if toggles.get("space_spam", True):
+        # Space is the attack key - it must NOT release the move-hold or touch
+        # the PVP combo/movement. Attack while moving keeps both going.
         a.append("*Space::")
-        if toggles.get("release_toggle_on_keys", False):
-            a.append("    ReleaseMoveToggle()")
         a.append("    if (!SpaceActive) {")
         a.append("        SpaceActive := true")
         a.append("        SendInput {Space}")
@@ -863,9 +863,16 @@ def _gen_hotkeys(a, target_exe, toggles, combos, minimap, afk_k):
         # autobuy ~b (a different #IfWinActive context): the plain key keeps
         # its own handler, this stack only covers the keys nobody intercepts.
         #
-        # B (recall), V (ping), A (attack-move) ALWAYS release the toggle-hold:
-        # pressing any of them stands the champion still no matter what.
-        for k in ("b", "v", "a"):
+        # Untoggle keys (configurable via toggles['untoggle_keys'], default
+        # "a,v" - attack-move and ping): pressing one stands the champion still
+        # by releasing the LMB toggle-hold. 'b' is NOT part of this set - it is
+        # the dedicated recall-stop handler below (stops the combo too).
+        untoggle_keys = []
+        for k in str(toggles.get("untoggle_keys", "a,v")).split(","):
+            k = (k or "").strip().lower()
+            if k and k != "b" and _is_plain_key(k):
+                untoggle_keys.append(k)
+        for k in untoggle_keys:
             a.append("~*" + _sc_key(k) + "::")
             a.append("    ReleaseMoveToggle()")
             a.append("return")
@@ -883,6 +890,19 @@ def _gen_hotkeys(a, target_exe, toggles, combos, minimap, afk_k):
             a.append("    ReleaseMoveToggle()")
             a.append("return")
             a.append("")
+
+    # B (recall): full stop so the recall lands. Every running combo's spam is
+    # killed and the move-hold released; the key still passes through to the
+    # game (~), so pressing B while PVP is on recalls instead of fighting on.
+    a.append("~*sc030::")
+    for c in combos:
+        a.append("    P_" + c["tag"] + "_Held := false")
+        a.append("    Step_" + c["tag"] + " := 0")
+    a.append("    MoveRefs := 0")
+    a.append("    ReleaseMoveToggle()")
+    a.append("    CheckMovement()")
+    a.append("return")
+    a.append("")
 
     guards = _guarded_triggers(toggles, combos, minimap, afk_k)
     guarded_bases = {b for _, b in guards}
@@ -1250,7 +1270,7 @@ def _gen_helper_funcs(a, combos, afk_k, target_exe, toggles):
     a.append("")
     a.append("ReleaseMoveToggle() {")
     a.append("    global MoveToggle")
-    # Pressing any action key (ability, summoner, recall, item) cancels the LMB
+    # Pressing an untoggle key (default a/v, configurable) cancels the LMB
     # toggle-hold so the cast lands while the champion stands still. Only the
     # toggle is dropped - combo move-hold (MoveRefs) and LMB press-hold keep
     # their own movement.

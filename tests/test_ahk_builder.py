@@ -38,6 +38,158 @@ def test_reset_state_untoggles_pvp_and_toggle_combos():
     assert "P_ryze_pvp_Held := false" in script
 
 
+def test_manual_aim_release_only_when_checkbox_on():
+    """Manual-aim ability keys release the move-hold ONLY when
+    release_toggle_on_keys is on, and never touch combo flags."""
+    base = {"mode": "general", "toggles": {"mouse_remap": True,
+                                           "mouse_toggle_hold": True,
+                                           "manual_aim_block": True},
+            "combos": []}
+
+    cfg_on = {"mode": "general",
+              "toggles": {**base["toggles"], "release_toggle_on_keys": True},
+              "combos": []}
+    script_on, _ = generate_script(cfg_on)
+    q = script_on[script_on.index("*sc010::"):]
+    q = q[:q.index("return") + len("return")]
+    assert "ReleaseMoveToggle" in q          # q releases the hold when checkbox on
+    assert "P_" not in q                      # never touches combo flags
+
+    cfg_off = {"mode": "general",
+               "toggles": {**base["toggles"], "release_toggle_on_keys": False},
+               "combos": []}
+    script_off, _ = generate_script(cfg_off)
+    q_off = script_off[script_off.index("*sc010::"):]
+    q_off = q_off[:q_off.index("return") + len("return")]
+    assert "ReleaseMoveToggle" not in q_off   # off -> no release on abilities
+
+
+def test_item_keys_release_only_when_checkbox_on():
+    """The 1-7/G release stack is gated on release_toggle_on_keys too."""
+    base_toggles = {"mouse_remap": True, "mouse_toggle_hold": True}
+    cfg_on = {"mode": "general", "toggles": {**base_toggles,
+                                             "release_toggle_on_keys": True},
+              "combos": []}
+    script_on, _ = generate_script(cfg_on)
+    g = script_on[script_on.index("~*sc022::"):]
+    g = g[:g.index("return") + len("return")]
+    assert "ReleaseMoveToggle" in g
+
+    cfg_off = {"mode": "general", "toggles": {**base_toggles,
+                                              "release_toggle_on_keys": False},
+               "combos": []}
+    script_off, _ = generate_script(cfg_off)
+    assert "~*sc022::" not in script_off or "ReleaseMoveToggle" not in \
+        script_off[script_off.index("~*sc022::"):script_off.index("~*sc022::") + 60]
+
+
+def test_untoggle_keys_release_regardless_of_checkbox():
+    """The configurable untoggle keys (a/v) release the move-hold whether or
+    not release_toggle_on_keys is on, and never clear combo flags."""
+    for on in (True, False):
+        cfg = {"mode": "general",
+               "toggles": {"mouse_remap": True, "mouse_toggle_hold": True,
+                           "release_toggle_on_keys": on},
+               "combos": []}
+        script, _ = generate_script(cfg)
+        a = script[script.index("~*sc01E::"):]
+        a = a[:a.index("return") + len("return")]
+        assert "ReleaseMoveToggle" in a
+        assert "P_" not in a
+
+
+def test_space_never_releases_move_or_stops_pvp():
+    """Space is the attack key: it must NOT release the move-hold or touch the
+    PVP combo - even with release_toggle_on_keys enabled. Attack while moving
+    keeps the PVP hold and movement going."""
+    config = {
+        "mode": "general",
+        "toggles": {"mouse_remap": True, "mouse_toggle_hold": True,
+                    "release_toggle_on_keys": True, "space_spam": True},
+        "combos": [],
+    }
+    script, _ = generate_script(config)
+    space = script[script.index("*Space::"):]
+    space = space[:space.index("return") + len("return")]
+    assert "ReleaseMoveToggle" not in space
+    assert "SendInput {Space}" in space
+
+
+def test_release_move_toggle_configurable_keys_default_a_v():
+    """Untoggle keys are user-configurable (toggles['untoggle_keys']), default
+    a,v - they release the move-hold. 'b' is the dedicated recall-stop, NOT an
+    untoggle key: pressing B kills combo spam + movement so the recall lands."""
+    config = {
+        "mode": "general",
+        "toggles": {"mouse_remap": True, "mouse_toggle_hold": True},
+        "combos": [],
+    }
+    script, _ = generate_script(config)
+    # default untoggle keys a (sc01E) and v (sc02F) release the hold
+    assert "~*sc01E::" in script  # a
+    assert "~*sc02F::" in script  # v
+    # b (sc030) is the recall-stop: it clears movement AND the combos
+    b = script[script.index("~*sc030::"):]
+    b = b[:b.index("return") + len("return")]
+    assert "MoveRefs := 0" in b
+    assert "ReleaseMoveToggle()" in b
+    assert "CheckMovement()" in b
+
+
+def test_release_move_toggle_custom_keys():
+    config = {
+        "mode": "general",
+        "toggles": {"mouse_remap": True, "mouse_toggle_hold": True,
+                    "untoggle_keys": "b,v,q"},
+        "combos": [],
+    }
+    script, _ = generate_script(config)
+    # 'b' is reserved for the recall-stop regardless of untoggle_keys
+    assert "~*sc030::" in script  # recall-stop
+    assert "MoveRefs := 0" in script[script.index("~*sc030::"):]
+    # v and q join the untoggle stack
+    assert "~*sc02F::" in script  # v
+    assert "~*sc010::" in script  # q
+    # a must be gone from the untoggle stack when the user drops it
+    a_idx = script.find("~*sc01E::")
+    if a_idx != -1:
+        tail = script[a_idx:script.index("return", a_idx)]
+        assert "ReleaseMoveToggle" not in tail
+
+
+def test_release_move_toggle_empty_config_generates_no_stack():
+    config = {
+        "mode": "general",
+        "toggles": {"mouse_remap": True, "mouse_toggle_hold": True,
+                    "untoggle_keys": ""},
+        "combos": [],
+    }
+    script, _ = generate_script(config)
+    assert "~*sc01E::" not in script
+    # the recall-stop on b is always generated, empty untoggle or not
+    assert "~*sc030::" in script
+    assert "MoveRefs := 0" in script
+
+
+def test_b_recall_stops_pvp_combo_and_move():
+    """Pressing B during a running PVP combo clears the combo flags and the
+    movement hold, so the recall lands instead of the champion fighting on."""
+    config = {
+        "mode": "ryze",
+        "toggles": {},
+        "champions": {
+            "ryze": {"trigger_pvp": "F15", "keys_pvp": "q,w,e",
+                     "move_when_pressed_pvp": True},
+        },
+    }
+    script, _ = generate_script(config)
+    b = script[script.index("~*sc030::"):]
+    b = b[:b.index("return") + len("return")]
+    assert "P_ryze_pvp_Held := false" in b
+    assert "Step_ryze_pvp := 0" in b
+    assert "MoveRefs := 0" in b
+
+
 def _base_config():
     return {
         "mode": "general",
@@ -59,14 +211,14 @@ def test_no_conflicts_on_clean_render():
 
 
 def test_fixed_hotkey_collision_flagged():
-    # A combo bound to "b" collides with the ~*b release-move handler
-    # (same sc030 base in the same #IfWinActive context). validate_config
-    # never sees the release handler - only the post-generation scan does.
+    # A combo bound to "a" collides with the ~*a untoggle handler (same sc01E
+    # base in the same #IfWinActive context). validate_config never sees the
+    # untoggle handler - only the post-generation scan does.
     config = _base_config()
-    config["combos"].append({"trigger": "b", "keys": "q,e", "interval": 50})
+    config["combos"].append({"trigger": "a", "keys": "q,e", "interval": 50})
     script, _ = generate_script(config)
     warnings = check_hotkey_conflicts(script)
-    assert any("sc030" in w and "conflict" in w for w in warnings)
+    assert any("sc01E" in w and "conflict" in w for w in warnings)
 
 
 def test_sc_code_and_letter_same_hotkey():

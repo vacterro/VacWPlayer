@@ -66,8 +66,8 @@ def test_chain_duplicate_hotkey_does_not_replace_running(monkeypatch):
     no launch, clear diagnostic."""
     intruded = _chain_setup(monkeypatch)
     cfg = _base_cfg()
-    # trigger 'b' collides with the fixed ~*b release-move handler
-    cfg["combos"].append({"trigger": "b", "keys": "q,e", "interval": 50})
+    # trigger 'a' collides with the ~*a untoggle handler (default set a,v)
+    cfg["combos"].append({"trigger": "a", "keys": "q,e", "interval": 50})
 
     ok, msg = ag.generate_and_run(cfg)
 

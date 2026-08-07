@@ -4,6 +4,7 @@ from tkinter import ttk, messagebox
 
 from theme import (VintageButton, VintageLabel, VintageEntry,
                    TOKENS, FONT_SM)
+from tabs.death_tab import ToolTip
 from locales import Locale
 
 EMULATOR_EXES = [
@@ -36,6 +37,7 @@ TOGGLE_DEFAULTS = {
     "mouse_move_instead_hold": False,
     "mouse_toggle_hold": False,
     "release_toggle_on_keys": False,
+    "untoggle_keys": "a,v",
     "keep_movement_on_death": False,
     "rmb_hold_pvp": True,
     "space_spam": True,
@@ -88,6 +90,8 @@ class MainTab(tk.Frame):
         self.var_toggle_hold.trace_add("write", self._sync_release_on_keys)
         self.var_release_on_keys = tk.BooleanVar(value=toggles["release_toggle_on_keys"])
         self.var_release_on_keys.trace_add("write", self._auto_save)
+        self.var_untoggle_keys = tk.StringVar(value=toggles.get("untoggle_keys", "a,v"))
+        self.var_untoggle_keys.trace_add("write", self._auto_save)
         self.var_keep_move = tk.BooleanVar(value=toggles["keep_movement_on_death"])
         self.var_keep_move.trace_add("write", self._auto_save)
         self.var_rmb_pvp = tk.BooleanVar(value=toggles["rmb_hold_pvp"])
@@ -111,10 +115,18 @@ class MainTab(tk.Frame):
         self._chk_release_on_keys = _check(tog, Locale.tr("toggle_release_on_keys"), self.var_release_on_keys)
         self._chk_release_on_keys.grid(row=3, column=1, sticky="w", padx=(6, 0))
         self._sync_release_on_keys()
+        self._lbl_untoggle = VintageLabel(tog, text=Locale.tr("untoggle_keys_lbl"), font=FONT_SM)
+        self._lbl_untoggle.grid(row=4, column=0, sticky="w")
+        self._locale_widgets.append(("lbl", self._lbl_untoggle, "untoggle_keys_lbl"))
+        self.untoggle_entry = VintageEntry(tog, textvariable=self.var_untoggle_keys, width=10)
+        self.untoggle_entry.grid(row=4, column=1, sticky="w", padx=(6, 0))
+        # 'b' is reserved for the recall-stop and is filtered out of the field
+        # value - say so explicitly so typing it is not a silent no-op (T-101).
+        ToolTip(self.untoggle_entry, text="Keys releasing the move-hold, comma-separated. B is reserved for the recall-stop (full combo+move stop) and is ignored here.")
         self._chk_rmb_pvp = _check(tog, Locale.tr("toggle_rmb_pvp"), self.var_rmb_pvp)
-        self._chk_rmb_pvp.grid(row=4, column=0, columnspan=2, sticky="w")
+        self._chk_rmb_pvp.grid(row=5, column=0, columnspan=2, sticky="w")
         self._chk_keep_move = _check(tog, Locale.tr("toggle_keep_move_death"), self.var_keep_move)
-        self._chk_keep_move.grid(row=5, column=0, columnspan=2, sticky="w")
+        self._chk_keep_move.grid(row=6, column=0, columnspan=2, sticky="w")
         self._chk_space = _check(tog, Locale.tr("toggle_space_spam"), self.var_space)
         self._chk_space.grid(row=1, column=0, sticky="w")
         self._chk_afk = _check(tog, Locale.tr("toggle_anti_afk"), self.var_afk)
@@ -124,7 +136,7 @@ class MainTab(tk.Frame):
         self._chk_guard = _check(tog, Locale.tr("toggle_guard_outside"), self.var_guard)
         self._chk_guard.grid(row=2, column=1, sticky="w", padx=(6, 0))
         self._chk_exit_bs = _check(tog, Locale.tr("toggle_exit_bs_gone"), self.var_exit_bs)
-        self._chk_exit_bs.grid(row=6, column=0, columnspan=2, sticky="w")
+        self._chk_exit_bs.grid(row=7, column=0, columnspan=2, sticky="w")
         for w, k in ((self._chk_remap, "toggle_mouse_remap"),
                      (self._chk_move_instead_hold, "toggle_mouse_move_instead_hold"),
                      (self._chk_toggle_hold, "toggle_mouse_toggle_hold"),
@@ -184,8 +196,8 @@ class MainTab(tk.Frame):
                 widget.config(text=Locale.tr(key))
 
     def _sync_release_on_keys(self, *args):
-        """'Keys release hold' and 'Keep movement after death' only make sense
-        while LMB Toggles is on.
+        """'Keys release hold', 'Untoggle keys' and 'Keep movement after death'
+        only make sense while LMB Toggles is on.
 
         Grey them out (and force them off) when toggle-hold is disabled, so the
         config can never carry a release/keep flag that does nothing.
@@ -194,13 +206,18 @@ class MainTab(tk.Frame):
         if chk is None:
             return
         keep = getattr(self, "_chk_keep_move", None)
+        untoggle = getattr(self, "untoggle_entry", None)
         if self.var_toggle_hold.get():
             chk.config(state="normal")
+            if untoggle:
+                untoggle.config(state="normal")
             if keep:
                 keep.config(state="normal")
         else:
             chk.config(state="disabled")
             self.var_release_on_keys.set(False)
+            if untoggle:
+                untoggle.config(state="disabled")
             if keep:
                 keep.config(state="disabled")
                 self.var_keep_move.set(False)
@@ -249,6 +266,7 @@ class MainTab(tk.Frame):
             "mouse_move_instead_hold": self.var_move_instead_hold.get(),
             "mouse_toggle_hold": self.var_toggle_hold.get(),
             "release_toggle_on_keys": self.var_release_on_keys.get(),
+            "untoggle_keys": self.var_untoggle_keys.get().strip(),
             "keep_movement_on_death": self.var_keep_move.get(),
             "rmb_hold_pvp": self.var_rmb_pvp.get(),
             "space_spam": self.var_space.get(),

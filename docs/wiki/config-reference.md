@@ -35,7 +35,10 @@ change), lang toggle, quit. Loaded by `load_config()` with deep-merge over defau
 | Key | Default | Meaning |
 |---|---|---|
 | `mouse_remap` | true | Mouse remap active |
-| `space_spam` | true | Space spamming |
+| `mouse_toggle_hold` | false | LMB toggles move hold (click again to release) |
+| `release_toggle_on_keys` | false | 1-7,G release the move-hold when pressed |
+| `untoggle_keys` | `"a,v"` | Comma-separated keys that release the move-hold; `b` is reserved for the recall-stop |
+| `space_spam` | true | Space spamming (attack — never releases the hold) |
 | `space_interval` | 128 | ms between space presses |
 | `anti_afk_hotkey` | true | Ctrl+G anti-AFK toggle in game |
 | `anti_afk_interval` | 5000 | ms |

@@ -12,7 +12,7 @@ from datetime import datetime
 from tkinterdnd2 import TkinterDnD
 import config_store
 
-VERSION = "0.3.15"
+VERSION = "0.3.16"
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 PARENT = os.path.dirname(BASE)
@@ -279,7 +279,7 @@ class VacWPlayer:
         btn_stop = VintageButton(bar, text=Locale.tr("stop"), command=self.stop_engine, width=2)
         btn_stop.pack(side="right")
         self._bar_locale_widgets.append(("btn", btn_stop, "stop"))
-        self.status_lbl = VintageLabel(bar, text=Locale.tr("ready"), font=FONT_SM)
+        self.status_lbl = VintageLabel(bar, text=Locale.tr("ready"), font=FONT_SM, width=34, anchor="w")
         self.status_lbl.pack(side="right")
         btn_apply = VintageButton(bar, text=Locale.tr("apply_start"), command=self.apply_and_start, width=2)
         btn_apply.pack(side="right")
@@ -377,16 +377,19 @@ class VacWPlayer:
             self.notebook.select(tab_idx)
 
     def _restore_geometry(self):
+        # Window must be wide enough for the bottom button bar (~870px in RU
+        # with real labels) - 750 clipped the right-side buttons.
+        win_w, win_h = 920, 550
         pos = self.config.get("window", {}).get("position", "")
         try:
             x, y = (int(v) for v in pos.split(","))
         except (ValueError, AttributeError):
-            return "750x550"
+            return "%dx%d" % (win_w, win_h)
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
-        x = max(0, min(x, sw - 750))
-        y = max(0, min(y, sh - 550))
-        return "750x550+%d+%d" % (x, y)
+        x = max(0, min(x, max(0, sw - win_w)))
+        y = max(0, min(y, max(0, sh - win_h)))
+        return "%dx%d+%d+%d" % (win_w, win_h, x, y)
 
     def _remember_window(self):
         try:
@@ -560,10 +563,17 @@ class VacWPlayer:
         running = ok or ahk_generator.is_running()
         if not ok and running:
             msg = msg + " - last-good AHK still running"
-        self.status_lbl.config(text=msg,
+        self.status_lbl.config(text=self._short_status(msg),
                                fg=TOKENS["success"] if ok else TOKENS["danger"])
         self._update_ahk_dot(running)
         self._applying = False
+
+    @staticmethod
+    def _short_status(msg, limit=64):
+        """Cap the one-line status text so a long warning/dropped list cannot
+        push the bottom bar's buttons out of the window."""
+        msg = str(msg)
+        return msg if len(msg) <= limit else msg[:limit - 1] + "…"
 
     def stop_engine(self):
         self._engine_should_run = False
@@ -592,7 +602,8 @@ class VacWPlayer:
 
     def _watchdog_done(self, ok, msg):
         running = ok or ahk_generator.is_running()
-        self.status_lbl.config(text=Locale.tr("auto_restarted") + " " + msg, fg=TOKENS["warning"])
+        self.status_lbl.config(text=self._short_status(Locale.tr("auto_restarted") + " " + msg),
+                               fg=TOKENS["warning"])
         self._update_ahk_dot(running)
         self._applying = False
 

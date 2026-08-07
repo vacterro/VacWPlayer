@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.3.16 (2026-08-07)
+- Fix: B (recall) now fully stops a running PVP combo + the move-hold so the recall lands — combo flags and step counters are cleared, the move-hold is released, and the key still passes through to the game. Previously the combo kept spamming through the recall.
+- Fix: Space (attack) no longer releases the move-hold or stops PVP — attack while moving keeps the PVP hold and movement going. Space is a pass-through + space-spam trigger only.
+- Change: the keys that release the LMB move-hold are now configurable via `untoggle_keys` (comma-separated, default `a,v`); `b` is reserved for the recall-stop and is ignored in the field.
+- Change: the 1-7/G release stack only acts while `release_toggle_on_keys` is on; the configurable untoggle keys always release.
+- Fix: bottom button bar clipped at the default window size — default window 750x550 → 920x550 (geometry + clamp), status label capped at 64 chars so long warnings cannot push the buttons out.
+- Docs: `config-reference.md` gains `mouse_toggle_hold`/`release_toggle_on_keys`/`untoggle_keys` rows; `tabs-guide.md` documents B recall-stop, untoggle keys, Space-is-attack and the 920 window; EN locale gains `untoggle_keys_lbl`.
+- i18n: 29 saitranslate-owned locale bundles refreshed for the new keys (EE/QQ pipelines).
+- Tests: suite 320 → 328.
+
 ## v0.3.15 (2026-08-07)
 - Fix: AHK replacement is now transactional — the candidate script is rendered and validated in memory (parse `ValueError`, same-context hotkey duplicates = fatal, best-effort real-AHK syntax preflight on a temp copy) before the live script file is touched, the old runtime is stopped, or a launch happens. A rejected candidate never kills or clobbers the last-good runtime; the GUI's status dot reflects the actual runtime state instead of the apply result.
 - Fix: engine watchdog no longer auto-restarts in a loop — the PID scan's PowerShell query had a backtick before `$_.CommandLine` (treated as a command name → scan always returned an empty set) and a double-backslash `-like` pattern that never matched a real command line. Both replaced with plain member access + `re.escape` regex `-match`. Live-verified.
