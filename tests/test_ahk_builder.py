@@ -125,6 +125,26 @@ def test_parse_steps_comma_only_is_empty():
     assert parse_steps(",,,", 50) == []
 
 
+# --- modifier-order conflict canonicalization (SAIT-005 / T-080) ---------------
+
+def test_modifier_order_twins_flagged():
+    # ^!sc010 and !^sc010 are the same chord to AutoHotkey (exit 2 Duplicate hotkey).
+    warnings = check_hotkey_conflicts("^!sc010::\n  return\n!^sc010::\n  return")
+    assert len(warnings) == 1
+    assert "hotkey conflict" in warnings[0]
+
+
+def test_modifier_order_triple_variants_flagged():
+    warnings = check_hotkey_conflicts("^!+x::\n  return\n+^!x::\n  return")
+    assert len(warnings) == 1
+
+
+def test_lr_modifier_variants_stay_distinct():
+    # <^ (LControl) vs >^ (RControl) are different physical keys - no conflict.
+    warnings = check_hotkey_conflicts("<^sc010::\n  return\n>^sc010::\n  return")
+    assert warnings == []
+
+
 def test_generate_script_rejects_malformed_combo():
     cfg = {
         "mode": "general",

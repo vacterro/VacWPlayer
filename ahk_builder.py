@@ -1463,10 +1463,11 @@ def _canon_hotkey(hotkey):
     """Normalize an AHK hotkey string to a comparable (mods, base) pair.
 
     Strips behaviour-only prefixes (~, *, $) but keeps true modifiers
-    (^, !, +, #, <>, L/R variants), folds letter/digit triggers into
-    their sc-code base, and lowercases. Hotkeys that collide on the
-    (mods, base) pair are the same hotkey to AutoHotkey - one silently
-    shadows the other.
+    (^, !, +, #, <>, L/R variants), canonicalizes their order via
+    `_canon_mods` (AHK treats `^!x` and `!^x` as the same chord), folds
+    letter/digit triggers into their sc-code base, and lowercases.
+    Hotkeys that collide on the (mods, base) pair are the same hotkey to
+    AutoHotkey - one silently shadows the other.
     """
     h = (hotkey or "").strip()
     mods = ""
@@ -1481,7 +1482,27 @@ def _canon_hotkey(hotkey):
         base = _SC_TO_CANON[base.lower()]
     elif base.lower().startswith("sc") and base.lower()[2:] in _SC_TO_CANON:
         base = _SC_TO_CANON[base.lower()[2:]]
-    return mods, base.lower()
+    return _canon_mods(mods), base.lower()
+
+
+def _canon_mods(mods):
+    """Canonicalize a hotkey's modifier string.
+
+    AutoHotkey treats `^!x` and `!^x` as the same chord, so comparing the
+    modifier string as written would miss that conflict. Sort the modifier
+    tokens; left/right variants (<^ vs >^) are distinct physical keys and
+    stay distinct, so the `<`/`>` token is kept glued to its modifier.
+    """
+    tokens = []
+    i = 0
+    while i < len(mods):
+        if mods[i] in "<>" and i + 1 < len(mods):
+            tokens.append(mods[i:i + 2])
+            i += 2
+        else:
+            tokens.append(mods[i])
+            i += 1
+    return "".join(sorted(tokens))
 
 
 def check_hotkey_conflicts(script):
