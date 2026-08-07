@@ -63,6 +63,7 @@ class SurrenderTab(tk.Frame):
 
         mon_enabled = cfg.get("monitor_enabled", False)
         self.monitor_var = tk.BooleanVar(value=mon_enabled)
+        self.monitor_var.trace_add("write", self._auto_save)
         self.chk_monitor = tk.Checkbutton(
             form, text=Locale.tr("enable_surrender_monitor"), variable=self.monitor_var,
             bg=TOKENS["background"], fg=TOKENS["textPrimary"], selectcolor=TOKENS["compareBack"],
@@ -242,6 +243,13 @@ class SurrenderTab(tk.Frame):
             self.runner.start(["--replace"])
         else:
             self.runner.stop()
+
+    def stop_all(self):
+        self.runner.stop()
+        try:
+            self.monitor_var.set(False)
+        except Exception:
+            pass
 
     def _tick(self):
         self.after(100, self._tick)

@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.2.4 (2026-08-07)
+- Hunt+fix wave: 5 defect tickets from 6-category sweep.
+  - P0: `_write_pid` OSError crashes app at startup (disk full/permission denied). Added error handling.
+  - HIGH: Surrender tab missing `stop_all()`, toggle_monitor didn't save state, quit/rebuild/stop skipped surrender engine. Fixed integration symmetry with death/auto/accept tabs.
+  - P1: `toggle_mouse_lock` return value discarded at both call sites. Logs warning on failure.
+  - P1: `taskkill` returncode unchecked in `_stop_pids`. Logs warning on non-zero.
+  - P1: `reset_defaults` bare `except Exception: pass` overwrote corrupt config silently. Split into FileNotFoundError (silent first-run) + JSONDecodeError/OSError (messagebox warning).
+
 ## v0.2.3 (2026-08-07)
 - digit_reader unit tests: white-text mask (saturation gate), column segmentation (merge/noise), glyph matching, read_number (synthetic digits, min-score, non-numeric). Coverage 16% -> 57%.
 

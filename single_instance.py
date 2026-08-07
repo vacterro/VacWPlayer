@@ -144,9 +144,12 @@ def _pid_file(name):
 
 
 def _write_pid(name):
-    os.makedirs(LOCK_DIR, exist_ok=True)
-    with open(_pid_file(name), "w") as f:
-        f.write(str(os.getpid()))
+    try:
+        os.makedirs(LOCK_DIR, exist_ok=True)
+        with open(_pid_file(name), "w") as f:
+            f.write(str(os.getpid()))
+    except OSError:
+        pass
 
 
 def _kill_previous_holder(name, timeout_sec=5):

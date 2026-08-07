@@ -11,7 +11,7 @@ import shutil
 from datetime import datetime
 from tkinterdnd2 import TkinterDnD
 
-VERSION = "0.2.3"
+VERSION = "0.2.4"
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 PARENT = os.path.dirname(BASE)
@@ -454,6 +454,8 @@ class WildRiftAssistant:
             self.tab_auto.stop_all()
         if self.tab_accept:
             self.tab_accept.stop_all()
+        if self.tab_surrender:
+            self.tab_surrender.stop_all()
         for tab in list(self.notebook.tabs()):
             w = self.notebook.nametowidget(tab)
             self.notebook.forget(tab)
@@ -603,6 +605,8 @@ class WildRiftAssistant:
             self.tab_auto.stop_all()
         if self.tab_accept:
             self.tab_accept.stop_all()
+        if self.tab_surrender:
+            self.tab_surrender.stop_all()
 
     # --- tray -------------------------------------------------------------------
     def _tray_image(self):
@@ -637,7 +641,7 @@ class WildRiftAssistant:
         if self.tray_icon:
             self.tray_icon.stop()
         self.collect_config()
-        for tab in (self.tab_death, self.tab_buy, self.tab_auto, self.tab_accept):
+        for tab in (self.tab_death, self.tab_buy, self.tab_auto, self.tab_accept, self.tab_surrender):
             if tab and hasattr(tab, "save"):
                 tab.save(silent=True)
         save_config(self.config)

@@ -129,7 +129,8 @@ def handle_death(hwnd, cfg, templates):
         # wr.ahk's NeedCleanup handles stuck LMB/RMB on focus return.
         if cfg.get("lock_window_resurrect"):
             print("unlocking mouse before minimizing...")
-            toggle_mouse_lock(hwnd)
+            if not toggle_mouse_lock(hwnd):
+                print("warning: mouse-lock toggle failed, mouse may remain locked")
 
         print(f"respawn in {n}s, minimizing for {wait:.1f}s")
         # Drop any button wr_runtime.ahk is still holding for the movement
@@ -190,7 +191,8 @@ def handle_death(hwnd, cfg, templates):
                     print(f"failed to click mid: {e}")
 
             if cfg.get("lock_window_resurrect"):
-                toggle_mouse_lock(hwnd)
+                if not toggle_mouse_lock(hwnd):
+                    print("warning: mouse-lock toggle failed after resurrect, mouse may remain locked")
         else:
             print("resurrect actions skipped: game not focused after restore")
     finally:

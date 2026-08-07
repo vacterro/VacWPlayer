@@ -146,7 +146,10 @@ class AutoContinueTab(tk.Frame):
         try:
             with open(self.cfg_path) as f:
                 cfg = json.load(f)
-        except Exception:
+        except FileNotFoundError:
+            cfg = {}
+        except (json.JSONDecodeError, OSError) as e:
+            messagebox.showwarning("Config Error", f"Could not load config: {e}\nUsing defaults.")
             cfg = {}
         self.poll_interval.set(str(cfg.get("poll_interval_sec", 0.6)))
         self.click_cooldown.set(str(cfg.get("click_cooldown_sec", 2.5)))

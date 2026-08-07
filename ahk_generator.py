@@ -131,8 +131,10 @@ def _stop_pids(pids, wait_ms=500):
     if not pids:
         return
     for pid in pids:
-        subprocess.run(["taskkill", "/F", "/PID", str(pid)],
+        r = subprocess.run(["taskkill", "/F", "/PID", str(pid)],
                        capture_output=True, creationflags=0x08000000)
+        if r.returncode != 0:
+            print(f"taskkill {pid} failed (code {r.returncode}): {r.stderr.decode().strip()}")
     # Wait briefly for processes to die
     if wait_ms:
         import time
