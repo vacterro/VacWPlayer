@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.2.9 (2026-08-07)
+- Tests: MinimapTab dynamic-slot logic (merge/order/add/remove/get_data) — 10 tests via Tk-free stub. Feature itself shipped in initial release; this closes the coverage gap.
+- Suite 136 → 146.
+
 ## v0.2.8 (2026-08-07)
 - Tests: ProcessRunner done-event path (child death -> "Stopped"/check_var False, stale-generation guard, line pump) — 4 tests.
 - Refactor: duplicated config mtime-reload check in all 4 engines extracted to shared `engine_config.mtime_changed` (accept/surrender/autocontinue/deathwatch).
