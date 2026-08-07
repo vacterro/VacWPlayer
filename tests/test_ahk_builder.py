@@ -1,4 +1,6 @@
-from ahk_builder import check_hotkey_conflicts, generate_script
+import pytest
+
+from ahk_builder import check_hotkey_conflicts, generate_script, parse_steps
 
 
 def test_v_and_a_keys_release_move_toggle():
@@ -92,4 +94,43 @@ def test_guard_context_duplicates_not_flagged():
 def test_modifier_distinct_not_conflict():
     warnings = check_hotkey_conflicts("*q::\n  return\n^q::\n  return")
     assert warnings == []
+
+
+# --- parse_steps key validation (SAIT-001 / T-078) -----------------------------
+
+def test_parse_steps_valid_keys():
+    steps = parse_steps("q,e:120,{Space}:200", 50)
+    assert steps == [("q", 50), ("e", 120), ("{Space}", 200)]
+
+
+def test_parse_steps_accepts_letters_digits_fkeys_named():
+    for k in ("q", "W", "5", "F13", "f24", "{Space}", "{Enter}", "{LButton}", "ц"):
+        assert parse_steps(k, 50) == [(k, 50)], k
+
+
+@pytest.mark.parametrize("keys", [
+    "q:",           # trailing colon -> send-name {q:}
+    "q:-100",       # negative delay -> send-name {q:-100}
+    "ц:{Space}:50",  # cyrillic glued to named key
+    "{Space",       # unterminated brace
+    "Space}",       # stray close brace
+    "q :e",         # space inside key
+])
+def test_parse_steps_rejects_invalid_keys(keys):
+    with pytest.raises(ValueError):
+        parse_steps(keys, 50)
+
+
+def test_parse_steps_comma_only_is_empty():
+    assert parse_steps(",,,", 50) == []
+
+
+def test_generate_script_rejects_malformed_combo():
+    cfg = {
+        "mode": "general",
+        "toggles": {"target_exe": "HD-Player.exe", "stop_key": "s"},
+        "combos": [{"trigger": "F13", "keys": "q:", "interval": 50}],
+    }
+    with pytest.raises(ValueError):
+        generate_script(cfg)
 

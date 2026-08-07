@@ -26,6 +26,10 @@ def parse_steps(keys_str, default_interval):
 
     The delay is the pause AFTER that key before the next step fires. A step
     without ':ms' uses the combo's interval.
+
+    Raises ValueError on a step whose key is not a valid AHK send-name, so a
+    malformed combo (e.g. 'q:', 'q:-100') surfaces as a loud error instead of
+    a script AutoHotkey silently loads but never fires (exit 0, no warning).
     """
     steps = []
     for raw in keys_str.split(","):
@@ -38,8 +42,31 @@ def parse_steps(keys_str, default_interval):
             head, tail = raw.rsplit(":", 1)
             if tail.isdigit() and head:
                 key, delay = head, int(tail)
+        if not _is_valid_step_key(key):
+            raise ValueError(
+                "invalid combo key %r (use letters, digits, F1-F24, or {named} keys)"
+                % key)
         steps.append((key, delay))
     return steps
+
+
+def _is_valid_step_key(key):
+    """True if `key` renders to a valid AHK send-name.
+
+    Whitelist: a single letter/digit (Cyrillic included - it maps to its
+    physical QWERTY key), F1-F24, or a braced named key ({Space}, {Enter},
+    {LButton}, ...). Anything else (multi-char junk like 'q:', 'q:-100')
+    would reach AutoHotkey as a send-name it silently ignores.
+    """
+    k = (key or "").strip()
+    if not k:
+        return False
+    if k.startswith("{") and k.endswith("}") and len(k) > 2:
+        inner = k[1:-1].strip()
+        return bool(re.fullmatch(r"[A-Za-z][A-Za-z0-9 ]*", inner))
+    if len(k) == 1:
+        return k.isalnum()
+    return bool(re.fullmatch(r"F(?:[1-9]|1[0-9]|2[0-4])", k, re.IGNORECASE))
 
 def _is_plain_key(trigger):
     """True for single keys usable with GetKeyState (no hotkey modifiers).

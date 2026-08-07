@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.3.11 (2026-08-07)
+- Fix: malformed combo keys rejected at generation — `parse_steps` now validates every step against an AHK send-name whitelist (letters/digits incl. Cyrillic, F1-F24, `{named}` keys) and raises a clear `ValueError` on junk like `q:`, `q:-100`, `ц:{Space}:50`. Previously these rendered as `{q:}`/`{q:-100}` send-names that AutoHotkey silently ignored (exit 0) — a dead combo with no error. Note: modifier-prefixed step keys (`!q`) were undocumented and are now rejected.
+- Tests: 11 new `parse_steps` regression tests (valid whitelist, 6 junk cases, comma-only, `generate_script` rejection). Suite 195 → 206.
+
 ## v0.3.10 (2026-08-07)
 - Tests: README mirror digest regression test (`tests/test_readme_digests.py`) — recomputes the normalized sha256 of `README.md` (CRLF→LF, `N.N.N`→`VERSION`) and asserts all 4 locale mirrors carry a matching `source-digest` marker; missing and stale markers fail distinctly. Guards the drift class fixed in v0.3.8 (mirrors silently stale, markers re-stamped to a value that no longer matched the source).
 
