@@ -23,6 +23,7 @@ GUI_MODULES = [
     "autocontinue",
     "deathwatch",
     "ahk_generator",
+    "tabs.bind_button",
 ]
 
 

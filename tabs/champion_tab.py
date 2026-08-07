@@ -3,7 +3,7 @@ from tkinter import ttk, messagebox
 
 import champions
 from theme import VintageButton, VintageLabel, VintageEntry, TOKENS, FONT_SM, FONT_MAIN
-from tabs.champ_tab import BindButton
+from tabs.bind_button import BindButton
 from locales import Locale
 
 # ── simple tooltip ─────────────────────────────────────────────────

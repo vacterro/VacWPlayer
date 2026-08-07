@@ -1,7 +1,7 @@
 import tkinter as tk
 
 from theme import VintageButton, VintageLabel, VintageEntry, TOKENS, FONT_SM
-from tabs.champ_tab import BindButton
+from tabs.bind_button import BindButton
 from locales import Locale
 
 SLOT_KEYS = ["top", "mid", "bot", "top_deep", "mid_deep", "bot_deep",

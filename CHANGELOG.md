@@ -1,5 +1,8 @@
 # Changelog
 
+## v0.3.14 (2026-08-07)
+- Refactor: `tabs/champ_tab.py` renamed to `tabs/bind_button.py` — the file held only `BindButton` since the legacy `ChampTab` class was removed; the old name misled. 4 importers updated (afkfarm/champion/combo/minimap tabs); `tabs.bind_button` added to the import smoke test.
+
 ## v0.3.13 (2026-08-07)
 - Fix: hotkey conflict scan canonicalizes modifier order — `_canon_hotkey` now normalizes modifiers via `_canon_mods` (sorted tokens; `<^`/`>^` L/R variants kept distinct), so `^!x` vs `!^x` (one chord to AutoHotkey, exit 2 "Duplicate hotkey") is caught instead of silently passing. Generated script with that collision previously refused to start at all.
 - Tests: 3 new conflict-scan regression tests (modifier-order twins, triple variants, L/R distinctness). Suite 222 → 225.

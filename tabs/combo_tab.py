@@ -2,7 +2,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 
 from theme import VintageSunken, VintageButton, VintageLabel, VintageEntry, TOKENS, FONT_SM
-from tabs.champ_tab import BindButton
+from tabs.bind_button import BindButton
 from locales import Locale
 
 LEGACY_COMBOS = [
