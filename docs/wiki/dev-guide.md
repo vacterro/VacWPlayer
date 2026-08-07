@@ -23,12 +23,12 @@ VacWPlayer.bat   (or: pythonw.exe main.pyw with system Python 3.11)
 
 - Single instance enforced (`single_instance.ensure_single_instance("wr_assistant", replace=True)`) —
   a second launch kills the previous one.
-- Ryze assist auto-starts 100ms after launch; engine watchdog auto-restarts the
+- Default combo set (Ryze) auto-starts 100ms after launch; engine watchdog auto-restarts the
   AHK runtime every 3s if it died.
-- Engines (deathwatch/autocontinue/accept) run a parent watchdog
+- Engines (deathwatch/autocontinue/accept/surrender) run a parent watchdog
   (`single_instance.start_parent_watchdog`, 2s interval): they exit when the
   GUI process dies, so no orphan engines linger.
-- Run engines standalone: `python deathwatch.py --replace` (or autocontinue/accept).
+- Run engines standalone: `python deathwatch.py --replace` (or autocontinue/accept/surrender).
 - Logs: unhandled exceptions → `crash.log` in project root.
 
 ## Tests
@@ -55,7 +55,7 @@ python -m pytest tests/ -v
   33 languages, chosen via native-name combobox in the bottom bar
   (`Locale.set_lang`/`toggle`), config `lang` persists any code. Tabs with
   dynamic labels implement `apply_locale()`.
-- **Tabs**: all 9 tabs built at startup (`_build_all_tabs`), registered in
+- **Tabs**: all 10 tabs built at startup (`_build_all_tabs`), registered in
   `main.pyw._tab_specs`; no lazy-load guards needed.
 - **Threading**: workers never touch tkinter directly — marshal via
   `root.after(0, ...)` (`_apply_worker`, `_watchdog_worker`).

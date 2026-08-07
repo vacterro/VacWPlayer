@@ -1,5 +1,8 @@
 # Changelog
 
+## v0.3.2 (2026-08-07)
+- Docs: fixed doc-drift cluster from MARKHUNT — README + 4 locale mirrors (ded/ee/ja/ru) back to v0.3.1, per-champion tabs (Ryze/Xin removed), 5 configs, missing Buy/Accept/Surrender/Minimap features; docs/wiki: 10 tabs (no lazy load), 33-language combobox, mutex-based single-instance, surrender_config.json reference, Surrender tab section. saiwiki kitchen docs re-synced; CHANGELOG + saiwiki OUTBOX encoding repaired.
+
 ## v0.3.1 (2026-08-07)
 - Fix: `_find_our_pids` swallow-all `except Exception: pass` removed — probe failures now log to stderr; timeout retries once then gives up. Watchdog no longer goes blind on a failed PowerShell probe.
 - Tests: PID-scan paths (probe parse/empty, throttle, timeout-retry, double-timeout, other-exception) — 8 tests. Suite 167 → 175.
@@ -19,7 +22,7 @@
 - Suite 129 → 136.
 
 ## v0.2.7 (2026-08-07)
-- Tests: ahk_builder E-120 carry-guard direct coverage (GuardCarry, FocusWatch stale-carry sweep, guard variant emission, _guard_variant/_guarded_triggers/_carry_set/_base_key).
+- Tests: ahk_builder E-141 carry-guard direct coverage (GuardCarry, FocusWatch stale-carry sweep, guard variant emission, _guard_variant/_guarded_triggers/_carry_set/_base_key).
 - 40 new tests, suite 89 → 129.
 
 ## v0.2.6 (2026-08-07)

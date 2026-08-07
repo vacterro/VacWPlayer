@@ -2,7 +2,7 @@
 
 # VacWPlayer
 
-**v0.3.1** — [Changelog](CHANGELOG.md)
+**v0.3.2** — [Changelog](CHANGELOG.md)
 
 One vintage-themed GUI over the whole Wild Rift toolkit: pedal combos, per-champion
 rotations, death auto-minimize, and post-game auto-continue — a controllable "super
@@ -16,10 +16,14 @@ AHK" with a UI, no hand-editing scripts.
 - **Champions tab** — per-champion Wave / Jungle / PVP rotations. Sourced combos
   preloaded for Ryze, Xin Zhao, Yasuo, Master Yi, and others; placeholder combos
   for every champion in the Wild Rift roster — editable with preset slots.
-- **Rotating Farm tab** — cycle through minimap positions, move + combo, repeat.
+- **AFK Farm tab** — cycle through minimap positions, move + combo, repeat.
 - **Death Watch / Auto Continue tabs** — drive the existing `deathwatch.py` /
   `autocontinue.py` engines (dry-run toggle, live status), each taking over cleanly
   with `--replace`.
+- **Buy / Accept / Surrender tabs** — gold-gated auto-buy after recall
+  (`digit_reader`), match auto-accept, and surrender voting, each driving its own
+  engine (`deathwatch_config.json`, `accept.py`, `surrender.py`).
+- **Minimap tab** — click-to-move hotkeys bound to lane positions, rows reorderable.
 - **Champion mode** — dropdown picks exactly one live combo set, so F13–F15 never collide.
 - **Per-step delays** — `key:ms` syntax, e.g. `q,e:120,{Space}:200`.
 - **Tray icon** — X hides to tray, engine keeps running; Quit stops everything.
@@ -41,7 +45,7 @@ visible errors / `--check` diagnostics. Both auto-find the venv. Manually:
 ..\venv\Scripts\pythonw.exe main.pyw
 ```
 
-Ryze assist auto-starts. Edit any tab, pick a champion, hit **Apply & Start**.
+The default combo set (Ryze) auto-starts. Edit any tab, pick a champion, hit **Apply & Start**.
 
 ## Disclaimer
 
@@ -67,9 +71,10 @@ The GUI never hooks keys itself — it renders `wr_runtime.ahk` from `config.jso
 the runtime WE launch is tracked and killed by PID; other AHK scripts are left alone.
 The old hand-written `wr.ahk` is retired automatically on start.
 
-Three configs, one job each: `config.json` (combos, mode, toggles),
-`deathwatch_config.json` (death detection), `autocontinue_config.json` (post-game
-buttons). `wr_runtime.ahk` is generated — never hand-edit it.
+Five configs, one job each: `config.json` (combos, mode, toggles),
+`deathwatch_config.json` (death detection + buy), `autocontinue_config.json` (post-game
+buttons), `accept_config.json` (match accept), `surrender_config.json` (surrender).
+`wr_runtime.ahk` is generated — never hand-edit it.
 
 ## Combo syntax
 

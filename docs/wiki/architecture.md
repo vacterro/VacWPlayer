@@ -35,7 +35,7 @@ main.pyw  (TkinterDnD root, single instance via single_instance.py)
   (kills previous holder PID); `atexit` registers `stop_everything()`.
 - `VacWPlayer.__init__`: loads config, builds theme, creates `VintageNotebook`
   with all 10 tabs, restores last active tab, sets up tray.
-- 100ms after start: `apply_and_start()` auto-runs (Ryze assist auto-starts).
+- 100ms after start: `apply_and_start()` auto-runs (default combo set, Ryze, auto-starts).
 - `_engine_watchdog` every 3000ms: if engine was supposed to run and
   `ahk_generator.is_running()` is false → regenerate + relaunch (auto-restart).
 - Quit / close: `quit_app` → remember window pos, save config, `stop_everything()`
@@ -43,13 +43,13 @@ main.pyw  (TkinterDnD root, single instance via single_instance.py)
 
 ## UI layer
 
-- `VintageNotebook` + `_tab_specs`: 9 tabs —
+- `VintageNotebook` + `_tab_specs`: 10 tabs —
   General (`main_tab`), Combos (`combo_tab`), Champions (`champion_tab`), Death
   (`death_tab`), Buy (`buy_tab`), Continue (`auto_tab`), Minimap (`minimap_tab`),
-  Farm (`afkfarm_tab`), Accept (`accept_tab`).
+  Farm (`afkfarm_tab`), Accept (`accept_tab`), Surrender (`surrender_tab`).
 - All tabs built upfront in `_build_all_tabs()` (no lazy loading); `_rebuild_ui`
   (config import) destroys all tabs, stops engines, reloads.
-- Bottom bar: lang toggle, mode combobox (General + per-champion), export/import/
+- Bottom bar: language combobox (33 languages), mode combobox (General + per-champion), export/import/
   backup config, hotkeys viewer, combo browser, status label, AHK running dot,
   Apply & Start / Stop.
 - Config collected on demand: `collect_config()` pulls `get_data()`/`get_toggles()`
@@ -66,7 +66,8 @@ main.pyw  (TkinterDnD root, single instance via single_instance.py)
   `ryze_smart_logic` pruned.
 - `save_config()`: indent-4 json write.
 - Engines keep their own configs: `deathwatch_config.json`, `autocontinue_config.json`,
-  `accept_config.json` — each with `load_config()` try/except (OSError/ValueError).
+  `accept_config.json`, `surrender_config.json` — each with `load_config()`
+  try/except (OSError/ValueError).
 - Export/import (also via file drop), backup → `backups/config_YYYYMMDD_HHMMSS.json`.
 
 ## Engine layer
@@ -97,6 +98,7 @@ instance takes over cleanly. Dry-run toggle + live status in the tabs.
   locks mouse (`Ctrl+Shift+F8` unlock), blocks keys, restores on respawn.
 - `autocontinue.py`: post-game buttons grouped by region, template-matched clicks.
 - `accept.py`: match-accept screen, template-built buttons.
+- `surrender.py`: surrender-vote buttons, template-built buttons.
 
 ## Supporting modules
 
@@ -104,7 +106,7 @@ instance takes over cleanly. Dry-run toggle + live status in the tabs.
 - `combo_browser.py` / `champ_picker.py`: Toplevel pickers feeding Champions tab.
 - `locales.py` (`Locale`): `set_lang`, `toggle`, `tr()`; 33 languages, bundles auto-loaded from `locales/*.json`.
 - `theme.py`: `apply_base_theme`, `TOKENS`, `VintageButton/Label/Notebook`.
-- `single_instance.py`: PID-file based single-instance with replace (kill old holder).
+- `single_instance.py`: mutex-based single-instance with replace (kill old holder).
 - `tests/`: `conftest.py` + `test_imports.py` — non-GUI import smoke + py_compile all.
 - `tools/`: internal audit scripts (`ast_hunt.py`, `deep_hunt.py`, `meta_hunt.py`,
   `runtime_hunt.py`, `exec_hunt.py`, `git_hunt.py`, `record_burst.py`) — dev-only.

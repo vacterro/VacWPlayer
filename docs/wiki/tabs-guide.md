@@ -1,10 +1,8 @@
 # VacWPlayer — Tabs Guide
 
-> Draft page from saiwiki (WIKI-003). Target location suggestion: `docs/wiki/tabs-guide.md`.
-
-The main window: 9-tab `VintageNotebook` + bottom bar. Tabs load lazily on first
-switch; each tab auto-saves its settings (debounced 300ms) into `config.json` or
-its engine config.
+The main window: 10-tab `VintageNotebook` + bottom bar. All tabs are built at
+startup (no lazy loading); each tab auto-saves its settings (debounced 300ms) into
+`config.json` or its engine config.
 
 ## General (tabs/main_tab.py) — global input + auto-accept
 
@@ -77,9 +75,15 @@ its engine config.
   list (name/region/template/threshold). Prints match status messages.
 - Templates built from `accept_config.json` via `build_templates`.
 
+## Surrender (tabs/surrender_tab.py) — auto-surrender
+
+- Drives `surrender.py` (`--replace`): poll (s), cooldown (s), button templates
+  list (name/region/template/threshold).
+- Templates built from `surrender_config.json` via `build_templates`.
+
 ## Bottom bar (main.pyw)
 
-- Lang toggle (RU/EN), mode combobox (General + champions), Export / Import
+- Language combobox (33 languages), mode combobox (General + champions), Export / Import
   (also JSON file drop onto window) / Backup config, Hotkeys viewer, Combo
   browser (opens `combo_browser.py`), status label, AHK running dot
   (green/red), **Apply & Start**, **Stop**, tray icon (Show / Apply & Start /

@@ -2,17 +2,16 @@
 
 # VacWPlayer
 
-**v0.2.3** — [変更履歴](CHANGELOG.md)
+**v0.3.2** — [変更履歴](CHANGELOG.md)
 
 Wild Rift ツールキット全体を覆うヴィンテージ風GUI：ペダルコンボ、チャンピオン別ローテーション、死亡時の自動最小化、試合後の自動継続 — 手作業でスクリプトを編集せずに使える「スーパーAHK」。
 
 ## 機能
 
 - **メインタブ** — グローバル入力トグル（マウスリマップ、スペース連打、AFK対策、停止キー、手動エイムの一時停止、対象exe）とGeneralモードのカスタムコンボ一覧：追加、削除、全消去、キー押下でのトリガー登録、レガシーデフォルトへのリセット。
-- **Ryzeタブ** — Wave / Jungle / PVP のローテーションを実コンボでプリロード、起動時に即反映。
-- **Xin Zhaoタブ** — 現行メタガイド準拠の E→W→Q エンゲージコンボ。
+- **Championsタブ** — チャンピオン別の Wave / Jungle / PVP ローテーション。実コンボが Ryze、Xin Zhao、Yasuo、Master Yi ほかにプリロードされ、Wild Rift ロースター全体に編集可能なプレースホルダーが用意されている。
 - **Death Watch / Auto Continue タブ** — 既存エンジン `deathwatch.py` / `autocontinue.py` を操作（ドライラントグル、ライブステータス）。`--replace` でクリーンに引き継ぐ。
-- **チャンピオンモード**（General / Ryze / Xin ラジオ）で有効なコンボセットは常に1つ。F13–F15 がヒーロー間で衝突しない。
+- **チャンピオンモード**（ドロップダウンで選択）で有効なコンボセットは常に1つ。F13–F15 がヒーロー間で衝突しない。
 - **ステップ毎の遅延** — `キー:ms` 構文、例：`q,e:120,{Space}:200`。
 - **トレイアイコン** — X でトレイに格納、エンジンは稼働継続。Quit で全停止。
 - **Wiki** — アーキテクチャ、設定リファレンス、タブガイド: `docs/wiki/`。
@@ -32,7 +31,7 @@ Wild Rift ツールキット全体を覆うヴィンテージ風GUI：ペダル�
 ..\venv\Scripts\pythonw.exe main.pyw
 ```
 
-Ryze アシストは自動起動。タブを編集してチャンピオンを選び、**Apply & Start** を押すだけ。
+デフォルトのコンボセット（Ryze）は自動起動。タブを編集してチャンピオンを選び、**Apply & Start** を押すだけ。
 
 ## テスト
 
@@ -47,10 +46,10 @@ pytest が必要（`pip install pytest` または `pip install -r requirements.t
 
 GUI自身はキーをフックしない — `config.json` から `ahk_generator.py` 経由で `wr_runtime.ahk` を生成し、AutoHotkey を起動するだけ（BlueStacks に必要な Event モード）。追跡・強制終了するのは自分で起動したランタイムのみ（PID管理）。他の AHK スクリプトには手を出さない。旧手書きの `wr.ahk` は起動時に自動で退役。
 
-設定ファイルは3つ、役割はそれぞれ1つずつ：`config.json`（コンボ、モード、トグル）、`deathwatch_config.json`（死亡検知）、`autocontinue_config.json`（試合後ボタン）。`wr_runtime.ahk` は生成物 — 手編集禁止。
+設定ファイルは5つ、役割はそれぞれ1つずつ：`config.json`（コンボ、モード、トグル）、`deathwatch_config.json`（死亡検知）、`autocontinue_config.json`（試合後ボタン）、`accept_config.json`（マッチ受諾）、`surrender_config.json`（降参投票）。`wr_runtime.ahk` は生成物 — 手編集禁止。
 
 ## コンボ構文
 
 カンマ区切りのキー列。`{Space}`、`f`、英字。能力キー q/w/e/r は「Shift-cast」がオフでなければシフトキャスト（自キャスト）。キーに `:ms` を付けるとそのステップ固有の遅延。それ以外はコンボ間隔が適用。トリガーペダルを押しっぱなしでループ。
 
-<!-- source-digest: README.md sha256:64a14fd91deee05c -->
+<!-- source-digest: README.md sha256:b5ec17d1ddcef120 -->

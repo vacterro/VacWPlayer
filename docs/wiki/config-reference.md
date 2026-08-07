@@ -135,6 +135,19 @@ disabled slot.
 
 Uses `PrintWindow` capture — works even when game window is behind others.
 
+## surrender_config.json (surrender.py)
+
+| Key | Default (disk) | Meaning |
+|---|---|---|
+| `monitor_enabled` | true | Run surrender poller |
+| `window_title` | `""` | Game window to watch (picked via window picker) |
+| `poll_interval_sec` | 5.0 | |
+| `click_cooldown_sec` | 3.0 | Min time between clicks |
+| `auto_accept` | false | Click Accept (`true`) or Decline (`false`) on surrender prompt |
+| `templates` | Accept/Decline entries | `{name, file, threshold}` entries, built via `build_templates` |
+
+Same capture/`build_templates` machinery as `accept_config.json`.
+
 ## Engine behavior notes
 
 - `--replace` flag: kills the previous instance of the same engine (single_instance)
