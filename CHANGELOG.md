@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.2.8 (2026-08-07)
+- Tests: ProcessRunner done-event path (child death -> "Stopped"/check_var False, stale-generation guard, line pump) — 4 tests.
+- Refactor: duplicated config mtime-reload check in all 4 engines extracted to shared `engine_config.mtime_changed` (accept/surrender/autocontinue/deathwatch).
+- Tests: `engine_config.mtime_changed` changed/unchanged/missing-file — 3 tests.
+- Suite 129 → 136.
+
 ## v0.2.7 (2026-08-07)
 - Tests: ahk_builder E-120 carry-guard direct coverage (GuardCarry, FocusWatch stale-carry sweep, guard variant emission, _guard_variant/_guarded_triggers/_carry_set/_base_key).
 - 40 new tests, suite 89 → 129.

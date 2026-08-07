@@ -7,6 +7,7 @@ import win32gui
 
 import capture
 import digit_reader
+import engine_config
 import key_blocker
 import single_instance
 import window_ctl
@@ -230,14 +231,10 @@ def main(replace=False):
         was_dead = False
         while True:
             try:
-                try:
-                    cur_mtime = os.path.getmtime(cfg_path)
-                except OSError:
-                    cur_mtime = cfg_last_mtime
-                if cur_mtime != cfg_last_mtime:
+                cfg_last_mtime, changed = engine_config.mtime_changed(cfg_path, cfg_last_mtime)
+                if changed:
                     with open(cfg_path) as f:
                         cfg = json.load(f)
-                    cfg_last_mtime = cur_mtime
 
                 if cfg["window_title"] != loaded_window_title:
                     loaded_window_title = cfg["window_title"]

@@ -6,6 +6,7 @@ import cv2
 import win32gui
 
 import capture
+import engine_config
 import single_instance
 import window_ctl
 
@@ -69,13 +70,9 @@ def main(replace=False):
 
     while True:
         try:
-            try:
-                cur_mtime = os.path.getmtime(CONFIG_PATH)
-            except OSError:
-                cur_mtime = cfg_last_mtime
-            if cur_mtime != cfg_last_mtime:
+            cfg_last_mtime, changed = engine_config.mtime_changed(CONFIG_PATH, cfg_last_mtime)
+            if changed:
                 cfg = load_config()
-                cfg_last_mtime = cur_mtime
 
             if cfg["window_title"] != loaded_window_title:
                 loaded_window_title = cfg["window_title"]
