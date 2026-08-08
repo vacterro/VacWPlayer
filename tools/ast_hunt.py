@@ -28,31 +28,11 @@ import sys
 from collections import defaultdict
 
 PROJECT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+import _common
+_common.PROJECT = PROJECT
+from _common import get_py_files, short_path, parse_file
+
 BUILTINS = set(dir(__builtins__)) if hasattr(__builtins__, '__dict__') else set()
-
-
-def get_py_files():
-    result = []
-    for root, dirs, files in os.walk(PROJECT):
-        dirs[:] = [d for d in dirs if d != '__pycache__']
-        for f in files:
-            if f.endswith('.py'):
-                result.append(os.path.join(root, f))
-    return sorted(result)
-
-
-def short_path(full_path):
-    p = full_path.replace(PROJECT, '').lstrip('\\/')
-    return p.replace('\\\\', '/')
-
-
-def parse_file(f):
-    try:
-        with open(f, encoding='utf-8-sig') as fh:
-            return ast.parse(fh.read(), f)
-    except (SyntaxError, UnicodeDecodeError) as e:
-        print(f'  SKIP {short_path(f)}: {e}')
-        return None
 
 
 # ──────────────────────────────────────────────
@@ -598,7 +578,7 @@ def analyze(files, category, func):
     print(f'\n=== {category} ===')
     total = 0
     for f in files:
-        tree = parse_file(f)
+        tree = parse_file(f, verbose=True)
         if tree is None:
             continue
         finder = func() if isinstance(func, type) else func()
@@ -632,7 +612,7 @@ def main():
     print('\n=== 2. UNUSED FUNCTIONS ===')
     project_collector = CallCollector()
     for f in files:
-        tree = parse_file(f)
+        tree = parse_file(f, verbose=True)
         if tree is None:
             continue
         collector = CallCollector()
@@ -680,7 +660,7 @@ def main():
     print('\n=== 13. SAME-ARG LITERAL (constant parameter) ===')
     count13 = 0
     for f in files:
-        tree = parse_file(f)
+        tree = parse_file(f, verbose=True)
         if tree is None:
             continue
         finder = SameArgLiteralFinder()

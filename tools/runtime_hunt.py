@@ -22,29 +22,10 @@ import re
 from collections import defaultdict
 
 PROJECT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+import _common
+_common.PROJECT = PROJECT
+from _common import get_py_files, short_path, parse_file
 
-
-def get_py_files():
-    result = []
-    for root, dirs, files in os.walk(PROJECT):
-        dirs[:] = [d for d in dirs if d != '__pycache__']
-        for f in files:
-            if f.endswith('.py'):
-                result.append(os.path.join(root, f))
-    return sorted(result)
-
-
-def short_path(full_path):
-    p = full_path.replace(PROJECT, '').lstrip('\\/')
-    return p.replace('\\\\', '/')
-
-
-def parse_file(f):
-    try:
-        with open(f, encoding='utf-8-sig') as fh:
-            return ast.parse(fh.read(), f)
-    except (SyntaxError, UnicodeDecodeError):
-        return None
 
 
 # ──────────────────────────────────────────────

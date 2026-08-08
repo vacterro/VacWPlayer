@@ -1,18 +1,30 @@
 # Changelog
 
+## v0.3.19 (2026-08-08)
+- Fix: `tools/git_hunt.py` crashed on every run (T-116) — git log dates are offset-aware but `datetime.now()` is naive, so comparisons raised TypeError. New `_naive_dt()` strips the timezone offset; the tool now runs clean.
+- i18n: locale bundles overhauled (T-117/118/120/121) — `untoggle_keys_lbl` + `tt_untoggle_keys_lbl` added to every bundle (ru/et/ded previously fell back to English or showed the raw key); `toggle_release_on_keys` reworded to the post-v0.3.16 B-recall-stop / untoggle-a,v behavior; 29 owned bundles got real translations instead of EN placeholders; 15 dead keys removed from all 33 bundles; inline `locales.py` en/ru dicts synced to match (they are the runtime + parity source).
+- Chore: ToolTip on the untoggle-keys entry localized via `tt_untoggle_keys_lbl` (T-118), replacing the hardcoded English string from T-101.
+- Docs: CHANGELOG v0.3.16 section restored (T-119) — the ship bump had renamed it to v0.3.17; v0.3.17 now records its own 29-bundle locale sync.
+- Chore: duplicate `_check` Checkbutton factory deduped into `theme.make_check()` (T-123) — main_tab + combo_tab import it.
+- Chore: tools/*.py helper triplication deduped into `tools/_common.py` (T-122) — get_py_files / short_path / parse_file defined once, ~12 copies removed; all 6 scanners still run.
+- Chore: dead `mss` dependency dropped from requirements.txt (T-124) — screen capture uses win32ui.
+- Tests: suite 328/328 PASS, pyflakes 0, digest 2/2.
+
 ## v0.3.18 (2026-08-08)
 - Chore: dead `bevelLight` theme token removed (T-115) — defined in theme.py but referenced nowhere; the bevel pair is `borderHighlight`/`borderDark`.
 - Chore: sc crew circuit — sense (hunt) clean, saitest all reviewed (no new reproductions), EE + QQ packages force-fresh and collected (zero-diff / payload-none).
 - Tests: suite 328/328 PASS, pyflakes 0, digest 2/2.
 
 ## v0.3.17 (2026-08-07)
+- i18n: 29 saitranslate-owned locale bundles synced for the input-settings batch keys (EE/QQ pipelines) — `untoggle_keys_lbl` added, `toggle_release_on_keys` reworded to the new B recall-stop / untoggle a,v behavior in all 29 owned bundles.
+
+## v0.3.16 (2026-08-07)
 - Fix: B (recall) now fully stops a running PVP combo + the move-hold so the recall lands — combo flags and step counters are cleared, the move-hold is released, and the key still passes through to the game. Previously the combo kept spamming through the recall.
 - Fix: Space (attack) no longer releases the move-hold or stops PVP — attack while moving keeps the PVP hold and movement going. Space is a pass-through + space-spam trigger only.
 - Change: the keys that release the LMB move-hold are now configurable via `untoggle_keys` (comma-separated, default `a,v`); `b` is reserved for the recall-stop and is ignored in the field.
 - Change: the 1-7/G release stack only acts while `release_toggle_on_keys` is on; the configurable untoggle keys always release.
 - Fix: bottom button bar clipped at the default window size — default window 750x550 → 920x550 (geometry + clamp), status label capped at 64 chars so long warnings cannot push the buttons out.
 - Docs: `config-reference.md` gains `mouse_toggle_hold`/`release_toggle_on_keys`/`untoggle_keys` rows; `tabs-guide.md` documents B recall-stop, untoggle keys, Space-is-attack and the 920 window; EN locale gains `untoggle_keys_lbl`.
-- i18n: 29 saitranslate-owned locale bundles refreshed for the new keys (EE/QQ pipelines).
 - Tests: suite 320 → 328.
 
 ## v0.3.15 (2026-08-07)

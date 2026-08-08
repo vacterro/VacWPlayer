@@ -144,6 +144,16 @@ class VintageEntry(VintageSunken):
                               insertbackground=TOKENS["textPrimary"], width=width)
         self.entry.pack(fill="both", expand=True, padx=1, pady=0)
 
+
+def make_check(parent, text, var):
+    """Single shared Checkbutton factory (styling owned by theme.py)."""
+    return tk.Checkbutton(
+        parent, text=text, variable=var, bg=TOKENS["background"],
+        fg=TOKENS["textPrimary"], activebackground=TOKENS["background"],
+        activeforeground=TOKENS["textPrimary"], selectcolor=TOKENS["compareBack"],
+        font=FONT_SM, highlightthickness=0, bd=0)
+
+
 class VintageNotebook(tk.Frame):
     def __init__(self, parent, **kwargs):
         super().__init__(parent, bg=TOKENS["background"], **kwargs)

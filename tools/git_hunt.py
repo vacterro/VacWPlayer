@@ -21,6 +21,10 @@ from collections import defaultdict, Counter
 from datetime import datetime, timedelta
 
 PROJECT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+import _common
+_common.PROJECT = PROJECT
+from _common import get_py_files, short_path
+
 
 
 def git(*args):
@@ -36,9 +40,16 @@ def git(*args):
         return []
 
 
-def short_path(full_path):
-    p = full_path.replace(PROJECT, '').lstrip('\\/')
-    return p.replace('\\\\', '/')
+def _naive_dt(iso_str):
+    """Parse an ISO date string into a timezone-naive datetime.
+
+    git log %ai dates carry a UTC offset (e.g. '2026-08-08 01:07:11 +0300'),
+    so fromisoformat returns offset-aware datetimes. Mixing those with
+    datetime.now() (naive) raises TypeError on every run; strip the offset so
+    all comparisons are naive-vs-naive.
+    """
+    dt = datetime.fromisoformat(iso_str)
+    return dt.replace(tzinfo=None)
 
 
 # ──────────────────────────────────────────────
@@ -64,8 +75,8 @@ class CommitTimingAnalyzer:
         total = len(commits)
         # Frequency: commits per week
         if total >= 2:
-            first = datetime.fromisoformat(commits[-1]['date'])
-            last = datetime.fromisoformat(commits[0]['date'])
+            first = _naive_dt(commits[-1]['date'])
+            last = _naive_dt(commits[0]['date'])
             span_days = (last - first).days or 1
             freq = total / span_days * 7
         else:
@@ -82,7 +93,7 @@ class CommitTimingAnalyzer:
         if total > 0:
             # Recent burst: commits in last 7 days
             recent = sum(1 for c in commits
-                         if datetime.fromisoformat(c['date']) > datetime.now() - timedelta(days=7))
+                         if _naive_dt(c['date']) > datetime.now() - timedelta(days=7))
             results.append(('meta', 'INFO', f'Recent (7d): {recent} commits'))
 
         return results, {'total': total, 'authors': authors, 'author_counts': author_counts,
@@ -185,7 +196,7 @@ class CodeAgeAnalyzer:
             if log:
                 date_str = log[0]
                 try:
-                    last_modified = datetime.fromisoformat(date_str)
+                    last_modified = _naive_dt(date_str)
                     age_days = (datetime.now() - last_modified).days
                     file_ages.append((age_days, sp, last_modified))
                 except ValueError:
@@ -367,16 +378,6 @@ def print_sep(title):
     print(f'\n{"=" * 60}')
     print(f'  {title}')
     print('=' * 60)
-
-
-def get_py_files():
-    result = []
-    for root, dirs, files in os.walk(PROJECT):
-        dirs[:] = [d for d in dirs if d != '__pycache__' and '.git' not in root]
-        for f in files:
-            if f.endswith('.py'):
-                result.append(os.path.join(root, f))
-    return sorted(result)
 
 
 def main():

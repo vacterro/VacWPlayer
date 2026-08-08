@@ -20,6 +20,10 @@ import json
 import traceback
 
 PROJECT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+import _common
+_common.PROJECT = PROJECT
+from _common import get_py_files, short_path
+
 sys.path.insert(0, PROJECT)
 
 # Any file starting with these prefixes is skipped (side effects / display / loops)
@@ -27,21 +31,6 @@ IMPORT_BLACKLIST_PREFIXES = ('tabs/', 'tools/', 'main.pyw', 'champ_picker',
                              'combo_browser', 'capture', 'window_ctl',
                              'key_blocker', 'autocontinue', 'deathwatch',
                              'vintage_widgets')  # vintage_widgets uses tkinter
-
-
-def get_py_files():
-    result = []
-    for root, dirs, files in os.walk(PROJECT):
-        dirs[:] = [d for d in dirs if d != '__pycache__' and '.git' not in root]
-        for f in files:
-            if f.endswith('.py'):
-                result.append(os.path.join(root, f))
-    return sorted(result)
-
-
-def short_path(full_path):
-    p = full_path.replace(PROJECT, '').lstrip('\\/')
-    return p.replace('\\\\', '/')
 
 
 def to_module_path(filepath):

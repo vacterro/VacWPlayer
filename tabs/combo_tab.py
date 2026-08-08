@@ -1,7 +1,7 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
 
-from theme import VintageSunken, VintageButton, VintageLabel, VintageEntry, TOKENS, FONT_SM
+from theme import VintageSunken, VintageButton, VintageLabel, VintageEntry, TOKENS, FONT_SM, make_check
 from tabs.bind_button import BindButton
 from locales import Locale
 
@@ -10,14 +10,6 @@ LEGACY_COMBOS = [
     {"trigger": "F14", "keys": "w,q,e,f,{Space}", "interval": 50, "shift": True, "move_when_pressed": False},
     {"trigger": "F15", "keys": "e,e,e,w,q,{Space},e,{Space},q,{Space}", "interval": 50, "shift": True, "move_when_pressed": False},
 ]
-
-
-def _check(parent, text, var):
-    return tk.Checkbutton(
-        parent, text=text, variable=var, bg=TOKENS["background"],
-        fg=TOKENS["textPrimary"], activebackground=TOKENS["background"],
-        activeforeground=TOKENS["textPrimary"], selectcolor=TOKENS["compareBack"],
-        font=FONT_SM, highlightthickness=0, bd=0)
 
 
 class ComboTab(tk.Frame):
@@ -98,12 +90,12 @@ class ComboTab(tk.Frame):
         VintageEntry(edit, textvariable=self.var_interval, width=6).grid(row=3, column=1, sticky="w")
 
         self.var_shift = tk.BooleanVar(value=True)
-        self._chk_shift = _check(edit, Locale.tr("shift_cast"), self.var_shift)
+        self._chk_shift = make_check(edit, Locale.tr("shift_cast"), self.var_shift)
         self._chk_shift.grid(row=4, column=0, columnspan=2, sticky="w")
         self._locale_widgets.append(("chk", self._chk_shift, "shift_cast"))
 
         self.var_move_when_pressed = tk.BooleanVar(value=False)
-        self._chk_move_when_pressed = _check(edit, Locale.tr("combo_move_when_pressed"), self.var_move_when_pressed)
+        self._chk_move_when_pressed = make_check(edit, Locale.tr("combo_move_when_pressed"), self.var_move_when_pressed)
         self._chk_move_when_pressed.grid(row=5, column=0, columnspan=2, sticky="w")
         self._locale_widgets.append(("chk", self._chk_move_when_pressed, "combo_move_when_pressed"))
 

@@ -3,7 +3,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 
 from theme import (VintageButton, VintageLabel, VintageEntry,
-                   TOKENS, FONT_SM)
+                   TOKENS, FONT_SM, make_check)
 from tabs.death_tab import ToolTip
 from locales import Locale
 
@@ -52,14 +52,6 @@ TOGGLE_DEFAULTS = {
 }
 
 
-def _check(parent, text, var):
-    return tk.Checkbutton(
-        parent, text=text, variable=var, bg=TOKENS["background"],
-        fg=TOKENS["textPrimary"], activebackground=TOKENS["background"],
-        activeforeground=TOKENS["textPrimary"], selectcolor=TOKENS["compareBack"],
-        font=FONT_SM, highlightthickness=0, bd=0)
-
-
 class MainTab(tk.Frame):
     """Global input toggles + target exe + auto-accept."""
 
@@ -106,13 +98,13 @@ class MainTab(tk.Frame):
         self.var_guard.trace_add("write", self._auto_save)
         self.var_exit_bs = tk.BooleanVar(value=toggles["exit_when_bs_gone"])
         self.var_exit_bs.trace_add("write", self._auto_save)
-        self._chk_remap = _check(tog, Locale.tr("toggle_mouse_remap"), self.var_remap)
+        self._chk_remap = make_check(tog, Locale.tr("toggle_mouse_remap"), self.var_remap)
         self._chk_remap.grid(row=0, column=0, sticky="w")
-        self._chk_move_instead_hold = _check(tog, Locale.tr("toggle_mouse_move_instead_hold"), self.var_move_instead_hold)
+        self._chk_move_instead_hold = make_check(tog, Locale.tr("toggle_mouse_move_instead_hold"), self.var_move_instead_hold)
         self._chk_move_instead_hold.grid(row=0, column=1, sticky="w", padx=(6, 0))
-        self._chk_toggle_hold = _check(tog, Locale.tr("toggle_mouse_toggle_hold"), self.var_toggle_hold)
+        self._chk_toggle_hold = make_check(tog, Locale.tr("toggle_mouse_toggle_hold"), self.var_toggle_hold)
         self._chk_toggle_hold.grid(row=3, column=0, sticky="w")
-        self._chk_release_on_keys = _check(tog, Locale.tr("toggle_release_on_keys"), self.var_release_on_keys)
+        self._chk_release_on_keys = make_check(tog, Locale.tr("toggle_release_on_keys"), self.var_release_on_keys)
         self._chk_release_on_keys.grid(row=3, column=1, sticky="w", padx=(6, 0))
         self._sync_release_on_keys()
         self._lbl_untoggle = VintageLabel(tog, text=Locale.tr("untoggle_keys_lbl"), font=FONT_SM)
@@ -122,20 +114,20 @@ class MainTab(tk.Frame):
         self.untoggle_entry.grid(row=4, column=1, sticky="w", padx=(6, 0))
         # 'b' is reserved for the recall-stop and is filtered out of the field
         # value - say so explicitly so typing it is not a silent no-op (T-101).
-        ToolTip(self.untoggle_entry, text="Keys releasing the move-hold, comma-separated. B is reserved for the recall-stop (full combo+move stop) and is ignored here.")
-        self._chk_rmb_pvp = _check(tog, Locale.tr("toggle_rmb_pvp"), self.var_rmb_pvp)
+        ToolTip(self.untoggle_entry, text=Locale.tr("tt_untoggle_keys_lbl"))
+        self._chk_rmb_pvp = make_check(tog, Locale.tr("toggle_rmb_pvp"), self.var_rmb_pvp)
         self._chk_rmb_pvp.grid(row=5, column=0, columnspan=2, sticky="w")
-        self._chk_keep_move = _check(tog, Locale.tr("toggle_keep_move_death"), self.var_keep_move)
+        self._chk_keep_move = make_check(tog, Locale.tr("toggle_keep_move_death"), self.var_keep_move)
         self._chk_keep_move.grid(row=6, column=0, columnspan=2, sticky="w")
-        self._chk_space = _check(tog, Locale.tr("toggle_space_spam"), self.var_space)
+        self._chk_space = make_check(tog, Locale.tr("toggle_space_spam"), self.var_space)
         self._chk_space.grid(row=1, column=0, sticky="w")
-        self._chk_afk = _check(tog, Locale.tr("toggle_anti_afk"), self.var_afk)
+        self._chk_afk = make_check(tog, Locale.tr("toggle_anti_afk"), self.var_afk)
         self._chk_afk.grid(row=1, column=1, sticky="w", padx=(6, 0))
-        self._chk_manual = _check(tog, Locale.tr("toggle_manual_aim"), self.var_manual)
+        self._chk_manual = make_check(tog, Locale.tr("toggle_manual_aim"), self.var_manual)
         self._chk_manual.grid(row=2, column=0, sticky="w")
-        self._chk_guard = _check(tog, Locale.tr("toggle_guard_outside"), self.var_guard)
+        self._chk_guard = make_check(tog, Locale.tr("toggle_guard_outside"), self.var_guard)
         self._chk_guard.grid(row=2, column=1, sticky="w", padx=(6, 0))
-        self._chk_exit_bs = _check(tog, Locale.tr("toggle_exit_bs_gone"), self.var_exit_bs)
+        self._chk_exit_bs = make_check(tog, Locale.tr("toggle_exit_bs_gone"), self.var_exit_bs)
         self._chk_exit_bs.grid(row=7, column=0, columnspan=2, sticky="w")
         for w, k in ((self._chk_remap, "toggle_mouse_remap"),
                      (self._chk_move_instead_hold, "toggle_mouse_move_instead_hold"),

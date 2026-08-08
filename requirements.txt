@@ -1,5 +1,4 @@
 # VacWPlayer GUI deps (install into the project venv)
-mss
 opencv-python
 numpy
 pywin32

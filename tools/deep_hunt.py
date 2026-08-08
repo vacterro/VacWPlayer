@@ -21,34 +21,15 @@ import re
 from collections import defaultdict
 
 PROJECT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+import _common
+_common.PROJECT = PROJECT
+from _common import get_py_files, short_path, parse_file
+
 SECRET_PATTERNS = [
     (r'(?i)(password|passwd|pwd|secret|token|api[_-]?key)\s*[:=]\s*["\'][^"\']+["\']', 'hardcoded credential'),
     (r'(?i)(aws_access_key|aws_secret_key|sk-[a-zA-Z0-9]{20,}|ghp_[a-zA-Z0-9]{36})', 'API key / token'),
     (r'(?i)connect\(.*host\s*=\s*["\'][^"\']+["\']', 'hardcoded DB host'),
 ]
-
-
-def get_py_files():
-    result = []
-    for root, dirs, files in os.walk(PROJECT):
-        dirs[:] = [d for d in dirs if d != '__pycache__']
-        for f in files:
-            if f.endswith('.py'):
-                result.append(os.path.join(root, f))
-    return sorted(result)
-
-
-def short_path(full_path):
-    p = full_path.replace(PROJECT, '').lstrip('\\/')
-    return p.replace('\\\\', '/')
-
-
-def parse_file(f):
-    try:
-        with open(f, encoding='utf-8-sig') as fh:
-            return ast.parse(fh.read(), f)
-    except (SyntaxError, UnicodeDecodeError):
-        return None
 
 
 # ──────────────────────────────────────────────
