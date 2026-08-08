@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.3.16 (2026-08-07)
+## v0.3.17 (2026-08-07)
 - Fix: B (recall) now fully stops a running PVP combo + the move-hold so the recall lands — combo flags and step counters are cleared, the move-hold is released, and the key still passes through to the game. Previously the combo kept spamming through the recall.
 - Fix: Space (attack) no longer releases the move-hold or stops PVP — attack while moving keeps the PVP hold and movement going. Space is a pass-through + space-spam trigger only.
 - Change: the keys that release the LMB move-hold are now configurable via `untoggle_keys` (comma-separated, default `a,v`); `b` is reserved for the recall-stop and is ignored in the field.

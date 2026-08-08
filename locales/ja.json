@@ -202,7 +202,9 @@
     "tab_surrender":  "Surrender",
     "toggle_mouse_move_instead_hold":  "Move instead of hold (click to move)",
     "toggle_mouse_toggle_hold":  "LMB toggles move hold (click again to release)",
-    "toggle_release_on_keys":  "Keys release move hold (B recall always does)",
+    "toggle_release_on_keys":  "Other keys release move hold (1-7,G)",
+    "untoggle_keys_lbl":  "Untoggle keys (comma-separated, default a,v)",
+
     "toggle_keep_move_death":  "Keep toggled movement after death/respawn",
     "toggle_rmb_pvp":  "RMB hold (0.3s+) attacks like PVP",
     "toggle_guard_outside":  "Mute pedal only while it stays held after leaving the game",
