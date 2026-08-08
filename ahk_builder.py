@@ -251,7 +251,8 @@ def _send_for(key, shift):
     return "{Blind}" + k
 
 def _hotkey_block(trig, flag, last, step_var, guarded=True, move_when_pressed=False,
-                  rmb_guard=False, siblings=(), toggle_mode=False):
+                  rmb_guard=False, siblings=(), toggle_mode=False,
+                  keep_move_after=False):
     """Combo trigger hotkey + Up handler.
 
     rmb_guard marks the PVP combo when the right-button hold can drive it:
@@ -266,6 +267,12 @@ def _hotkey_block(trig, flag, last, step_var, guarded=True, move_when_pressed=Fa
     held, and the Up is swallowed. The combo keeps running until the same
     trigger is pressed again (sibling triggers flip it too - they share the
     flag, so any bound key toggles the same state).
+
+    keep_move_after (PVP combos only): when this combo's move-hold is the last
+    one standing, its release latches the LMB toggle-hold (MoveToggle := true)
+    instead of standing the champion still - the character keeps walking until
+    the user clicks LMB again. An explicit stop (B recall-stop, stop key,
+    untoggle key) clears MoveToggle and overrides the latch.
     """
     nd = flag + "_NextDelay"
     # Carry is what tells the outside-the-game guard "this press began in the
@@ -274,13 +281,24 @@ def _hotkey_block(trig, flag, last, step_var, guarded=True, move_when_pressed=Fa
     set_off = ("    " + _carry_set(trig, False) + "\n") if guarded else ""
     
     move_on = ""
-    move_off = ""
     if move_when_pressed:
         # Hold RButton (move) for as long as the combo trigger is held, via the
         # shared MoveRefs counter so combo-hold and LMB-hold never fight each
         # other: releasing one source keeps the others moving.
         move_on = "        MoveRefs += 1\n        CheckMovement()\n"
-        move_off = "    MoveRefs := (MoveRefs > 0 ? MoveRefs - 1 : 0)\n    CheckMovement()\n"
+
+    def _move_release(indent):
+        """MoveRefs decrement + optional PVP keep-moving latch, indented for the
+        current body (4 = hold-mode Up, 8 = toggle-off / guarded Up)."""
+        if not move_when_pressed:
+            return ""
+        b = indent + "MoveRefs := (MoveRefs > 0 ? MoveRefs - 1 : 0)\n"
+        if keep_move_after:
+            b += indent + "if (MoveRefs = 0) {\n"
+            b += indent + "    MoveToggle := true\n"
+            b += indent + "}\n"
+        b += indent + "CheckMovement()\n"
+        return b
 
     not_down = [('!GetKeyState("%s", "P")' % _sc_key(s)) for s in siblings]
     if rmb_guard:
@@ -296,7 +314,7 @@ def _hotkey_block(trig, flag, last, step_var, guarded=True, move_when_pressed=Fa
         clear
         + indent + flag + "_Held := false\n"
         + indent + step_var + " := 0\n"
-        + move_off.replace("    ", indent)
+        + _move_release(indent)
         + (indent + "}\n" if not_down else "")
     )
 
@@ -322,7 +340,7 @@ def _hotkey_block(trig, flag, last, step_var, guarded=True, move_when_pressed=Fa
             + carry_off +
             "        " + flag + "_Held := false\n"
             "        " + step_var + " := 0\n"
-            + move_off.replace("    ", "        ") +
+            + _move_release("        ") +
             "    }\n"
             "return\n"
         )
@@ -742,6 +760,10 @@ def _gen_hotkeys(a, target_exe, toggles, combos, minimap, afk_k):
             a.append("            Step_" + tag + " := 0")
             if move:
                 a.append("            MoveRefs := (MoveRefs > 0 ? MoveRefs - 1 : 0)")
+                # PVP release keeps the champion walking until LMB click.
+                a.append("            if (MoveRefs = 0) {")
+                a.append("                MoveToggle := true")
+                a.append("            }")
                 a.append("            CheckMovement()")
             a.append("        }")
             a.append("    }")
@@ -834,16 +856,12 @@ def _gen_hotkeys(a, target_exe, toggles, combos, minimap, afk_k):
     if toggles.get("manual_aim_block", True):
         # Manual ability/summoner keys. Pressing any of them must always reach
         # the game even while a combo trigger is held: it pauses the combo
-        # (ManualAimActive) and releases the LMB toggle-hold so the cast lands
-        # while the champion stands still.
+        # (ManualAimActive) but NEVER releases the LMB move-hold - casting a
+        # skill must not stand the champion still. Only the 1-7/G release
+        # stack (release_toggle_on_keys) and the untoggle keys release the hold.
         for k in ("q", "w", "e", "r", "d", "f", "c"):
             a.append("*" + _sc_key(k) + "::")
             a.append("    ManualAimActive := true")
-            if toggles.get("release_toggle_on_keys", False):
-                # Casting manually releases the toggle-hold movement only when
-                # the user asked for it (checkbox on) - otherwise the champion
-                # keeps running while you cast.
-                a.append("    ReleaseMoveToggle()")
             a.append("    SendInput {" + _sc_key(k) + " down}")
             a.append("return")
         for k in ("q", "w", "e", "r", "d", "f", "c"):
@@ -922,7 +940,9 @@ def _gen_hotkeys(a, target_exe, toggles, combos, minimap, afk_k):
                                    move_when_pressed=c.get("move_when_pressed", False),
                                    rmb_guard=pvp_tag is not None and c["tag"] == pvp_tag,
                                    siblings=siblings,
-                                   toggle_mode=c.get("toggle", False)))
+                                   toggle_mode=c.get("toggle", False),
+                                   keep_move_after=c.get("move_when_pressed", False)
+                                   and c["tag"].endswith("_pvp")))
 
     mm_iter = [k for k in minimap if k != "_order"] if isinstance(minimap, dict) else []
     for mk in mm_iter:
@@ -1036,6 +1056,11 @@ def _gen_master_spammer(a, target_exe, toggles, combos):
             a.append("        Step_" + c["tag"] + " := 0")
             if c.get("move_when_pressed", False):
                 a.append("        MoveRefs := (MoveRefs > 0 ? MoveRefs - 1 : 0)")
+                if pvp_tag and c["tag"] == pvp_tag:
+                    # PVP cleanup keeps the champion walking until LMB click.
+                    a.append("        if (MoveRefs = 0) {")
+                    a.append("            MoveToggle := true")
+                    a.append("        }")
                 a.append("        CheckMovement()")
             a.append("    }")
     stop_key = (toggles.get("stop_key") or "").strip()

@@ -5,7 +5,7 @@
         "mouse_move_instead_hold": false,
         "mouse_toggle_hold": true,
         "release_toggle_on_keys": true,
-        "untoggle_keys": "a,v",
+        "untoggle_keys": "v",
         "keep_movement_on_death": true,
         "rmb_hold_pvp": false,
         "space_spam": true,

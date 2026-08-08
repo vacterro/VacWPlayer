@@ -10,7 +10,9 @@ startup (no lazy loading); each tab auto-saves its settings (debounced 300ms) in
   (1-7,G; only when enabled), Untoggle keys (comma list, default `a,v` — these release the
   move-hold), Keep toggled movement after death, RMB hold (0.3s+) attacks like PVP, Space spam
   while held (attack key — never releases the hold), Anti-AFK (Ctrl+G toggles in game),
-  Manual q/w/e/r/d/f pauses combos.
+  Manual q/w/e/r/d/f pauses combos (never releases the move-hold).
+- PVP: when the PVP combo ends, the champion keeps walking — the move-hold is latched on until
+  you click LMB again (B recall-stop, stop key and untoggle keys still stop it).
 - Keys: **B = recall** — full stop of any running combo + the move-hold, and the key still
   reaches the game so the recall lands. Space is an attack: it does not stop PVP or movement.
 - Numeric: Stop key (default `s`), Spc ms (space interval), AFK ms (anti-AFK

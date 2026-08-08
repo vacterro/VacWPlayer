@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.3.20 (2026-08-08)
+- Fix: casting abilities manually (q/w/e/r/d/f/c) no longer releases the LMB move-hold — the champion keeps running while you cast, checkbox on or off. The 1-7/G release stack (gated on `release_toggle_on_keys`) and the untoggle keys are the only remaining releasers.
+- Change: PVP combo release (toggle-off, hold-up, RMB-hold end) now latches the move-hold on when its MoveRefs is the last one — the champion keeps walking until you click LMB again. B recall-stop, stop key and untoggle keys still stop it; wave/jungle combos keep the old stop-on-release.
+- Tests: suite 331/331 PASS, pyflakes 0, AHK preflight OK.
+
 ## v0.3.19 (2026-08-08)
 - Fix: `tools/git_hunt.py` crashed on every run (T-116) — git log dates are offset-aware but `datetime.now()` is naive, so comparisons raised TypeError. New `_naive_dt()` strips the timezone offset; the tool now runs clean.
 - i18n: locale bundles overhauled (T-117/118/120/121) — `untoggle_keys_lbl` + `tt_untoggle_keys_lbl` added to every bundle (ru/et/ded previously fell back to English or showed the raw key); `toggle_release_on_keys` reworded to the post-v0.3.16 B-recall-stop / untoggle-a,v behavior; 29 owned bundles got real translations instead of EN placeholders; 15 dead keys removed from all 33 bundles; inline `locales.py` en/ru dicts synced to match (they are the runtime + parity source).

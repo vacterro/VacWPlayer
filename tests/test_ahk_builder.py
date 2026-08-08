@@ -38,30 +38,21 @@ def test_reset_state_untoggles_pvp_and_toggle_combos():
     assert "P_ryze_pvp_Held := false" in script
 
 
-def test_manual_aim_release_only_when_checkbox_on():
-    """Manual-aim ability keys release the move-hold ONLY when
-    release_toggle_on_keys is on, and never touch combo flags."""
-    base = {"mode": "general", "toggles": {"mouse_remap": True,
-                                           "mouse_toggle_hold": True,
-                                           "manual_aim_block": True},
-            "combos": []}
-
-    cfg_on = {"mode": "general",
-              "toggles": {**base["toggles"], "release_toggle_on_keys": True},
-              "combos": []}
-    script_on, _ = generate_script(cfg_on)
-    q = script_on[script_on.index("*sc010::"):]
-    q = q[:q.index("return") + len("return")]
-    assert "ReleaseMoveToggle" in q          # q releases the hold when checkbox on
-    assert "P_" not in q                      # never touches combo flags
-
-    cfg_off = {"mode": "general",
-               "toggles": {**base["toggles"], "release_toggle_on_keys": False},
+def test_manual_aim_never_releases_move_hold():
+    """Manual-aim ability keys NEVER release the move-hold - casting a skill
+    must not stand the champion still, checkbox on or off. Combo flags are
+    never touched either; only the 1-7/G stack and untoggle keys release."""
+    for on in (True, False):
+        cfg = {"mode": "general",
+               "toggles": {**{"mouse_remap": True, "mouse_toggle_hold": True,
+                              "manual_aim_block": True},
+                           "release_toggle_on_keys": on},
                "combos": []}
-    script_off, _ = generate_script(cfg_off)
-    q_off = script_off[script_off.index("*sc010::"):]
-    q_off = q_off[:q_off.index("return") + len("return")]
-    assert "ReleaseMoveToggle" not in q_off   # off -> no release on abilities
+        script, _ = generate_script(cfg)
+        q = script[script.index("*sc010::"):]
+        q = q[:q.index("return") + len("return")]
+        assert "ReleaseMoveToggle" not in q
+        assert "P_" not in q  # never touches combo flags
 
 
 def test_item_keys_release_only_when_checkbox_on():
@@ -188,6 +179,64 @@ def test_b_recall_stops_pvp_combo_and_move():
     assert "P_ryze_pvp_Held := false" in b
     assert "Step_ryze_pvp := 0" in b
     assert "MoveRefs := 0" in b
+
+
+def test_pvp_toggle_off_keeps_movement_until_lmb():
+    """PVP toggle-off keeps the champion moving: when PVP's MoveRefs drops to
+    zero the LMB move-hold is latched on, so the character keeps walking until
+    the user clicks LMB again."""
+    config = {
+        "mode": "ryze",
+        "toggles": {"mouse_remap": True, "mouse_toggle_hold": True},
+        "champions": {
+            "ryze": {"trigger_pvp": "F15", "keys_pvp": "q,w,e",
+                     "move_when_pressed_pvp": True, "toggle_pvp": True},
+        },
+    }
+    script, _ = generate_script(config)
+    f15 = script[script.index("*F15::"):]
+    f15 = f15[:f15.index("return") + len("return")]
+    assert "MoveRefs := (MoveRefs > 0 ? MoveRefs - 1 : 0)" in f15
+    assert "if (MoveRefs = 0) {" in f15
+    assert "MoveToggle := true" in f15
+
+
+def test_pvp_hold_release_keeps_movement():
+    """Hold-mode PVP release latches the move-hold the same way: releasing the
+    trigger keeps the champion walking until LMB click."""
+    config = {
+        "mode": "ryze",
+        "toggles": {"mouse_remap": True, "mouse_toggle_hold": True},
+        "champions": {
+            "ryze": {"trigger_pvp": "F15", "keys_pvp": "q,w,e",
+                     "move_when_pressed_pvp": True, "toggle_pvp": False},
+        },
+    }
+    script, _ = generate_script(config)
+    up = script[script.index("*F15 Up::"):]
+    up = up[:up.index("return") + len("return")]
+    assert "if (MoveRefs = 0) {" in up
+    assert "MoveToggle := true" in up
+
+
+def test_non_pvp_combos_do_not_latch_movement():
+    """Wave/jungle combos keep their old stop-on-release behaviour - only the
+    PVP slot latches movement after it ends."""
+    config = {
+        "mode": "ryze",
+        "toggles": {"mouse_remap": True, "mouse_toggle_hold": True},
+        "champions": {
+            "ryze": {"trigger_wave": "F13", "keys_wave": "q,e",
+                     "move_when_pressed_wave": True,
+                     "trigger_pvp": "F15", "keys_pvp": "q,w,e",
+                     "move_when_pressed_pvp": True, "toggle_pvp": True},
+        },
+    }
+    script, _ = generate_script(config)
+    up = script[script.index("*F13 Up::"):]
+    up = up[:up.index("return") + len("return")]
+    assert "MoveToggle := true" not in up
+    assert "MoveRefs := (MoveRefs > 0 ? MoveRefs - 1 : 0)" in up
 
 
 def _base_config():
