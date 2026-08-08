@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.3.18 (2026-08-08)
+- Chore: dead `bevelLight` theme token removed (T-115) — defined in theme.py but referenced nowhere; the bevel pair is `borderHighlight`/`borderDark`.
+- Chore: sc crew circuit — sense (hunt) clean, saitest all reviewed (no new reproductions), EE + QQ packages force-fresh and collected (zero-diff / payload-none).
+- Tests: suite 328/328 PASS, pyflakes 0, digest 2/2.
+
 ## v0.3.17 (2026-08-07)
 - Fix: B (recall) now fully stops a running PVP combo + the move-hold so the recall lands — combo flags and step counters are cleared, the move-hold is released, and the key still passes through to the game. Previously the combo kept spamming through the recall.
 - Fix: Space (attack) no longer releases the move-hold or stops PVP — attack while moving keeps the PVP hold and movement going. Space is a pass-through + space-spam trigger only.
