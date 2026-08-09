@@ -51,6 +51,8 @@ def build_scaled_templates(cfg, base_dir):
             "templates": scaled_templates,
             "threshold": float(entry.get("threshold", 0.75)),
         })
+        if entry.get("region") is not None:
+            loaded[-1]["region"] = entry["region"]
     return loaded
 
 
@@ -71,18 +73,57 @@ def best_template_match(gray, entry):
     return best_score, best_loc, best_tmpl_size
 
 
-def click_template_match(hwnd, gray, entry):
-    """Click the best matching scaled-template location in a full-window gray image."""
+def click_template_match(hwnd, gray, entry, origin=(0, 0)):
+    """Click the best matching scaled-template location in a full-window gray image.
+
+    `origin` offsets the click coordinates - used when `gray` is a crop of a
+    larger capture, so the click lands in window space, not crop space.
+    """
     score, loc, size = best_template_match(gray, entry)
     # loc/size are None only when no template matched at all - a real match at
     # the top-left corner is (0, 0), which must NOT be treated as falsy (T-083).
     if score < entry["threshold"] or loc is None or size is None:
         return False
     th, tw = size
-    cx, cy = loc[0] + tw // 2, loc[1] + th // 2
+    cx, cy = loc[0] + tw // 2 + origin[0], loc[1] + th // 2 + origin[1]
     print("matched '%s' (score=%.2f), clicking (%d,%d)" % (entry["name"], score, cx, cy))
     window_ctl.click_at(hwnd, cx, cy, button="left")
     return True
+
+
+def has_regions(entries):
+    """True when every entry carries a `region` - the cheap-region scan applies."""
+    return bool(entries) and all(e.get("region") is not None for e in entries)
+
+
+def scan_by_region(hwnd, entries, match=click_template_match):
+    """Region-only scan: one grab_region for the union box, per-entry crop.
+
+    Far lighter than the full-window grab: grab_region BitBlt's only the
+    pixels the buttons actually occupy, instead of PrintWindow's entire-surface
+    re-render, so a fast poll interval stops showing up on a CPU graph and in
+    the emulator's frame pacing. Returns True (clicked), False (no match) or
+    None (transient capture failure), matching scan_targets' contract. Reads
+    from the screen, so an occluding window corrupts the read - fine for an
+    accept/surrender button that is foreground by construction.
+    """
+    x0 = min(e["region"][0] for e in entries)
+    y0 = min(e["region"][1] for e in entries)
+    x1 = max(e["region"][2] for e in entries)
+    y1 = max(e["region"][3] for e in entries)
+    try:
+        img = capture.grab_region(hwnd, (x0, y0, x1, y1))
+    except RuntimeError:
+        return None
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    for entry in entries:
+        r = entry["region"]
+        crop = gray[r[1] - y0:r[3] - y0, r[0] - x0:r[2] - x0]
+        if crop.shape[0] < 1 or crop.shape[1] < 1:
+            continue
+        if match(hwnd, crop, entry, origin=(r[0] - x0, r[1] - y0)):
+            return True
+    return False
 
 
 def run_poller(name, config_path, config_name, build_targets, scan_targets,

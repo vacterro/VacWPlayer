@@ -32,18 +32,18 @@ def _reload(cfg, targets):
 
 
 def _scan(hwnd, cfg, targets):
+    auto_accept = cfg.get("auto_accept", True)
+    candidates = [e for e in targets
+                  if (auto_accept and "accept" in e["name"].lower())
+                  or (not auto_accept and "decline" in e["name"].lower())]
+    if poller_engine.has_regions(candidates):
+        return poller_engine.scan_by_region(hwnd, candidates)
     try:
         full_img = capture.grab(hwnd)
     except RuntimeError:
         return None
     gray = cv2.cvtColor(full_img, cv2.COLOR_BGR2GRAY)
-    auto_accept = cfg.get("auto_accept", True)
-    for entry in targets:
-        name = entry["name"].lower()
-        if auto_accept and "accept" not in name:
-            continue
-        if not auto_accept and "decline" not in name:
-            continue
+    for entry in candidates:
         if poller_engine.click_template_match(hwnd, gray, entry):
             return True
     return False

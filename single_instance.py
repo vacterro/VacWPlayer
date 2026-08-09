@@ -10,6 +10,27 @@ import win32event
 import win32process
 import winerror
 
+
+def set_timer_resolution(period_ms=1):
+    """Raise the Windows timer resolution for the lifetime of the process.
+
+    The default Windows sleep quantum is ~15.6ms, so time.sleep() at a
+    sub-16ms poll interval (e.g. 0.030) is quantized and lands erratically
+    (0/15.6/31.2/46.8...). timeBeginPeriod(1) drops the quantum to 1ms, which
+    is what makes short poll sleeps actually track the configured interval.
+    Restored with timeEndPeriod at process exit (atexit). Any failure is
+    ignored: a locked-down host that refuses the call simply keeps the coarse
+    timer and still polls correctly, just less precisely.
+    """
+    try:
+        import atexit
+        import ctypes
+        winmm = ctypes.WinDLL("winmm", use_last_error=True)
+        if winmm.timeBeginPeriod(period_ms) == 0:
+            atexit.register(winmm.timeEndPeriod, period_ms)
+    except Exception:
+        pass
+
 def _running_pids():
     try:
         return win32process.EnumProcesses()
@@ -232,6 +253,7 @@ def ensure_single_instance(name, replace=False):
     an accidental double-launch just refuses instead of silently killing
     something.
     """
+    set_timer_resolution()
     mutex_name = f"WildRiftTool_{name}"
     handle = win32event.CreateMutex(None, False, mutex_name)
     err = win32api.GetLastError()

@@ -8,6 +8,8 @@ loop iterations and asserts the sleep pattern it produced.
 import sys
 from pathlib import Path
 
+import numpy as np
+
 BASE = Path(__file__).resolve().parent.parent
 if str(BASE) not in sys.path:
     sys.path.insert(0, str(BASE))
@@ -215,3 +217,69 @@ def test_click_template_match_no_match_returns_false(monkeypatch):
                         lambda gray, entry: (0.0, None, None))
     entry = {"name": "t", "threshold": 0.75}
     assert poller_engine.click_template_match(123, "gray", entry) is False
+
+
+# --- T-127: region-based cheap scan (grab_region, not full-window grab) -----
+
+def test_click_template_match_origin_offsets_click(monkeypatch):
+    """origin shifts the click into window space when gray is a crop."""
+    clicks = []
+    monkeypatch.setattr(poller_engine, "best_template_match",
+                        lambda gray, entry: (0.9, (0, 0), (10, 20)))
+    monkeypatch.setattr(poller_engine.window_ctl, "click_at",
+                        lambda h, x, y, button="left": clicks.append((x, y)))
+    entry = {"name": "t", "threshold": 0.75}
+    assert poller_engine.click_template_match(123, "gray", entry, origin=(5, 7)) is True
+    assert clicks == [(15, 12)]  # 0 + 10//2 + 5, 0 + 20//2 + 7
+
+
+def test_has_regions_requires_all_nonempty():
+    assert poller_engine.has_regions([]) is False
+    assert poller_engine.has_regions([{"name": "a"}]) is False
+    assert poller_engine.has_regions(
+        [{"name": "a"}, {"name": "b", "region": [0, 0, 1, 1]}]) is False
+    assert poller_engine.has_regions(
+        [{"name": "a", "region": [0, 0, 1, 1]}]) is True
+
+
+def test_scan_by_region_grabs_union_once_and_offsets(monkeypatch):
+    """One grab_region of the union box; each entry matches on its own crop
+    with an origin offset back into window space."""
+    grabs = []
+    monkeypatch.setattr(poller_engine.capture, "grab_region",
+                        lambda h, r: grabs.append(r) or np.zeros((30, 30, 3), dtype=np.uint8))
+    seen = []
+
+    def fake_match(hwnd, gray, entry, origin=(0, 0)):
+        seen.append((entry["name"], origin, gray.shape))
+        return False
+
+    entries = [
+        {"name": "a", "threshold": 0.75, "region": [10, 20, 30, 40]},
+        {"name": "b", "threshold": 0.75, "region": [20, 30, 40, 50]},
+    ]
+    assert poller_engine.scan_by_region(123, entries, match=fake_match) is False
+    assert grabs == [(10, 20, 40, 50)]  # union box, captured once
+    # entry a's top-left is the union origin; entry b is offset by (10, 10)
+    assert seen[0] == ("a", (0, 0), (20, 20))
+    assert seen[1] == ("b", (10, 10), (20, 20))
+
+
+def test_scan_by_region_capture_failure_returns_none(monkeypatch):
+    """A transient grab_region failure is None, matching scan_targets' contract."""
+    def boom(hwnd, region):
+        raise RuntimeError("window gone")
+    monkeypatch.setattr(poller_engine.capture, "grab_region", boom)
+    entries = [{"name": "a", "threshold": 0.75, "region": [0, 0, 10, 10]}]
+    assert poller_engine.scan_by_region(123, entries) is None
+
+
+def test_build_scaled_templates_carries_region(monkeypatch):
+    monkeypatch.setattr(poller_engine.cv2, "imread",
+                        lambda path, flags: np.zeros((10, 10), dtype=np.uint8))
+    loaded = poller_engine.build_scaled_templates(
+        {"templates": [{"name": "b", "file": "x.png", "threshold": 0.8,
+                        "region": [1, 2, 30, 40]}]}, ".")
+    assert loaded[0].get("region") == [1, 2, 30, 40]
+    assert "region" not in poller_engine.build_scaled_templates(
+        {"templates": [{"name": "b", "file": "x.png", "threshold": 0.8}]}, ".")[0]

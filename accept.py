@@ -30,6 +30,8 @@ def _reload(cfg, targets):
 
 
 def _scan(hwnd, cfg, targets):
+    if poller_engine.has_regions(targets):
+        return poller_engine.scan_by_region(hwnd, targets)
     try:
         full_img = capture.grab(hwnd)
     except RuntimeError:

@@ -90,3 +90,43 @@ def test_kill_previous_holder_kills_verified_holder(monkeypatch):
 
     si._kill_previous_holder("accept")
     assert killed == ["KILL"]
+
+
+def test_set_timer_resolution_survives_winmm_failure(monkeypatch):
+    """A host that refuses timeBeginPeriod must not crash the engine bootstrap."""
+
+    class FakeCtypes:
+        @staticmethod
+        def WinDLL(*a, **k):
+            raise OSError("no winmm")
+
+    monkeypatch.setitem(sys.modules, "ctypes", FakeCtypes())
+    si.set_timer_resolution()  # must not raise
+
+
+def test_set_timer_resolution_registers_restore_on_success(monkeypatch):
+    calls = []
+
+    class FakeWinmm:
+        def timeBeginPeriod(self, ms):
+            calls.append(("begin", ms))
+            return 0
+
+        def timeEndPeriod(self, ms):
+            calls.append(("end", ms))
+            return 0
+
+    class FakeCtypes:
+        @staticmethod
+        def WinDLL(*a, **k):
+            return FakeWinmm()
+
+    class FakeAtexit:
+        @staticmethod
+        def register(fn, arg):
+            calls.append(("register", arg))
+
+    monkeypatch.setitem(sys.modules, "ctypes", FakeCtypes())
+    monkeypatch.setitem(sys.modules, "atexit", FakeAtexit())
+    si.set_timer_resolution(1)
+    assert calls == [("begin", 1), ("register", 1)]

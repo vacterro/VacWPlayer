@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.3.22 (2026-08-09)
+- Perf: low-lag polling at fast intervals (T-127). Accept/surrender used to re-render the whole window (PrintWindow) every tick; an optional per-template `region` in the config now switches them to a cheap screen-region BitBlt (`grab_region`) of just the button area — ~100x less work per poll, so a <32ms interval stops lagging the emulator. No region set = old full-window behavior (backward compatible).
+- Perf: engines and the GUI now raise the Windows timer resolution (`timeBeginPeriod(1)`) for their lifetime, so short poll sleeps aren't quantized to the ~15.6ms default quantum and a configured 32ms interval actually polls at 32ms.
+- Tests: suite 338/338 PASS, pyflakes 0.
+
 ## v0.3.21 (2026-08-09)
 - Fix: `tools/ast_hunt.py` crashed on RU-locale Windows (T-126) — the mergeable-imports message carried a `→` (U+2192) that the cp1251 console cannot encode, so the report died mid-run with UnicodeEncodeError. Replaced with ASCII `->`; the tool now completes under `PYTHONIOENCODING=cp1251`. Same class as the v0.3.19 git_hunt fix. Reproduction + regression in saitest scenario011.
 - Tests: suite 331/331 PASS, pyflakes 0, ast_hunt rc=568 under cp1251 (no crash, SUMMARY reached).
