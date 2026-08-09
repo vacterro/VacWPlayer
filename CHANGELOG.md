@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.3.21 (2026-08-09)
+- Fix: `tools/ast_hunt.py` crashed on RU-locale Windows (T-126) — the mergeable-imports message carried a `→` (U+2192) that the cp1251 console cannot encode, so the report died mid-run with UnicodeEncodeError. Replaced with ASCII `->`; the tool now completes under `PYTHONIOENCODING=cp1251`. Same class as the v0.3.19 git_hunt fix. Reproduction + regression in saitest scenario011.
+- Tests: suite 331/331 PASS, pyflakes 0, ast_hunt rc=568 under cp1251 (no crash, SUMMARY reached).
+
 ## v0.3.20 (2026-08-08)
 - Fix: casting abilities manually (q/w/e/r/d/f/c) no longer releases the LMB move-hold — the champion keeps running while you cast, checkbox on or off. The 1-7/G release stack (gated on `release_toggle_on_keys`) and the untoggle keys are the only remaining releasers.
 - Change: PVP combo release (toggle-off, hold-up, RMB-hold end) now latches the move-hold on when its MoveRefs is the last one — the champion keeps walking until you click LMB again. B recall-stop, stop key and untoggle keys still stop it; wave/jungle combos keep the old stop-on-release.

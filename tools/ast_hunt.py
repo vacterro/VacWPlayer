@@ -168,7 +168,7 @@ class ImportMerger(ast.NodeVisitor):
                 all_names = [name for _, name in sorted(entries, key=lambda x: x[0])]
                 lines_str = ', '.join(f'L{l}' for l in sorted(single_lines))
                 self.findings.append((single_lines[0], 'LOW',
-                    f'from {module} import ... merged: lines {lines_str} → from {module} import {", ".join(all_names)}'))
+                    f'from {module} import ... merged: lines {lines_str} -> from {module} import {", ".join(all_names)}'))
 
 
 # ──────────────────────────────────────────────
