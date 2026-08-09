@@ -180,7 +180,112 @@ def find_orphan_templates(files):
     return sorted(orphans), found_templates
 
 
-def generate_report(scanner_results, file_metrics, orphan_templates):
+def _cyclomatic(node):
+    """Cyclomatic complexity of one function node (approximation)."""
+    import ast as _ast
+    c = 1
+    for n in _ast.walk(node):
+        if isinstance(n, (_ast.If, _ast.For, _ast.While, _ast.With,
+                          _ast.ExceptHandler, _ast.Assert)):
+            c += 1
+        elif isinstance(n, _ast.BoolOp):
+            c += len(n.values) - 1
+    return c
+
+
+def _ast_health_signals(files):
+    """Live health metrics derived from the source tree, never hardcoded.
+
+    Feeds the health score: type-hint coverage, max cyclomatic complexity,
+    bare-pass except handlers and whether logging is imported anywhere. These
+    used to be a static literal list that drifted from the tree it claimed to
+    describe (T-128) - the numbers now come from the actual sources.
+    """
+    import ast as _ast
+    total_funcs = 0
+    typed_funcs = 0
+    max_complexity = 0
+    empty_excepts = 0
+    imports_logging = False
+
+    def _typed(node):
+        if node.returns is not None:
+            return True
+        if any(a.annotation is not None for a in node.args.args):
+            return True
+        if node.args.vararg is not None and node.args.vararg.annotation is not None:
+            return True
+        if node.args.kwarg is not None and node.args.kwarg.annotation is not None:
+            return True
+        return False
+
+    for path in files:
+        try:
+            with open(path, encoding='utf-8') as fh:
+                src = fh.read()
+        except (OSError, UnicodeDecodeError):
+            continue
+        try:
+            tree = _ast.parse(src)
+        except SyntaxError:
+            continue
+        for node in _ast.walk(tree):
+            if isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
+                total_funcs += 1
+                if _typed(node):
+                    typed_funcs += 1
+                max_complexity = max(max_complexity, _cyclomatic(node))
+            elif isinstance(node, _ast.ExceptHandler):
+                body = node.body
+                if len(body) == 1 and isinstance(body[0], _ast.Pass):
+                    empty_excepts += 1
+            elif isinstance(node, _ast.Import):
+                imports_logging = imports_logging or any(
+                    a.name == 'logging' for a in node.names)
+            elif isinstance(node, _ast.ImportFrom):
+                imports_logging = imports_logging or node.module == 'logging'
+
+    return {
+        'total_funcs': total_funcs,
+        'typed_funcs': typed_funcs,
+        'typed_pct': (100.0 * typed_funcs / total_funcs) if total_funcs else 100.0,
+        'max_complexity': max_complexity,
+        'empty_excepts': empty_excepts,
+        'imports_logging': imports_logging,
+    }
+
+
+def find_orphan_config_fields(files):
+    """Top-level config.json keys no Python source references by string.
+
+    Replaces the old hardcoded claim that config.json carried orphan fields
+    (T-128): the truth is computed, so a key consumed as `"lang"` in code is
+    never reported orphan just because a stale snapshot said so.
+    """
+    cfg_path = os.path.join(PROJECT, 'config.json')
+    try:
+        with open(cfg_path, encoding='utf-8') as fh:
+            cfg = json.load(fh)
+    except (OSError, ValueError):
+        return []
+    if not isinstance(cfg, dict):
+        return []
+    keys = list(cfg)
+    referenced = set()
+    for path in files:
+        try:
+            with open(path, encoding='utf-8') as fh:
+                src = fh.read()
+        except (OSError, UnicodeDecodeError):
+            continue
+        for key in keys:
+            if key not in referenced and ('"%s"' % key in src or "'%s'" % key in src):
+                referenced.add(key)
+    return [k for k in keys if k not in referenced]
+
+
+def generate_report(scanner_results, file_metrics, orphan_templates,
+                    health_signals, orphan_config, ahk_text):
     """Generate consolidated report with cross-references."""
     report = []
 
@@ -283,45 +388,67 @@ def generate_report(scanner_results, file_metrics, orphan_templates):
     report.append(f'    Long-function hotspots: {len(hotspot_files)} files')
     report.append('')
 
-    # ── Recommendations ──
+    # Live counts for the health section: ast_hunt Cat 15 = builtin shadowing,
+    # runtime_hunt Cat 6 = dead imports.
+    ast_summary = parse_summary(scanner_results.get('ast_hunt.py', {}).get('stdout', ''))
+    rt_summary = parse_summary(scanner_results.get('runtime_hunt.py', {}).get('stdout', ''))
+    builtin_shadowing = ast_summary.get(15, {}).get('count', 0) if ast_summary.get(15) else 0
+    dead_imports = rt_summary.get(6, {}).get('count', 0) if rt_summary.get(6) else 0
+
+    # ── Recommendations (derived from this run, never hardcoded) ──
     report.append('--- Prioritized Recommendations ---')
-    recommendations = [
-        ('HIGH', 'Missing #Persistent in AHK script — script may terminate early'),
-        ('HIGH', 'Zero type annotations across 323 functions — prevents static analysis'),
-        ('HIGH', 'No logging module imported anywhere — all except handlers are silent'),
-        ('MEDIUM', 'generate_script() has cyclomatic complexity 80 — refactor into sub-functions'),
-        ('MEDIUM', '42 module-level constants marked unused — but exported to other files (probably OK)'),
-        ('MEDIUM', 'Parameter "list" shadows builtin in minimap_tab.py:_add_row'),
-        ('MEDIUM', 'Function "set" shadows builtin in locales.py'),
-        ('LOW', 'Config drift: config.json has orphan fields "lang", "window"'),
-        ('LOW', '6 dead imports across 4 files'),
-        ('LOW', '29 duplicate code blocks across tabs/ and champions.py'),
-    ]
-    for severity, rec in recommendations:
-        report.append(f'  [{severity}] {rec}')
+    health = health_signals
+    ahk = ahk_text or ''
+    fired = []
+    if health['typed_pct'] < 50:
+        fired.append(('HIGH', 'Low type-hint coverage',
+                      '%.0f%% of %d functions annotated' % (health['typed_pct'], health['total_funcs'])))
+    if not health['imports_logging']:
+        fired.append(('HIGH', 'No logging module imported anywhere',
+                      'all except handlers are silent'))
+    if health['max_complexity'] >= 80:
+        fired.append(('MEDIUM', 'Giant function',
+                      'max cyclomatic complexity %d - refactor into sub-functions' % health['max_complexity']))
+    if health['empty_excepts'] >= 10:
+        fired.append(('MEDIUM', 'Bare-pass except handlers',
+                      '%d handlers swallow errors silently' % health['empty_excepts']))
+    if orphan_config:
+        fired.append(('LOW', 'Config drift',
+                      'config.json orphan fields: %s' % ', '.join(orphan_config)))
+    if '#Persistent' not in ahk:
+        fired.append(('LOW', 'AHK script missing #Persistent',
+                      'script may terminate early'))
+    if 'try' not in ahk.lower():
+        fired.append(('LOW', 'No error handling in AHK script', None))
+    if not fired:
+        fired.append(('LOW', 'No major issues in this run', None))
+    for severity, title, detail in fired:
+        line = f'  [{severity}] {title}'
+        if detail:
+            line += ' - ' + detail
+        report.append(line)
     report.append('')
 
-    # ── Final scores ──
+    # ── Final scores (computed from the scan data above) ──
     report.append('--- Project Health Score ---')
-    # Score: 100 - deductions
     score = 100
-    deductions = {
-        'No type hints': -15,
-        'No logging': -10,
-        'Giant function (80 complexity)': -10,
-        'Empty except handlers (29)': -8,
-        'Builtin shadowing (2)': -4,
-        'Orphan config fields': -2,
-        'Dead imports (6)': -2,
-        'Code duplication (29 blocks)': -5,
-        'AHK missing #Persistent': -5,
-        'No error handling in AHK': -3,
-    }
-    for reason, deduct in deductions.items():
-        score += deduct
-        report.append(f'    {deduct:+3d}  {reason}')
+    deductions = [
+        ('No type hints', 15, health['typed_pct'] < 50),
+        ('No logging', 10, not health['imports_logging']),
+        ('Giant function', 10, health['max_complexity'] >= 80),
+        ('Empty except handlers', 8, health['empty_excepts'] >= 10),
+        ('Builtin shadowing', 4, builtin_shadowing > 0),
+        ('Orphan config fields', 2, bool(orphan_config)),
+        ('Dead imports', 2, dead_imports > 0),
+        ('AHK missing #Persistent', 5, '#Persistent' not in ahk),
+        ('No error handling in AHK', 3, 'try' not in ahk.lower()),
+    ]
+    for reason, deduct, cond in deductions:
+        if cond:
+            score -= deduct
+            report.append(f'    {-deduct:+3d}  {reason}')
     report.append('    ----')
-    report.append(f'    {score:3d}  TOTAL HEALTH SCORE')
+    report.append(f'    {score:3d}  TOTAL HEALTH SCORE (higher is better)')
     report.append('    (Higher is better. 70+ = healthy, 50-70 = needs work, <50 = critical)')
     report.append('')
 
@@ -363,7 +490,17 @@ def main():
 
     # Generate report
     metrics = analyze_file_metrics(files)
-    report, grand_total = generate_report(scanners, metrics, (orphans, total_tmpl))
+    health_signals = _ast_health_signals(files)
+    orphan_config = find_orphan_config_fields(files)
+    ahk_path = os.path.join(PROJECT, 'wr_runtime.ahk')
+    ahk_text = ''
+    try:
+        with open(ahk_path, encoding='utf-8', errors='replace') as fh:
+            ahk_text = fh.read()
+    except OSError:
+        pass
+    report, grand_total = generate_report(scanners, metrics, (orphans, total_tmpl),
+                                          health_signals, orphan_config, ahk_text)
 
     print('\n' + report)
 

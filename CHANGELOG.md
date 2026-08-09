@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.3.23 (2026-08-09)
+- Tools: meta_hunt health report now derives from the live tree (T-128). The old recommendations + health score were a static literal snapshot ("323 funcs", "config.json orphan lang,window" — false: lang consumed by config_store.py, window not even a key); now computed: type-hint coverage, max cyclomatic complexity, bare-pass except handlers, logging import presence, config.json orphan keys, live builtin-shadowing/dead-import counts, real AHK scan. Score was constant 36, now computed 58.
+- Tests: suite 341/341 PASS, pyflakes 0.
+
 ## v0.3.22 (2026-08-09)
 - Perf: low-lag polling at fast intervals (T-127). Accept/surrender used to re-render the whole window (PrintWindow) every tick; an optional per-template `region` in the config now switches them to a cheap screen-region BitBlt (`grab_region`) of just the button area — ~100x less work per poll, so a <32ms interval stops lagging the emulator. No region set = old full-window behavior (backward compatible).
 - Perf: engines and the GUI now raise the Windows timer resolution (`timeBeginPeriod(1)`) for their lifetime, so short poll sleeps aren't quantized to the ~15.6ms default quantum and a configured 32ms interval actually polls at 32ms.
