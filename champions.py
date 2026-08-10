@@ -20,7 +20,7 @@ Ultimate=r, Summoner=f, {Space}=attack-move/auto.
 ROSTER = [
     "Aatrox", "Ahri", "Akali", "Akshan", "Alistar", "Ambessa", "Amumu", "Annie",
     "Ashe", "Aurelion Sol", "Aurora", "Bard", "Blitzcrank", "Brand", "Braum",
-    "Caitlyn", "Camille", "Corki", "Darius", "Diana", "Dr. Mundo", "Draven",
+    "Caitlyn", "Camille", "Cho'Gath", "Corki", "Darius", "Diana", "Dr. Mundo", "Draven",
     "Ekko", "Evelynn", "Ezreal", "Fiddlesticks", "Fiora", "Fizz", "Galio",
     "Garen", "Gnar", "Gragas", "Graves", "Gwen", "Hecarim", "Heimerdinger",
     "Irelia", "Janna", "Jarvan IV", "Jax", "Jayce", "Jhin", "Jinx", "K'Sante",

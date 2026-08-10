@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.3.27 (2026-08-10)
+- Champions: roster sync (T-134). Verified the roster against the live official champion list — all 140 champions current, only Cho'Gath was missing; added with a placeholder combo.
+- Tests: suite 341/341 PASS, pyflakes 0.
+
 ## v0.3.26 (2026-08-10)
 - Types: type-hint baseline for core modules (T-132). Public functions in `config_store.py`, `engine_config.py`, `capture.py` and `champions.py` are annotated (typed_pct 0 -> 2% project-wide).
 - Tests: suite 341/341 PASS, pyflakes 0.
