@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.3.24 (2026-08-10)
+- Tools: exec_hunt report drift fixed (T-130, from the T-129 MARKHUNT audit). The config validator hardcoded pre-migration schemas (`lang`/`window`/`hotkeys`/`emulator` for config.json, `enabled`/`interval` for the engine configs), so every run reported 43 false MISSING/UNKNOWN keys. It now delegates config.json structure to `config_store.validate_config` (the runtime's own source of truth) and validates deathwatch/autocontinue against their real key sets — 0 false issues. Module-safety checks now recognise the `if __name__ == "__main__":` guard, skip `.saipen/` agent scratch, and the Windows path normalization makes the side-effect blacklist actually match (it never did on backslash paths). Cat7 noise: 271 -> 1; Cat1 false import FAILs: 81 -> 0.
+- Tests: suite 341/341 PASS, pyflakes 0.
+
 ## v0.3.23 (2026-08-09)
 - Tools: meta_hunt health report now derives from the live tree (T-128). The old recommendations + health score were a static literal snapshot ("323 funcs", "config.json orphan lang,window" — false: lang consumed by config_store.py, window not even a key); now computed: type-hint coverage, max cyclomatic complexity, bare-pass except handlers, logging import presence, config.json orphan keys, live builtin-shadowing/dead-import counts, real AHK scan. Score was constant 36, now computed 58.
 - Tests: suite 341/341 PASS, pyflakes 0.

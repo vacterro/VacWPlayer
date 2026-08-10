@@ -25,12 +25,13 @@ _common.PROJECT = PROJECT
 from _common import get_py_files, short_path
 
 sys.path.insert(0, PROJECT)
+import config_store  # config.json structure is validated here (single source of truth)
 
 # Any file starting with these prefixes is skipped (side effects / display / loops)
 IMPORT_BLACKLIST_PREFIXES = ('tabs/', 'tools/', 'main.pyw', 'champ_picker',
                              'combo_browser', 'capture', 'window_ctl',
                              'key_blocker', 'autocontinue', 'deathwatch',
-                             'vintage_widgets')  # vintage_widgets uses tkinter
+                             'vintage_widgets', '.saipen/')  # vintage_widgets uses tkinter; .saipen/ is agent scratch
 
 
 def to_module_path(filepath):
@@ -55,7 +56,8 @@ class ImportVerifier:
         results = {}
         for f in files:
             sp = short_path(f)
-            if any(sp.startswith(p) for p in IMPORT_BLACKLIST_PREFIXES):
+            sp_norm = sp.replace('\\', '/')
+            if any(sp_norm.startswith(p) for p in IMPORT_BLACKLIST_PREFIXES):
                 results[sp] = {'status': 'SKIP', 'error': 'blacklisted (side effects)'}
                 continue
             mod_name, _ = to_module_path(f)
@@ -156,29 +158,40 @@ class SmokeTester:
 class ConfigValidator:
     def validate(self):
         results = []
+        # Schema source of truth: config.json top-level keys + shapes are owned
+        # by config_store.validate_config (delegated below); the engine config
+        # key sets mirror the keys deathwatch.py / autocontinue.py index.
         config_files = [
             ('config.json', {
                 'keys': {
-                    'lang': str,
-                    'window': dict,
-                    'hotkeys': dict,
-                    'emulator': str,
+                    'afkfarm': dict, 'champions': dict, 'combos': list,
+                    'lang': str, 'minimap': dict, 'mode': str, 'toggles': dict,
                 },
-                'optional_keys': ['theme'],
+                'optional_keys': ['window'],
             }),
             ('deathwatch_config.json', {
                 'keys': {
-                    'enabled': bool,
-                    'interval': (int, float),
+                    'monitor_enabled': bool, 'window_title': str,
+                    'poll_interval_sec': (int, float), 'shop_buffer_sec': (int, float),
+                    'restore_buffer_sec': (int, float), 'match_threshold': (int, float),
+                    'death_label_region': list, 'timer_digits_region': list,
+                    'death_label_template': str, 'digit_templates_dir': str,
+                    'max_death_wait_sec': (int, float), 'quickbuy_key': str,
+                    'quickbuy_presses': int, 'quickbuy_window_ms': (int, float),
+                    'blocked_keys': list, 'pedal_block_sec': (int, float),
+                    'switch_to_work_window': bool, 'work_window_title': str,
+                    'click_mid_on_resurrect': bool, 'lock_window_resurrect': bool,
+                    'autobuy_after_b': bool, 'buy_after_b_delay_sec': (int, float),
+                    'autobuy_then_mid': bool, 'controlsend_z': bool,
+                    'autobuy_then_mid_delay_sec': (int, float),
                 },
-                'optional_keys': ['hotkey', 'buy_delay', 'buy_items'],
             }),
             ('autocontinue_config.json', {
                 'keys': {
-                    'enabled': bool,
-                    'actions': list,
+                    'monitor_enabled': bool, 'window_title': str,
+                    'poll_interval_sec': (int, float), 'click_cooldown_sec': (int, float),
+                    'buttons': list,
                 },
-                'optional_keys': ['interval', 'retries'],
             }),
         ]
 
@@ -198,13 +211,19 @@ class ConfigValidator:
                 results.append((cfg_name, 'TYPE ERROR', 'root is not a dict'))
                 continue
 
+            if cfg_name == 'config.json':
+                # Structural checks are config_store's job; delegate so the
+                # schema cannot drift away from runtime again (T-130).
+                for p in config_store.validate_config(data):
+                    results.append((cfg_name, 'INVALID', p))
+
             # Check required keys
             required = schema.get('keys', {})
             optional = schema.get('optional_keys', [])
             for key, expected_type in required.items():
                 if key not in data:
                     results.append((cfg_name, 'MISSING KEY', f'"{key}" required'))
-                elif not isinstance(data[key], expected_type):
+                elif expected_type is not object and not isinstance(data[key], expected_type):
                     results.append((cfg_name, 'TYPE ERROR', f'"{key}" expected {expected_type.__name__}, got {type(data[key]).__name__}'))
 
             # Check for unknown keys
@@ -390,16 +409,19 @@ class ModuleSafetyChecker:
     def check(self, files):
         results = []
         import ast as _ast
-        SAFE_CALLS = frozenset({'print', 'len', 'str', 'int', 'list', 'dict', 'set',
-                                'type', 'isinstance', 'issubclass', 'hasattr', 'getattr',
-                                'open', 'range', 'enumerate', 'sorted', 'reversed',
-                                'zip', 'map', 'filter', 'any', 'all', 'sum', 'min', 'max',
-                                'Path', '__import__', 'dir', 'float', 'json', 'os', 'sys',
-                                'hasattr', 'repr', 'bool', 'bytes', 'tuple'})
+        SAFE_CALLS = frozenset({'print', 'len', 'str', 'int', 'float', 'bool', 'list',
+                                'dict', 'set', 'tuple', 'frozenset', 'type',
+                                'isinstance', 'issubclass', 'hasattr', 'getattr',
+                                'setattr', 'open', 'range', 'enumerate', 'sorted',
+                                'reversed', 'zip', 'map', 'filter', 'any', 'all',
+                                'sum', 'min', 'max', 'Path', '__import__', 'dir',
+                                'repr', 'bytes', 'json', 'os', 'sys', 're',
+                                'datetime', 'atexit', 'time', 'slug', 'RuntimeError'})
 
         for f in files:
             sp = short_path(f)
-            if any(sp.startswith(p) for p in IMPORT_BLACKLIST_PREFIXES):
+            sp_norm = sp.replace('\\', '/')
+            if any(sp_norm.startswith(p) for p in IMPORT_BLACKLIST_PREFIXES):
                 continue
             try:
                 with open(f, encoding='utf-8-sig') as fh:
@@ -408,17 +430,30 @@ class ModuleSafetyChecker:
             except (SyntaxError, UnicodeDecodeError):
                 continue
 
-            # Walk AST with scope tracking — DFS that tracks nesting
-            def _dfs(node, in_func):
+            def _is_main_guard(test):
+                # `if __name__ == "__main__":` -- module-level calls under it
+                # are deliberate entry points, not import side effects.
+                return (isinstance(test, _ast.Compare)
+                        and isinstance(test.left, _ast.Name)
+                        and test.left.id == '__name__'
+                        and len(test.comparators) == 1
+                        and isinstance(test.comparators[0], _ast.Constant)
+                        and test.comparators[0].value == '__main__')
+
+            # Walk AST with scope tracking -- DFS that tracks nesting and the
+            # `if __name__ == "__main__":` guard.
+            def _dfs(node, in_func, in_main_guard):
                 if isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef, _ast.ClassDef)):
                     in_func = True
-                if isinstance(node, _ast.Call) and not in_func:
+                if isinstance(node, _ast.If) and _is_main_guard(node.test):
+                    in_main_guard = True
+                if isinstance(node, _ast.Call) and not in_func and not in_main_guard:
                     if isinstance(node.func, _ast.Name) and node.func.id not in SAFE_CALLS:
                         results.append((sp, 'WARN', f'module-level call: {node.func.id}()'))
                 for child in _ast.iter_child_nodes(node):
-                    _dfs(child, in_func)
+                    _dfs(child, in_func, in_main_guard)
 
-            _dfs(tree, False)
+            _dfs(tree, False, False)
 
         return results
 
