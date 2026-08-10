@@ -1,8 +1,11 @@
 import ctypes
+import logging
 import win32con
 import win32gui
 import win32ui
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 PW_CLIENTONLY = 1
 PW_RENDERFULLCONTENT = 2
@@ -94,8 +97,8 @@ def grab_region(hwnd, region):
         if bitmap:
             try:
                 win32gui.DeleteObject(bitmap.GetHandle())
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("DeleteObject(bitmap) failed: %s", e)
         if mem_dc:
             mem_dc.DeleteDC()
         if img_dc:

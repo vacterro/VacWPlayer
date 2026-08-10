@@ -746,6 +746,8 @@ class VacWPlayer:
 
 
 if __name__ == "__main__":
+    import engine_config
+    engine_config.setup_logging()
     single_instance.ensure_single_instance("wr_assistant", replace=True)
     app = VacWPlayer()
     atexit.register(app.stop_everything)

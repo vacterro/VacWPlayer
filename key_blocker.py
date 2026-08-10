@@ -1,7 +1,10 @@
 import ctypes
 import ctypes.wintypes as wintypes
+import logging
 import threading
 import time
+
+logger = logging.getLogger(__name__)
 
 WH_KEYBOARD_LL = 13
 WM_KEYDOWN = 0x0100
@@ -128,8 +131,8 @@ def start(blocked_keys=None):
         if _hook_handle:
             try:
                 user32.UnhookWindowsHookEx(_hook_handle)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("UnhookWindowsHookEx failed: %s", e)
             _hook_handle = None
     _block_until = 0.0
     _block_until_released_vk.clear()

@@ -11,9 +11,21 @@ numerics must be finite). The load path turns any problems into the existing
 FATAL SystemExit policy.
 """
 
+import logging
 import math
 import os
 import re
+
+logger = logging.getLogger(__name__)
+
+
+def setup_logging(level=logging.INFO):
+    """Configure the root logger once (console). Engines and the GUI call
+    this at startup so silent-catch paths have somewhere to be heard."""
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
 
 
 def mtime_changed(path, last_mtime):

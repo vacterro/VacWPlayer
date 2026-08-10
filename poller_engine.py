@@ -131,6 +131,7 @@ def run_poller(name, config_path, config_name, build_targets, scan_targets,
                replace=False):
     """Run the shared poll loop. scan_targets returns True (clicked), False (no
     match) or None (transient capture failure - retry after the poll interval)."""
+    engine_config.setup_logging()
     single_instance.ensure_single_instance(name, replace=replace)
     single_instance.start_parent_watchdog()
     window_ctl.set_dpi_aware()

@@ -1,3 +1,4 @@
+import logging
 import os
 import subprocess
 import sys
@@ -9,6 +10,8 @@ import win32con
 import win32event
 import win32process
 import winerror
+
+logger = logging.getLogger(__name__)
 
 
 def set_timer_resolution(period_ms=1):
@@ -28,13 +31,14 @@ def set_timer_resolution(period_ms=1):
         winmm = ctypes.WinDLL("winmm", use_last_error=True)
         if winmm.timeBeginPeriod(period_ms) == 0:
             atexit.register(winmm.timeEndPeriod, period_ms)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("timeBeginPeriod(%d) unavailable: %s", period_ms, e)
 
 def _running_pids():
     try:
         return win32process.EnumProcesses()
-    except Exception:
+    except Exception as e:
+        logger.warning("EnumProcesses failed: %s", e)
         return []
 
 
@@ -46,14 +50,15 @@ def _process_names():
             handle = win32api.OpenProcess(
                 win32con.PROCESS_QUERY_LIMITED_INFORMATION | win32con.PROCESS_VM_READ,
                 False, pid)
-        except Exception:
+        except Exception as e:
+            logger.debug("OpenProcess(%d) failed: %s", pid, e)
             continue
         try:
             path = win32process.GetModuleFileNameEx(handle, 0)
             if path:
                 names.add(os.path.basename(path).lower())
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("GetModuleFileNameEx(%d) failed: %s", pid, e)
         finally:
             win32api.CloseHandle(handle)
     return names

@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.3.25 (2026-08-10)
+- Logging: engines and core infra now use Python logging (T-131). `engine_config.setup_logging()` configures a root logger at every entry point (GUI, deathwatch, accept, surrender, autocontinue); the silent catch-all paths in `single_instance.py`, `capture.py`, `key_blocker.py` and `process_runner.py` log at debug/warning instead of swallowing. meta_hunt health score 58 -> 68 (was flagging "no logging module imported anywhere").
+- Tests: suite 341/341 PASS, pyflakes 0.
+
 ## v0.3.24 (2026-08-10)
 - Tools: exec_hunt report drift fixed (T-130, from the T-129 MARKHUNT audit). The config validator hardcoded pre-migration schemas (`lang`/`window`/`hotkeys`/`emulator` for config.json, `enabled`/`interval` for the engine configs), so every run reported 43 false MISSING/UNKNOWN keys. It now delegates config.json structure to `config_store.validate_config` (the runtime's own source of truth) and validates deathwatch/autocontinue against their real key sets — 0 false issues. Module-safety checks now recognise the `if __name__ == "__main__":` guard, skip `.saipen/` agent scratch, and the Windows path normalization makes the side-effect blacklist actually match (it never did on backslash paths). Cat7 noise: 271 -> 1; Cat1 false import FAILs: 81 -> 0.
 - Tests: suite 341/341 PASS, pyflakes 0.

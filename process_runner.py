@@ -1,8 +1,11 @@
+import logging
 import os
 import threading
 import subprocess
 import queue
 import sys
+
+logger = logging.getLogger(__name__)
 
 BASE = os.path.dirname(__file__)
 PYTHON = sys.executable
@@ -71,9 +74,10 @@ class ProcessRunner:
             for line in proc.stdout:
                 self.q.put(("line", gen, line.rstrip("\n")))
         except ValueError:
-            pass
+            logger.debug("pump stream closed while draining (process restarted)")
         except Exception as e:
             print(f"process_runner: pump error: {e}", file=sys.stderr)
+            logger.warning("pump error: %s", e)
         finally:
             self.q.put(("done", gen))
 

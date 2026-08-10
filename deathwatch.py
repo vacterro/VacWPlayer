@@ -203,6 +203,7 @@ def handle_death(hwnd, cfg, templates):
 
 
 def main(replace=False):
+    engine_config.setup_logging()
     single_instance.ensure_single_instance("deathwatch", replace=replace)
     single_instance.start_parent_watchdog()
     window_ctl.set_dpi_aware()
