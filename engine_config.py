@@ -19,7 +19,7 @@ import re
 logger = logging.getLogger(__name__)
 
 
-def setup_logging(level=logging.INFO):
+def setup_logging(level: int = logging.INFO) -> None:
     """Configure the root logger once (console). Engines and the GUI call
     this at startup so silent-catch paths have somewhere to be heard."""
     logging.basicConfig(
@@ -28,7 +28,7 @@ def setup_logging(level=logging.INFO):
     )
 
 
-def mtime_changed(path, last_mtime):
+def mtime_changed(path: str, last_mtime: float) -> tuple[float, bool]:
     """Return (current_mtime, changed) for a config file's mtime probe.
 
     A missing/unreadable file keeps the last known mtime and reports no
@@ -193,7 +193,7 @@ def _collect_problems(cfg, name):
     return problems
 
 
-def validate_engine_config(cfg, config_name):
+def validate_engine_config(cfg: dict, config_name: str) -> dict:
     """Semantically validate an engine config after json.load; exit on any
     problem.
 

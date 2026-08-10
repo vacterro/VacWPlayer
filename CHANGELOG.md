@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.3.26 (2026-08-10)
+- Types: type-hint baseline for core modules (T-132). Public functions in `config_store.py`, `engine_config.py`, `capture.py` and `champions.py` are annotated (typed_pct 0 -> 2% project-wide).
+- Tests: suite 341/341 PASS, pyflakes 0.
+
 ## v0.3.25 (2026-08-10)
 - Logging: engines and core infra now use Python logging (T-131). `engine_config.setup_logging()` configures a root logger at every entry point (GUI, deathwatch, accept, surrender, autocontinue); the silent catch-all paths in `single_instance.py`, `capture.py`, `key_blocker.py` and `process_runner.py` log at debug/warning instead of swallowing. meta_hunt health score 58 -> 68 (was flagging "no logging module imported anywhere").
 - Tests: suite 341/341 PASS, pyflakes 0.

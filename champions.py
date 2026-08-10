@@ -902,7 +902,7 @@ GENERIC_COMBO = {
 }
 
 
-def slug(name):
+def slug(name: str) -> str:
     """'Xin Zhao' -> 'xin_zhao', "Kai'Sa" -> 'kaisa'. Stable config key."""
     out = []
     for ch in name.lower():
@@ -917,7 +917,7 @@ def slug(name):
     return key.strip("_")
 
 
-def default_for(name):
+def default_for(name: str) -> dict:
     """Combo dict for a champion, plus 'sourced' telling the UI whether to
     trust it or flag it as a placeholder."""
     entry = SOURCED_COMBOS.get(slug(name))
@@ -932,7 +932,7 @@ def default_for(name):
     return combo
 
 
-def is_sourced(name):
+def is_sourced(name: str) -> bool:
     return slug(name) in SOURCED_COMBOS
 
 

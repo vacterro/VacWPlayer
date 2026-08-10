@@ -11,23 +11,23 @@ PW_CLIENTONLY = 1
 PW_RENDERFULLCONTENT = 2
 
 
-def find_window(title="HD-Player"):
+def find_window(title: str = "HD-Player") -> int:
     hwnd = win32gui.FindWindow(None, title)
     if not hwnd:
         raise RuntimeError(f"window not found: {title}")
     return hwnd
 
 
-def is_minimized(hwnd):
+def is_minimized(hwnd: int) -> bool:
     return win32gui.IsIconic(hwnd)
 
 
-def get_client_size(hwnd):
+def get_client_size(hwnd: int) -> tuple[int, int]:
     left, top, right, bottom = win32gui.GetClientRect(hwnd)
     return right - left, bottom - top
 
 
-def grab(hwnd):
+def grab(hwnd: int) -> np.ndarray:
     """Capture window client area via PrintWindow. Works even if occluded by other windows."""
     w, h = get_client_size(hwnd)
     hwnd_dc = win32gui.GetWindowDC(hwnd)
@@ -62,7 +62,7 @@ def grab(hwnd):
     return img
 
 
-def grab_region(hwnd, region):
+def grab_region(hwnd: int, region: list[int]) -> np.ndarray:
     """Cheap capture of a small client-space region via BitBlt-from-screen.
 
     Far lighter than grab()'s PrintWindow (which makes the source app

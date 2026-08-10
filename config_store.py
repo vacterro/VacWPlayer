@@ -14,7 +14,7 @@ import shutil
 BAK_SUFFIX = ".bak"
 
 
-def read_raw(path):
+def read_raw(path: str) -> tuple[object, str | None]:
     """Return (data, error). error is None, 'missing', or 'corrupt'.
 
     OSError covers "no file yet" (first run) and permission failures;
@@ -30,7 +30,7 @@ def read_raw(path):
         return None, "corrupt"
 
 
-def atomic_write(path, data):
+def atomic_write(path: str, data: dict) -> None:
     """Write `data` as JSON to `path`, keeping the previous content as .bak.
 
     Writes to a temp file in the same directory, then replaces the target so
@@ -47,7 +47,7 @@ def atomic_write(path, data):
     os.replace(tmp, path)
 
 
-def restore_backup(path):
+def restore_backup(path: str) -> bool:
     """Copy path + .bak over path. Returns True on success, False otherwise."""
     bak = path + BAK_SUFFIX
     try:
@@ -57,7 +57,7 @@ def restore_backup(path):
     return True
 
 
-def validate_config(data):
+def validate_config(data: dict) -> list[str]:
     """Total structural check. Returns list of problem strings ([] = fine).
 
     Never raises: malformed-but-valid JSON must be rejected or ignored, never
@@ -90,7 +90,7 @@ def _is_volatile(key):
     return key.startswith("enabled_") or key.startswith("toggle_")
 
 
-def split_volatile(config):
+def split_volatile(config: dict) -> tuple[dict, dict]:
     """Return (stable, local). Window geometry and per-champion runtime flags
     move to the local half; everything else stays in config.json.
 
@@ -136,7 +136,7 @@ def _clean_window(raw):
     return clean
 
 
-def merge_volatile(config, local):
+def merge_volatile(config: dict, local: dict) -> dict:
     """Overlay the gitignored runtime state back onto a loaded config.
 
     Total: hostile local shapes are ignored, never raised on (T-086) - the
@@ -168,7 +168,7 @@ def merge_volatile(config, local):
     return config
 
 
-def validate_local_config(local):
+def validate_local_config(local: dict) -> list[str]:
     """Total structural check of config.local.json. Returns problem strings.
 
     Root must be a dict; window must be a dict with int (not bool) active_tab
