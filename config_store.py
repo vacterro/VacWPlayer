@@ -8,19 +8,12 @@ dropping to defaults.
 """
 
 import json
-import math
 import os
 import shutil
 
 BAK_SUFFIX = ".bak"
 
 _SLOT_SUFFIXES = ("wave", "jungle", "pvp")
-
-
-def _is_finite_number(v):
-    """Finite int/float, never bool (bool is int in Python - T-082 rule)."""
-    return isinstance(v, (int, float)) and not isinstance(v, bool) \
-        and math.isfinite(v)
 
 
 def _is_int(v):
@@ -144,12 +137,17 @@ def _check_champions(problems, champs):
                 if f in entry and not isinstance(entry[f], bool):
                     problems.append("'champions.%s.%s' must be a boolean, got %r"
                                     % (slug, f, entry[f]))
-        if "interval" in entry and not _is_finite_number(entry["interval"]):
-            problems.append("'champions.%s.interval' must be a finite number, got %r"
+        if "interval" in entry and not _is_int(entry["interval"]):
+            problems.append("'champions.%s.interval' must be a non-bool integer, got %r"
                             % (slug, entry["interval"]))
         if "use_shift" in entry and not isinstance(entry["use_shift"], bool):
             problems.append("'champions.%s.use_shift' must be a boolean, got %r"
                             % (slug, entry["use_shift"]))
+        if "qwer_as_uiop" in entry and not isinstance(entry["qwer_as_uiop"], bool):
+            # T-174: bool("false") == True would silently enable the
+            # QWER->UIOP remap - only a real boolean is acceptable.
+            problems.append("'champions.%s.qwer_as_uiop' must be a boolean, got %r"
+                            % (slug, entry["qwer_as_uiop"]))
 
 
 def _check_minimap(problems, minimap):

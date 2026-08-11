@@ -54,10 +54,12 @@ def parse_steps(keys_str, default_interval):
 def _is_valid_step_key(key):
     """True if `key` renders to a valid AHK send-name.
 
-    Whitelist: a single letter/digit (Cyrillic included - it maps to its
-    physical QWERTY key), F1-F24, or a braced named key ({Space}, {Enter},
-    {LButton}, ...). Anything else (multi-char junk like 'q:', 'q:-100')
-    would reach AutoHotkey as a send-name it silently ignores.
+    Whitelist: a single ASCII letter/digit, a Cyrillic letter that maps to a
+    physical QWERTY key (ЙЦУКЕН), F1-F24, or a braced named key ({Space},
+    {Enter}, {LButton}, ...). Anything else would reach AutoHotkey as a
+    send-name it silently ignores - and unmapped Unicode (é, Ω, 你) is sent
+    as LITERAL TEXT, not a keypress (native AHK v1 probe, T-180), which would
+    type into the game instead of pressing a key.
     """
     k = (key or "").strip()
     if not k:
@@ -66,7 +68,9 @@ def _is_valid_step_key(key):
         inner = k[1:-1].strip()
         return bool(re.fullmatch(r"[A-Za-z][A-Za-z0-9 ]*", inner))
     if len(k) == 1:
-        return k.isalnum()
+        if k.isascii() and k.isalnum():
+            return True
+        return _to_latin(k) != k  # only mapped-Cyrillic letters qualify
     return bool(re.fullmatch(r"F(?:[1-9]|1[0-9]|2[0-4])", k, re.IGNORECASE))
 
 def _is_plain_key(trigger):
@@ -367,14 +371,124 @@ def _tag(mode):
     """AHK variable names allow only word chars, champion slugs already are."""
     return "".join(ch if (ch.isalnum() or ch == "_") else "_" for ch in mode)
 
+def _ahk_literal_ok(value):
+    """A config string interpolated into AHK code (quoted string / directive
+    arg) must carry no characters that change AHK syntax: double-quote,
+    backtick (AHK escape), comma (directive arg separator), semicolon
+    (comment), CR/LF and control characters (T-176)."""
+    if not isinstance(value, str):
+        return False
+    if any(c in value for c in ('"', "`", ",", ";", "\n", "\r")):
+        return False
+    return not any(ord(c) < 0x20 or ord(c) == 0x7F for c in value)
+
+
+def _ahk_exe_ok(exe):
+    """The `ahk_exe` criterion is the target process image name: alnum/dot/
+    dash/underscore/space only, bounded, no AHK syntax characters (T-176)."""
+    if not isinstance(exe, str) or not exe or len(exe) > 64:
+        return False
+    if any(ord(c) < 0x20 or ord(c) == 0x7F for c in exe):
+        return False
+    return all(c.isalnum() or c in "._- " for c in exe)
+
+
+def _valid_trigger(trig):
+    """Canonical trigger grammar (T-175).
+
+    A trigger is embedded VERBATIM as an AHK hotkey (``*{trig}::``), so only
+    safe, known forms are accepted. Everything that could inject extra AHK
+    statements or hotkeys - CR/LF, ``::``, backtick, quote, semicolon, comma,
+    control characters - is rejected, as are modifier-only targets. This is
+    the same gate the generator enforces; fuzzy acceptance here means malformed
+    syntax reaching the generated script.
+    """
+    if not isinstance(trig, str):
+        return False
+    t = trig.strip()
+    if not t:
+        return False
+    if any(ord(c) < 0x20 or ord(c) == 0x7F for c in t):
+        return False
+    if any(s in t for s in ("::", "`", '"', ";", ",", "\n", "\r")):
+        return False
+    base = _base_key(t)
+    if not base:
+        return False  # modifier-only or empty target
+    if len(base) == 1 and base.isascii() and base.isalnum():
+        return True  # single letter / digit
+    if re.fullmatch(r"F(1[0-9]|2[0-4]|[1-9])", base, re.IGNORECASE):
+        return True  # F1-F24 (AHK key names are case-insensitive)
+    if base.lower() in ("lbutton", "rbutton", "mbutton", "xbutton1", "xbutton2",
+                        "wheelup", "wheeldown", "space", "enter", "tab", "esc",
+                        "backspace", "delete", "insert", "home", "end", "pgup",
+                        "pgdn", "up", "down", "left", "right", "capslock",
+                        "scrolllock", "numlock", "printscreen"):
+        return True
+    if re.fullmatch(r"sc[0-9A-Fa-f]{1,3}", base):
+        return True  # scan-code form
+    if re.fullmatch(r"\{[A-Za-z][A-Za-z0-9 ]{0,30}\}", base):
+        return True  # braced named key, e.g. {Space}
+    return False
+
+
 def _split_triggers(raw):
-    """'F13,F16' or 'F13' -> ['F13', 'F16']. Empty string -> []."""
+    """'F13,F16' or 'F13' -> ['F13', 'F16']. Empty string -> [].
+
+    Every token is grammar-checked (T-175): an invalid trigger raises
+    ValueError so it can never reach the generated AHK."""
     out = []
     for t in (raw or "").split(","):
         t = t.strip()
-        if t and t not in out:
+        if not t:
+            continue
+        if not _valid_trigger(t):
+            raise ValueError("invalid trigger %r" % t)
+        if t not in out:
             out.append(t)
     return out
+
+
+def _bad_config_triggers(config):
+    """Collect (source, trigger) pairs that fail the canonical trigger grammar
+    across every config field that becomes an AHK hotkey (T-175)."""
+    bad = []
+    toggles = config.get("toggles", {})
+    candidates = []
+
+    def _add(source, raw):
+        if not isinstance(raw, str) or not raw.strip():
+            return
+        for t in raw.split(","):
+            t = t.strip()
+            if t and not _valid_trigger(t):
+                candidates.append((source, t))
+
+    mode = config.get("mode", "general")
+    if mode == "general":
+        for i, c in enumerate(config.get("combos", [])):
+            if isinstance(c, dict):
+                _add("combo #%d trigger" % (i + 1), c.get("trigger"))
+    else:
+        entry = config.get("champions", {}).get(mode, {})
+        if isinstance(entry, dict):
+            for slot in ("wave", "jungle", "pvp"):
+                _add("champion %s trigger" % slot, entry.get("trigger_" + slot))
+    minimap = config.get("minimap", {})
+    if isinstance(minimap, dict):
+        for key, entry in minimap.items():
+            if key == "_order" or not isinstance(entry, dict):
+                continue
+            _add("minimap %s trigger" % key, entry.get("trigger"))
+    afk = config.get("afkfarm", {})
+    if isinstance(afk, dict) and afk.get("enabled"):
+        _add("AFK toggle", afk.get("toggle_key"))
+    _add("stop key", toggles.get("stop_key"))
+    _add("untoggle keys", toggles.get("untoggle_keys"))
+    for source, t in candidates:
+        if t not in [b[1] for b in bad]:
+            bad.append((source, t))
+    return bad
 
 
 def _active_combos(config):
@@ -393,17 +507,18 @@ def _active_combos(config):
             if trigs and keys:
                 combos.append({
                     "trigger": trigs[0], "triggers": trigs, "steps": keys,
-                    "shift": bool(c.get("shift", True)), "tag": "gen%d" % i,
-                    "move_when_pressed": bool(c.get("move_when_pressed", False)),
+                    "shift": c.get("shift", True) is True, "tag": "gen%d" % i,
+                    "move_when_pressed": c.get("move_when_pressed", False) is True,
                 })
     else:
         cfg = config.get("champions", {}).get(mode, {})
         interval = int(cfg.get("interval", 50))
-        use_shift = bool(cfg.get("use_shift", True))
-        qwer_uiop = bool(cfg.get("qwer_as_uiop", False))
+        # T-174: exact-boolean reads - a string "false" must NEVER act as True.
+        use_shift = cfg.get("use_shift", True) is True
+        qwer_uiop = cfg.get("qwer_as_uiop", False) is True
         
         for slot in ("wave", "jungle", "pvp"):
-            if not cfg.get("enabled_" + slot, True):
+            if cfg.get("enabled_" + slot, True) is not True:
                 continue
             trigs = _split_triggers(cfg.get("trigger_" + slot))
             keys_raw = cfg.get("keys_" + slot, "")
@@ -419,7 +534,7 @@ def _active_combos(config):
                     "trigger": trigs[0], "triggers": trigs, "steps": keys,
                     "shift": use_shift, "tag": _tag(mode) + "_" + slot,
                     "move_when_pressed": move_when_pressed,
-                    "toggle": bool(cfg.get("toggle_" + slot, False)),
+                    "toggle": cfg.get("toggle_" + slot, False) is True,
                     "siblings": trigs[1:],
                 })
     seen, unique, dropped = set(), [], []
@@ -537,6 +652,10 @@ def _gen_autobuy(a, target_exe, config):
     win_title = dw_cfg["window_title"]
     if not win_title:
         raise ValueError("autobuy enabled but window_title is empty")
+    if not _ahk_literal_ok(win_title):
+        # T-176: window_title is interpolated into #IfWinActive / WinActive("")
+        # - AHK-unsafe characters reject the candidate, never break the script.
+        raise ValueError("autobuy enabled but window_title contains AHK-unsafe characters")
     qb_vk = "vk%02X" % engine_config.quickbuy_key_vk(dw_cfg["quickbuy_key"])
     qb_presses = dw_cfg["quickbuy_presses"]
     buy_delay_ms = int(float(dw_cfg["buy_after_b_delay_sec"]) * 1000)
@@ -1137,6 +1256,10 @@ def _deathwatch_cfg():
     template = dw["death_label_template"]
     if not os.path.isfile(os.path.join(BASE, template)):
         return None  # a missing template must disable, not fabricate
+    if not _ahk_literal_ok(template):
+        # T-176: the template path goes verbatim into ImageSearch - unsafe
+        # characters disable the detector instead of breaking the script.
+        return None
     return region, template
 
 
@@ -1421,8 +1544,18 @@ def _gen_helper_funcs(a, combos, afk_k, target_exe, toggles):
     a.append("")
 
 def generate_script(config):
+    # T-175: every trigger that becomes an AHK hotkey is grammar-checked
+    # BEFORE generation - malformed triggers reject the candidate, never reach
+    # the generated script (injection-safe + fail-closed).
+    bad = _bad_config_triggers(config)
+    if bad:
+        raise ValueError("invalid trigger: %s = %r" % bad[0])
     toggles = config.get("toggles", {})
     target_exe = toggles.get("target_exe", "HD-Player.exe") or "HD-Player.exe"
+    # T-176: target_exe is interpolated into `ahk_exe` criteria - reject
+    # anything that could break or inject AHK syntax.
+    if not _ahk_exe_ok(target_exe):
+        raise ValueError("invalid target_exe %r" % target_exe)
     combos, dropped = _active_combos(config)
     afk = config.get("afkfarm", {})
     tk = (afk.get("toggle_key") or "").strip() if isinstance(afk, dict) and afk.get("enabled") else None
@@ -1489,7 +1622,9 @@ def validate_config(config):
         if not trig or not trig.strip():
             return
         trig = trig.strip()
-        if trig in seen_triggers:
+        if not _valid_trigger(trig):
+            warnings.append(f"Invalid trigger '{trig}' in {source}")
+        elif trig in seen_triggers:
             warnings.append(f"Duplicate trigger '{trig}' in {source} (also in {seen_triggers[trig]})")
         else:
             seen_triggers[trig] = source

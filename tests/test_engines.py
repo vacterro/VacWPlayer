@@ -470,6 +470,123 @@ def test_process_runner_successful_spawn_replaces_dead_proc(monkeypatch):
         pr.stop()
 
 
+# --- T-173: stream failure must never orphan a live child ---------------------
+
+class _TrackedProc:
+    def __init__(self, alive=True):
+        self.alive = alive
+        self.termed = False
+        self.killed = False
+
+    def poll(self):
+        return None if self.alive else 0
+
+    def terminate(self):
+        self.alive = False
+        self.termed = True
+
+    def wait(self, timeout=None):
+        self.alive = False
+        return 0
+
+    def kill(self):
+        self.alive = False
+        self.killed = True
+
+
+def _runner(stub="tests/_stub_engine.py"):
+    status, last, check = FakeVar(), FakeVar(), FakeVar()
+    return process_runner.ProcessRunner(stub, status, last, check), status, check
+
+
+def test_pump_eof_live_child_is_terminated_not_orphaned():
+    """Stream EOF while the child is STILL ALIVE must deliberately terminate
+    it - never mark Stopped + proc=None with a live process running (T-173)."""
+    pr, status, check = _runner()
+    child = _TrackedProc(alive=True)
+    pr.proc = child
+    pr._gen = 1
+    pr.q.put(("eof", 1))
+    pr.poll_log()
+    assert pr.proc is None
+    assert child.termed is True  # deliberately terminated, not orphaned
+    assert status.value == "Stopped"
+    assert check.value is False
+
+
+def test_pump_error_live_child_terminated_with_diagnostic():
+    pr, status, check = _runner()
+    child = _TrackedProc(alive=True)
+    pr.proc = child
+    pr._gen = 1
+    pr.q.put(("pump_error", 1, "stream exploded"))
+    pr.poll_log()
+    assert pr.proc is None
+    assert child.termed is True
+    assert "Error" in str(status.value)
+
+
+def test_pump_eof_exited_child_normal_stop_no_terminate():
+    pr, status, check = _runner()
+    child = _TrackedProc(alive=False)  # already exited
+    pr.proc = child
+    pr._gen = 1
+    pr.q.put(("eof", 1))
+    pr.poll_log()
+    assert pr.proc is None
+    assert child.termed is False  # exited naturally, nothing to terminate
+    assert status.value == "Stopped"
+
+
+def test_pump_stale_generation_events_ignored():
+    pr, status, check = _runner()
+    child = _TrackedProc(alive=True)
+    pr.proc = child
+    pr._gen = 2  # current generation
+    pr.q.put(("eof", 1))  # stale pump's event
+    pr.q.put(("line", 1, "old"))
+    pr.poll_log()
+    assert pr.proc is child  # untouched by stale events
+    assert child.termed is False
+
+
+def test_pump_emits_pump_error_when_stream_fails_while_alive():
+    pr, _, _ = _runner()
+
+    class _BoomStream:
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            raise OSError("pipe broke")
+
+    child = _TrackedProc(alive=True)
+    child.stdout = _BoomStream()
+    pr._gen = 1
+    pr._pump(child, 1)
+    items = list(pr.q.queue)
+    assert any(t[0] == "pump_error" for t in items)
+    assert not any(t[0] == "done" for t in items)  # never fake-done a live child
+
+
+def test_pump_emits_eof_when_stream_fails_but_child_exited():
+    pr, _, _ = _runner()
+
+    class _BoomStream:
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            raise OSError("pipe broke")
+
+    child = _TrackedProc(alive=False)  # exited despite stream failure
+    child.stdout = _BoomStream()
+    pr._gen = 1
+    pr._pump(child, 1)
+    items = list(pr.q.queue)
+    assert any(t[0] == "eof" for t in items)
+
+
 def test_find_window_raises_when_missing(monkeypatch):
     monkeypatch.setattr(capture.win32gui, "FindWindow", lambda *a: 0)
     with pytest.raises(RuntimeError):
@@ -695,6 +812,58 @@ def test_engines_share_poller(monkeypatch):
     assert names == {"accept", "surrender", "autocontinue"}
     configs = {c[0][2] for c in calls}
     assert configs == {"accept_config.json", "surrender_config.json", "autocontinue_config.json"}
+
+
+# --- T-178: deathwatch mid-click must use validated coords + client bounds -----
+
+def _write_main_cfg(tmp_path, monkeypatch, mid):
+    import json as _j
+    cfg = {"mode": "general", "toggles": {}, "combos": [], "champions": {},
+           "minimap": {"mid": mid}, "afkfarm": {}}
+    (tmp_path / "config.json").write_text(_j.dumps(cfg), encoding="utf-8")
+    monkeypatch.setattr(deathwatch, "BASE", str(tmp_path))
+
+
+def test_mid_click_coords_corrupt_config_none(tmp_path, monkeypatch):
+    (tmp_path / "config.json").write_text("{corrupt", encoding="utf-8")
+    monkeypatch.setattr(deathwatch, "BASE", str(tmp_path))
+    assert deathwatch._mid_click_coords() is None
+
+
+@pytest.mark.parametrize("mid", [
+    {},
+    [],
+    "junk",
+    {"x": "100", "y": 200},     # string x
+    {"x": -5, "y": 10},         # negative
+    {"x": 10, "y": -5},         # negative
+    {"x": 10},                  # missing y
+    {"x": True, "y": 200},      # bool is not an integer coordinate
+])
+def test_mid_click_coords_invalid_none(tmp_path, monkeypatch, mid):
+    _write_main_cfg(tmp_path, monkeypatch, mid)
+    assert deathwatch._mid_click_coords() is None
+
+
+def test_mid_click_coords_valid(tmp_path, monkeypatch):
+    _write_main_cfg(tmp_path, monkeypatch, {"x": 100, "y": 200})
+    assert deathwatch._mid_click_coords() == (100, 200)
+
+
+def test_mid_click_bounds_require_inside_client(monkeypatch):
+    monkeypatch.setattr(deathwatch.capture, "get_client_size",
+                        lambda h: (1920, 1080))
+    assert deathwatch._client_bounds_ok(1, 100, 200) is True
+    assert deathwatch._client_bounds_ok(1, 2000, 10) is False
+    assert deathwatch._client_bounds_ok(1, 10, 2000) is False
+    assert deathwatch._client_bounds_ok(1, 0, 0) is True
+
+
+def test_mid_click_bounds_failure_no_click(monkeypatch):
+    def boom(hwnd):
+        raise RuntimeError("no window")
+    monkeypatch.setattr(deathwatch.capture, "get_client_size", boom)
+    assert deathwatch._client_bounds_ok(1, 100, 200) is False
 
 
 # --- T-153: deathwatch must never trigger automation on foreign pixels --------

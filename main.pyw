@@ -1,4 +1,5 @@
 import atexit
+import copy
 import ctypes
 import json
 import os
@@ -78,7 +79,9 @@ local_write_blocked = None
 
 
 def default_config():
-    return {
+    # T-179: deep-copied at the ownership boundary - the nested minimap/
+    # afkfarm slot objects must never be shared aliases between callers.
+    return copy.deepcopy({
         "mode": "ryze",
         "toggles": dict(TOGGLE_DEFAULTS),
         "combos": [dict(c) for c in LEGACY_COMBOS],
@@ -93,7 +96,7 @@ def default_config():
         "afkfarm": dict(AFKFARM_DEFAULTS),
         "lang": "ru",
         "window": {"active_tab": 0},
-    }
+    })
 
 
 def _load_validated_on_disk(data):
@@ -309,6 +312,11 @@ class VacWPlayer:
     def __init__(self):
         self.config = load_config()
         self._applying = False
+        # T-177: the config the runtime is ACTUALLY running (set only after a
+        # successful Apply). Editing/autosaving updates self.config (draft);
+        # the watchdog resurrects THIS, never the mutable draft - otherwise
+        # whether a draft goes live depends on whether AHK happened to crash.
+        self._last_applied_config = None
 
         self.root = TkinterDnD.Tk()
         self.root.title("VacWPlayer")
@@ -700,14 +708,18 @@ class VacWPlayer:
         except Exception as e:
             print("ahk apply worker failed: %s" % e, file=sys.stderr)
             ok, msg = False, "Apply failed: %s" % e
-        self.root.after(0, lambda: self._apply_done(ok, msg))
+        self.root.after(0, lambda: self._apply_done(ok, msg, self.config))
 
-    def _apply_done(self, ok, msg):
+    def _apply_done(self, ok, msg, candidate=None):
         # A rejected candidate must not paint the last-good runtime dead: the
         # AHK dot reflects the ACTUAL runtime state, not the apply result.
         running = ok or ahk_generator.is_running()
         if not ok and running:
             msg = msg + " - last-good AHK still running"
+        if ok and candidate is not None:
+            # T-177: only an ACCEPTED candidate becomes the last-applied state
+            # the watchdog resurrects; a rejected candidate never does.
+            self._last_applied_config = copy.deepcopy(candidate)
         self.status_lbl.config(text=self._short_status(msg),
                                fg=TOKENS["success"] if ok else TOKENS["danger"])
         self._update_ahk_dot(running)
@@ -738,8 +750,12 @@ class VacWPlayer:
             pass
 
     def _watchdog_worker(self):
+        # T-177: resurrect the LAST-APPLIED config, never the mutable editor
+        # draft (fall back to self.config only before any Apply succeeded).
+        last = getattr(self, "_last_applied_config", None)
+        cfg = last if last is not None else self.config
         try:
-            ok, msg = ahk_generator.generate_and_run(self.config)
+            ok, msg = ahk_generator.generate_and_run(cfg)
         except Exception as e:
             print("ahk watchdog worker failed: %s" % e, file=sys.stderr)
             ok, msg = False, "Auto-restart failed: %s" % e

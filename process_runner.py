@@ -74,16 +74,39 @@ class ProcessRunner:
         # `proc` is the captured child from THIS generation - never reads
         # self.proc, so a restarted process's stream cannot be drained by a
         # leftover pump from an older start().
+        #
+        # T-173: a stream failure is NOT proof the child exited. Only a clean
+        # EOF (or a stream failure when the child is already gone) may become
+        # "eof". A stream failure while the child is STILL ALIVE becomes
+        # "pump_error" - poll_log then deliberately terminates it instead of
+        # marking Stopped with a live process running untracked.
         try:
             for line in proc.stdout:
                 self.q.put(("line", gen, line.rstrip("\n")))
+            self.q.put(("eof", gen))
         except ValueError:
-            logger.debug("pump stream closed while draining (process restarted)")
+            logger.debug("pump stream closed while draining (generation %d)", gen)
+            self.q.put(("eof", gen) if proc.poll() is not None
+                       else ("pump_error", gen, "stream closed while process alive"))
         except Exception as e:
-            print(f"process_runner: pump error: {e}", file=sys.stderr)
             logger.warning("pump error: %s", e)
-        finally:
-            self.q.put(("done", gen))
+            self.q.put(("eof", gen) if proc.poll() is not None
+                       else ("pump_error", gen, str(e)))
+
+    def _terminate_captured(self):
+        """Deliberately terminate the captured child when its stream died but
+        the process is still alive - never leave a live child untracked."""
+        if self.proc is None or self.proc.poll() is not None:
+            return
+        try:
+            self.proc.terminate()
+            try:
+                self.proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
+                self.proc.wait()
+        except OSError as e:
+            logger.warning("terminate of captured child failed: %s", e)
 
     def poll_log(self):
         while True:
@@ -92,23 +115,32 @@ class ProcessRunner:
             except queue.Empty:
                 break
             tag = item[0]
-            if tag == "done":
+            if tag == "line":
+                gen, payload = item[1], item[2]
+            elif tag == "eof":
                 gen, payload = item[1], None
-            elif tag == "line":
+            elif tag == "pump_error":
                 gen, payload = item[1], item[2]
             else:
                 continue
             if gen != self._gen:
                 # stale-generation event from an older pump: ignore entirely,
-                # lines AND done markers alike.
+                # lines, eof and error markers alike.
                 continue
-            if tag == "done":
+            if tag == "line":
+                self.last_line_var.set(payload[:80])
+            elif tag == "pump_error":
                 with self._lock:
+                    self._terminate_captured()  # never orphan a live child
+                    self.status_var.set("Error: %s" % payload)
+                    self.check_var.set(False)
+                    self.proc = None
+            else:  # eof: stream ended - the child is gone or was terminated
+                with self._lock:
+                    self._terminate_captured()  # no-op if already exited
                     self.status_var.set("Stopped")
                     self.check_var.set(False)
                     self.proc = None
-            else:
-                self.last_line_var.set(payload[:80])
 
     def stop(self):
         with self._lock:

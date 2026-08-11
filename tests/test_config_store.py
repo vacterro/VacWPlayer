@@ -295,6 +295,35 @@ def test_validate_config_unknown_mode_rejected():
     assert config_store.validate_config({}) == []
 
 
+# --- T-174: champions exact-boolean / int contract (bool("false") hazard) -----
+
+def test_validate_config_qwer_as_uiop_exact_bool():
+    """qwer_as_uiop='false' must never silently enable QWER->UIOP remapping:
+    bool('false') == True (T-174)."""
+    assert config_store.validate_config(
+        {"champions": {"ryze": {"qwer_as_uiop": "false"}}})
+    assert config_store.validate_config(
+        {"champions": {"ryze": {"qwer_as_uiop": 1}}})
+    assert config_store.validate_config(
+        {"champions": {"ryze": {"qwer_as_uiop": True}}}) == []
+
+
+def test_validate_config_champions_interval_int_contract():
+    assert config_store.validate_config(
+        {"champions": {"ryze": {"interval": 12.5}}})
+    assert config_store.validate_config(
+        {"champions": {"ryze": {"interval": True}}})
+    assert config_store.validate_config(
+        {"champions": {"ryze": {"interval": 50}}}) == []
+
+
+def test_validate_config_champions_use_shift_toggle_exact_bool():
+    assert config_store.validate_config(
+        {"champions": {"ryze": {"use_shift": "false"}}})
+    assert config_store.validate_config(
+        {"champions": {"ryze": {"toggle_pvp": "true"}}})
+
+
 def test_validate_config_toggles_hostile_values():
     assert config_store.validate_config({"toggles": {"space_interval": "abc"}})
     assert config_store.validate_config({"toggles": {"space_interval": True}})
@@ -1258,3 +1287,94 @@ def test_import_stable_failure_rolls_back_and_restores_guard(tmp_path, monkeypat
     assert main_mod.config_write_blocked == "corrupt"  # guard restored
     assert not local_file.exists()  # no candidate local half survives
     assert cfg_file.read_text(encoding="utf-8") == "{corrupt source"
+
+
+# --- T-177: watchdog must restart the LAST-APPLIED config ---------------------
+
+def test_watchdog_restarts_last_applied_not_editor_state(monkeypatch):
+    """Editing + autosaving persists a DRAFT; Apply activates. The watchdog
+    resurrects the last APPLIED config, never mutable editor state - otherwise
+    whether the edit goes live depends on whether AHK happened to crash
+    (T-177)."""
+    import main as main_mod, copy
+    w = object.__new__(main_mod.VacWPlayer)
+    applied = {"mode": "general", "toggles": {},
+               "combos": [{"trigger": "F13", "keys": "q", "interval": 50}]}
+    edited = copy.deepcopy(applied)
+    edited["combos"][0]["trigger"] = "F14"  # draft edit, not applied
+    w._last_applied_config = copy.deepcopy(applied)
+    w.config = edited
+    seen = []
+
+    def fake_gen(cfg):
+        seen.append(cfg)
+        return True, "ok"
+
+    monkeypatch.setattr(main_mod.ahk_generator, "generate_and_run", fake_gen)
+    w.root = type("R", (), {"after": lambda *a, **k: None})()
+    w.status_lbl = type("S", (), {"config": lambda *a, **k: None})()
+    w._watchdog_done = lambda ok, msg: None
+    w._applying = False
+    w._watchdog_worker()
+    assert seen and seen[0]["combos"][0]["trigger"] == "F13"  # last-applied
+
+
+def test_apply_success_records_last_applied(monkeypatch):
+    """Only a config that generate_and_run ACCEPTED becomes last-applied."""
+    import main as main_mod, copy
+    w = object.__new__(main_mod.VacWPlayer)
+    good = {"mode": "general", "toggles": {}, "combos": []}
+    w.config = copy.deepcopy(good)
+    w._last_applied_config = None
+
+    class _Root:
+        def after(self, ms, func, *args):
+            func(*args)
+
+    w.root = _Root()
+    monkeypatch.setattr(main_mod.ahk_generator, "generate_and_run",
+                        lambda cfg: (True, "ok"))
+    w.status_lbl = type("S", (), {"config": lambda *a, **k: None})()
+    w._update_ahk_dot = lambda r: None
+    w._applying = False
+    w._apply_worker()
+    assert w._last_applied_config is not None
+    assert w._last_applied_config["combos"] == []
+
+
+def test_apply_failure_keeps_previous_last_applied(monkeypatch):
+    import main as main_mod, copy
+    w = object.__new__(main_mod.VacWPlayer)
+    prev = {"mode": "general", "toggles": {}, "combos": [{"trigger": "F13"}]}
+    w.config = {"mode": "general", "toggles": {}, "combos": []}
+    w._last_applied_config = copy.deepcopy(prev)
+
+    class _Root:
+        def after(self, ms, func, *args):
+            func(*args)
+
+    w.root = _Root()
+    monkeypatch.setattr(main_mod.ahk_generator, "generate_and_run",
+                        lambda cfg: (False, "boom"))
+    w.status_lbl = type("S", (), {"config": lambda *a, **k: None})()
+    w._update_ahk_dot = lambda r: None
+    w._applying = False
+    w._apply_worker()
+    assert w._last_applied_config["combos"][0]["trigger"] == "F13"
+
+
+# --- T-179: default_config must deep-copy nested defaults ---------------------
+
+def test_default_config_is_deep_copied():
+    """Mutating a returned default must never leak into later defaults - the
+    nested minimap/afkfarm slot objects must be copies, not shared aliases
+    (T-179)."""
+    import main as main_mod
+    d1 = main_mod.default_config()
+    d1["minimap"]["top"]["x"] = 999
+    d1["afkfarm"]["slots"]["top"]["enabled"] = False
+    d1["combos"].append({"trigger": "F99", "keys": "q", "interval": 50})
+    d2 = main_mod.default_config()
+    assert d2["minimap"]["top"]["x"] != 999
+    assert d2["afkfarm"]["slots"]["top"]["enabled"] is True
+    assert all(c["trigger"] != "F99" for c in d2["combos"])

@@ -263,6 +263,165 @@ def test_autobuy_missing_config_is_omission(tmp_path, monkeypatch):
     assert "DoAutoBuy:" not in script
 
 
+# --- T-174: bool("false") must never enable QWER->UIOP remapping --------------
+
+def test_qwer_as_uiop_string_false_does_not_remap():
+    """qwer_as_uiop='false' (string) must NOT remap q->u: bool('false') is True
+    in Python - the builder must treat only a real True as the flag (T-174)."""
+    from ahk_builder import _active_combos
+    cfg = {"mode": "ryze", "combos": [],
+           "champions": {"ryze": {"trigger_pvp": "F13", "keys_pvp": "q",
+                                  "qwer_as_uiop": "false"}}}
+    combos, _ = _active_combos(cfg)
+    assert combos and combos[0]["steps"][0][0] == "q"  # NOT remapped to u
+
+
+def test_qwer_as_uiop_true_still_remaps():
+    from ahk_builder import _active_combos
+    cfg = {"mode": "ryze", "combos": [],
+           "champions": {"ryze": {"trigger_pvp": "F13", "keys_pvp": "q",
+                                  "qwer_as_uiop": True}}}
+    combos, _ = _active_combos(cfg)
+    assert combos and combos[0]["steps"][0][0] == "u"
+
+
+# --- T-175: canonical trigger grammar - malformed triggers never reach AHK ----
+
+def test_split_triggers_rejects_injection_forms():
+    from ahk_builder import _split_triggers
+    with pytest.raises(ValueError):
+        _split_triggers("F13\nMsgBox, x")       # CR/LF statement injection
+    with pytest.raises(ValueError):
+        _split_triggers("F13::")                # hotkey-term syntax
+    with pytest.raises(ValueError):
+        _split_triggers("a,`q")                 # AHK escape char
+    with pytest.raises(ValueError):
+        _split_triggers("^")                    # modifier with no target
+    with pytest.raises(ValueError):
+        _split_triggers("F13,; comment")        # semicolon comment injection
+    assert _split_triggers("q,  ") == ["q"]  # trailing empty token is benign
+    assert _split_triggers("q,F13,sc010") == ["q", "F13", "sc010"]
+
+
+def test_generate_script_rejects_malformed_combo_trigger():
+    cfg = {"mode": "general", "toggles": {},
+           "combos": [{"trigger": "F13::", "keys": "q", "interval": 50}]}
+    with pytest.raises(ValueError):
+        generate_script(cfg)
+
+
+def test_generate_script_rejects_bad_stop_key():
+    cfg = {"mode": "general", "toggles": {"stop_key": "x\r\nMsgBox"},
+           "combos": []}
+    with pytest.raises(ValueError):
+        generate_script(cfg)
+
+
+def test_generate_script_rejects_bad_minimap_trigger():
+    cfg = {"mode": "general", "toggles": {}, "combos": [],
+           "minimap": {"top": {"trigger": "a`nbad", "x": 10, "y": 10}}}
+    with pytest.raises(ValueError):
+        generate_script(cfg)
+
+
+def test_generate_script_rejects_bad_afk_toggle():
+    cfg = {"mode": "general", "toggles": {}, "combos": [],
+           "afkfarm": {"enabled": True, "toggle_key": "F12::",
+                       "slots": {"top": {"enabled": True}}},
+           "minimap": {"top": {"trigger": "", "x": 10, "y": 10}}}
+    with pytest.raises(ValueError):
+        generate_script(cfg)
+
+
+def test_valid_triggers_still_generate():
+    cfg = {"mode": "general", "toggles": {"stop_key": "F10"},
+           "combos": [{"trigger": "F13,q", "keys": "q,w", "interval": 50}],
+           "minimap": {"top": {"trigger": "F9", "x": 10, "y": 10}}}
+    script, _ = generate_script(cfg)
+    assert "sc010" in script or "q" in script
+
+
+# --- T-176: config strings must not break/inject into generated AHK ----------
+
+@pytest.mark.parametrize("exe", [
+    'bad"exe.exe',          # quote
+    "bad`exe.exe",          # backtick (AHK escape)
+    "bad;exe.exe",          # semicolon comment
+    "bad\nexe.exe",         # CR/LF
+    "bad,exe.exe",          # comma (directive separator)
+    "a" * 80,               # unbounded
+])
+def test_generate_script_rejects_unsafe_target_exe(exe):
+    cfg = {"mode": "general", "toggles": {"target_exe": exe}, "combos": []}
+    with pytest.raises(ValueError):
+        generate_script(cfg)
+
+
+def test_generate_script_empty_target_exe_falls_back_to_default():
+    """Empty target_exe is the documented default fallback - not an error."""
+    cfg = {"mode": "general", "toggles": {"target_exe": ""}, "combos": []}
+    script, _ = generate_script(cfg)
+    assert "HD-Player.exe" in script
+
+
+# --- T-180: step keys must be physical keys - unmapped Unicode is rejected ----
+
+def test_step_key_rejects_unmapped_unicode():
+    """Native AHK v1 probe: SendInput {é}/{Ω}/{你} loads fine but sends the
+    characters as LITERAL TEXT - not a physical keypress. The combo-key
+    contract is physical keys (ASCII + mapped Cyrillic), so unmapped Unicode
+    must be rejected, never silently type text into the game (T-180)."""
+    for k in ("é", "Ω", "你", "３"):
+        with pytest.raises(ValueError):
+            parse_steps(k, 50)
+        with pytest.raises(ValueError):
+            parse_steps("q,%s" % k, 50)
+
+
+def test_step_key_accepts_supported_physical_keys():
+    steps = parse_steps("й,ф,ы,q,F13,{Space}", 50)
+    assert [k for k, _ in steps] == ["й", "ф", "ы", "q", "F13", "{Space}"]
+
+
+def test_generate_script_accepts_safe_target_exe():
+    cfg = {"mode": "general", "toggles": {"target_exe": "HD-Player.exe"},
+           "combos": []}
+    script, _ = generate_script(cfg)
+    assert "ahk_exe HD-Player.exe" in script
+
+
+@pytest.mark.parametrize("title", [
+    'My"App', "My`App", "My;App", "My,App", "My\nApp",
+])
+def test_autobuy_rejects_unsafe_window_title(tmp_path, monkeypatch, title):
+    dw = dict(_BASE_DW)
+    dw["window_title"] = title
+    _write_dw(tmp_path, monkeypatch, dw)
+    with pytest.raises(ValueError):
+        generate_script(_plain_cfg())
+
+
+def test_autobuy_accepts_safe_window_title(tmp_path, monkeypatch):
+    _write_dw(tmp_path, monkeypatch, _BASE_DW)  # window_title "Game"
+    script, _ = generate_script(_plain_cfg())
+    assert "#IfWinActive, Game" in script
+
+
+def test_deathwatch_cfg_unsafe_template_returns_none(monkeypatch, tmp_path):
+    import ahk_builder
+    (tmp_path / "templates").mkdir()
+    (tmp_path / "templates" / "death_label.png").write_bytes(b"x")
+    dw = dict(_BASE_DW)
+    dw["death_label_template"] = "templates/death_label.png"  # safe rel path
+    # simulate a template whose path carries an AHK-unsafe char
+    dw["death_label_template"] = "templates/death`label.png"
+    (tmp_path / "templates" / "death`label.png").write_bytes(b"x")
+    (tmp_path / "deathwatch_config.json").write_text(
+        __import__("json").dumps(dw), encoding="utf-8")
+    monkeypatch.setattr(ahk_builder, "BASE", str(tmp_path))
+    assert ahk_builder._deathwatch_cfg() is None
+
+
 def test_manual_aim_never_releases_move_hold():
     """Manual-aim ability keys NEVER release the move-hold - casting a skill
     must not stand the champion still, checkbox on or off. Combo flags are

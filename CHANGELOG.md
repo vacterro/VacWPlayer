@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.3.31 (2026-08-11)
+- Safety audit pass 4, 8 tickets (T-173..T-180). ProcessRunner: a stream failure while the child is still alive deliberately terminates it instead of marking Stopped and losing ownership - a live child is never left untracked (T-173).
+- Config/codegen: champions booleans require exact bool (qwer_as_uiop="false" can never enable the QWER->UIOP remap), a canonical trigger grammar rejects malformed hotkeys before generation, config strings interpolated into AHK (target_exe, window_title, template paths) are validated for AHK-unsafe characters, and unmapped Unicode combo keys are rejected (native probe: AHK would send them as literal text into the game) (T-174, T-175, T-176, T-180).
+- Runtime-state determinism: the watchdog now resurrects the LAST-APPLIED config, not the mutable editor draft - Apply is the explicit activation gate, no crash-dependent behavior; the deathwatch resurrect mid-click reads the main config through the shared validator with an in-client-bounds check (UNKNOWN => no click) (T-177, T-178).
+- default_config deep-copies its nested defaults (T-179).
+- Tests: suite 543 -> 593 PASS, pyflakes 0.
+
 ## v0.3.30 (2026-08-11)
 - Safety audit pass 3, 10 tickets (T-163..T-172). Generated AHK no longer closes other AHK processes by filename wildcard (^wr.*\.ahk) - ownership and replacement are python-side, PID/identity-verified only (T-163).
 - AFK farm: never fabricates map coordinates (no invented Mid fallback; enabled-with-zero-positions is disabled and reported), positions no longer depend on the minimap hotkey trigger, and the death detector fails CLOSED - ImageSearch ErrorLevel 2 (search could not be conducted) pauses AFK instead of running the alive path; the deathwatch config is consumed through the canonical validator with a template-resource check (T-164, T-165, T-166).

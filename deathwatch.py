@@ -6,6 +6,7 @@ import cv2
 import win32gui
 
 import capture
+import config_store
 import digit_reader
 import engine_config
 import key_blocker
@@ -78,6 +79,42 @@ def _grab_safe(hwnd, region):
     if capture.is_foreground(hwnd):
         return capture.grab_region(hwnd, region)
     return capture.grab_client_region(hwnd, region)
+
+
+def _mid_click_coords():
+    """Validated minimap-mid client coordinates from the main config (T-178).
+
+    The main config is read through the shared validator (config_store) - no
+    raw json.load shortcut that bypasses recovery/validation. Returns None for
+    any missing/corrupt/invalid/wrong-typed/negative value: UNKNOWN => NO
+    ACTION, coordinates are never defaulted or fabricated.
+    """
+    try:
+        with open(os.path.join(BASE, "config.json"), encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or config_store.validate_config(data):
+        return None
+    mid = (data.get("minimap") or {}).get("mid")
+    if not isinstance(mid, dict):
+        return None
+    x, y = mid.get("x"), mid.get("y")
+    if not (isinstance(x, int) and not isinstance(x, bool)
+            and isinstance(y, int) and not isinstance(y, bool)
+            and x >= 0 and y >= 0):
+        return None
+    return x, y
+
+
+def _client_bounds_ok(hwnd, x, y):
+    """True only when (x, y) lies inside the target's CURRENT client area -
+    checked immediately before any click (T-178); a read failure is False."""
+    try:
+        w, h = capture.get_client_size(hwnd)
+    except Exception:
+        return False
+    return 0 <= x < w and 0 <= y < h
 
 
 def _set_block(sec):
@@ -191,15 +228,18 @@ def handle_death(hwnd, cfg, templates):
 
         if win32gui.GetForegroundWindow() == hwnd:
             if cfg.get("click_mid_on_resurrect"):
-                try:
-                    with open(os.path.join(BASE, "config.json")) as f:
-                        main_cfg = json.load(f)
-                    mid = main_cfg.get("minimap", {}).get("mid", {})
-                    if "x" in mid and "y" in mid:
-                        window_ctl.click_client_pos(hwnd, mid["x"], mid["y"])
-                        print(f"clicked mid on minimap ({mid['x']}, {mid['y']})")
-                except Exception as e:
-                    print(f"failed to click mid: {e}")
+                mid = _mid_click_coords()
+                if mid is None:
+                    print("resurrect mid-click skipped: no validated mid coordinates")
+                else:
+                    x, y = mid
+                    # T-178: verified inside the current client rect immediately
+                    # before the click - an out-of-bounds coordinate never fires.
+                    if _client_bounds_ok(hwnd, x, y):
+                        window_ctl.click_client_pos(hwnd, x, y)
+                        print(f"clicked mid on minimap ({x}, {y})")
+                    else:
+                        print(f"resurrect mid-click skipped: ({x}, {y}) outside client area")
 
             if cfg.get("lock_window_resurrect"):
                 if not toggle_mouse_lock(hwnd):
