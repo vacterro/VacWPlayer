@@ -305,6 +305,71 @@ def test_optional_keys_may_be_absent():
     assert engine_config.validate_engine_config(cfg, "autocontinue_config.json") is cfg
 
 
+def test_canonical_default_is_a_deep_copy():
+    """Mutating a returned canonical default must not leak into the source or
+    into later callers (T-159): nested buttons/templates/regions included."""
+    d = engine_config.canonical_default("autocontinue_config.json")
+    d["buttons"][0]["region"][0] = 0
+    fresh = engine_config.canonical_default("autocontinue_config.json")
+    assert fresh["buttons"][0]["region"][0] == 800
+    d["buttons"].pop()
+    assert len(engine_config.canonical_default(
+        "autocontinue_config.json")["buttons"]) == 3
+
+
+# --- T-151: autocontinue buttons must satisfy runtime index contract ----------
+
+def _ac_buttons(*buttons):
+    return {"window_title": "Game", "buttons": list(buttons)}
+
+
+@pytest.mark.parametrize("bad", [
+    [{}],                                        # empty button object
+    [{"name": "x"}],                             # no template
+    [{"name": "x", "template": "t.png"}],        # no region
+    [{"name": "x", "template": "t.png",
+      "region": [0, 0, 10, 10]}],                # no threshold
+    [{"template": "t.png", "region": [0, 0, 10, 10],
+      "threshold": 0.8}],                        # no name
+    [{"name": "", "template": "t.png",
+      "region": [0, 0, 10, 10], "threshold": 0.8}],  # empty name
+    [{"name": "x", "template": "",
+      "region": [0, 0, 10, 10], "threshold": 0.8}],  # empty template
+    [{"name": "x", "template": "t.png",
+      "region": [800.5, 690, 1140, 765], "threshold": 0.8}],  # float coord
+    [{"name": "x", "template": "t.png",
+      "region": [800, True, 1140, 765], "threshold": 0.8}],   # bool coord
+    [{"name": "x", "template": "t.png",
+      "region": [0, 0, 10], "threshold": 0.8}],               # 3 coords
+    [{"name": "x", "template": "t.png",
+      "region": [0, 0, 10, 10], "threshold": 1.5}],           # threshold >1
+])
+def test_autocontinue_button_contract_rejects(bad):
+    with pytest.raises(SystemExit):
+        engine_config.validate_engine_config(_ac_buttons(*bad),
+                                             "autocontinue_config.json")
+
+
+def test_autocontinue_button_contract_accepts_valid():
+    cfg = _ac_buttons({"name": "continue", "template": "t.png",
+                       "region": [800, 690, 1140, 765], "threshold": 0.85})
+    assert engine_config.validate_engine_config(cfg, "autocontinue_config.json") is cfg
+
+
+def test_accept_template_fields_stay_optional():
+    """accept/surrender read templates via .get() - a name-less template is
+    still valid there (backward compatibility, T-151)."""
+    cfg = {"window_title": "Game", "templates": [{"file": "t.png"}]}
+    assert engine_config.validate_engine_config(cfg, "accept_config.json") is cfg
+
+
+def test_deathwatch_region_must_be_integer_pixels():
+    cfg = dict(engine_config.canonical_default("deathwatch_config.json"))
+    cfg["death_label_region"] = [900.5, 118, 1165, 145]
+    with pytest.raises(SystemExit):
+        engine_config.validate_engine_config(cfg, "deathwatch_config.json")
+
+
 def test_process_runner_start_stop_restart():
     stub = "tests/_stub_engine.py"
     status, last, check = FakeVar(), FakeVar(), FakeVar()
@@ -382,6 +447,39 @@ def test_grab_client_region_passthrough_failure(monkeypatch):
         raise AssertionError("should have raised")
     except RuntimeError:
         pass
+
+
+# --- T-162: grab_region must reject zero/negative sizes before GDI allocation
+
+def test_grab_region_rejects_zero_or_negative_size(monkeypatch):
+    """A zero/negative region must be rejected BEFORE any GDI handle is
+    acquired (T-162) - never BitBlt a negative-size rectangle."""
+    def no_acquire(*a, **k):
+        raise AssertionError("GDI acquisition must not happen")
+    monkeypatch.setattr(capture.win32gui, "GetWindowDC", no_acquire)
+    for region in ([0, 0, 0, 0], [10, 10, 10, 10], [10, 20, 5, 5]):
+        try:
+            capture.grab_region(1, region)
+            raise AssertionError("should have raised for %r" % region)
+        except RuntimeError:
+            pass
+
+
+def test_grab_region_valid_size_still_acquires(monkeypatch):
+    got = []
+    monkeypatch.setattr(capture.win32gui, "ClientToScreen", lambda h, p: p)
+    monkeypatch.setattr(capture.win32gui, "GetWindowDC", lambda h: got.append("dc") or 5)
+    monkeypatch.setattr(capture.win32ui, "CreateDCFromHandle",
+                        lambda h: type("DC", (), {
+                            "CreateCompatibleDC": lambda self: type("DC2", (), {})()})())
+    monkeypatch.setattr(capture.win32gui, "ReleaseDC", lambda *a: None)
+    monkeypatch.setattr(capture.win32gui, "DeleteObject", lambda *a: None)
+    try:
+        capture.grab_region(1, [0, 0, 5, 5])
+        raise AssertionError("BitBlt chain is stubbed - should not reach bitmap")
+    except Exception:
+        pass
+    assert got == ["dc"]
 
 
 # --- T-147: GDI/DC cleanup on every capture path (incl. mid-acquisition throw)
@@ -535,3 +633,232 @@ def test_engines_share_poller(monkeypatch):
     assert names == {"accept", "surrender", "autocontinue"}
     configs = {c[0][2] for c in calls}
     assert configs == {"accept_config.json", "surrender_config.json", "autocontinue_config.json"}
+
+
+# --- T-153: deathwatch must never trigger automation on foreign pixels --------
+
+def test_deathwatch_grab_safe_foreground_uses_fast_path(monkeypatch):
+    grabbed, safe = [], []
+    monkeypatch.setattr(deathwatch.capture, "is_foreground", lambda h: True)
+    monkeypatch.setattr(deathwatch.capture, "grab_region",
+                        lambda h, r: grabbed.append(r) or np.zeros((1, 1, 3), dtype=np.uint8))
+    monkeypatch.setattr(deathwatch.capture, "grab_client_region",
+                        lambda h, r: safe.append(r) or np.zeros((1, 1, 3), dtype=np.uint8))
+    deathwatch._grab_safe(123, [0, 0, 1, 1])
+    assert grabbed and not safe
+
+
+def test_deathwatch_grab_safe_occluded_uses_client_pixels(monkeypatch):
+    """Background/occluded: the read must come from the TARGET window's own
+    client area (PrintWindow), never from topmost desktop pixels - foreign
+    pixels can never feed is_dead/OCR (T-153)."""
+    grabbed, safe = [], []
+    monkeypatch.setattr(deathwatch.capture, "is_foreground", lambda h: False)
+    monkeypatch.setattr(deathwatch.capture, "grab_region",
+                        lambda h, r: grabbed.append(r) or np.zeros((1, 1, 3), dtype=np.uint8))
+    monkeypatch.setattr(deathwatch.capture, "grab_client_region",
+                        lambda h, r: safe.append(r) or np.zeros((1, 1, 3), dtype=np.uint8))
+    deathwatch._grab_safe(123, [0, 0, 1, 1])
+    assert safe and not grabbed
+
+
+def test_deathwatch_grab_safe_passes_failures_through(monkeypatch):
+    def boom(hwnd, region):
+        raise RuntimeError("window gone")
+    monkeypatch.setattr(deathwatch.capture, "is_foreground", lambda h: False)
+    monkeypatch.setattr(deathwatch.capture, "grab_client_region", boom)
+    try:
+        deathwatch._grab_safe(1, [0, 0, 1, 1])
+        raise AssertionError("should have raised")
+    except RuntimeError:
+        pass
+
+
+# --- T-154: deathwatch must not launder programming errors as lost window -----
+
+class _SleepSentinel:
+    def __init__(self, stop_after):
+        self.stop_after = stop_after
+        self.calls = 0
+
+    def __call__(self, secs):
+        self.calls += 1
+        if self.calls >= self.stop_after:
+            raise KeyboardInterrupt
+
+
+def _run_deathwatch_loop(monkeypatch, grab_fn, stop_after=999):
+    find_calls = []
+
+    monkeypatch.setattr(deathwatch.engine_config, "setup_logging", lambda: None)
+    monkeypatch.setattr(deathwatch.single_instance, "ensure_single_instance",
+                        lambda *a, **k: None)
+    monkeypatch.setattr(deathwatch.single_instance, "start_parent_watchdog",
+                        lambda: None)
+    monkeypatch.setattr(deathwatch.window_ctl, "set_dpi_aware", lambda: None)
+    monkeypatch.setattr(deathwatch.key_blocker, "start", lambda *a, **k: None)
+    monkeypatch.setattr(deathwatch.key_blocker, "stop", lambda *a, **k: None)
+    monkeypatch.setattr(deathwatch.digit_reader, "load_templates",
+                        lambda *a, **k: [])
+    monkeypatch.setattr(deathwatch.cv2, "imread",
+                        lambda *a, **k: np.zeros((10, 10), dtype=np.uint8))
+    monkeypatch.setattr(deathwatch.win32gui, "IsWindow", lambda h: True)
+    monkeypatch.setattr(deathwatch.capture, "find_window",
+                        lambda t: find_calls.append(t) or 12345)
+    monkeypatch.setattr(deathwatch.capture, "is_minimized", lambda h: False)
+    monkeypatch.setattr(deathwatch.engine_config, "mtime_changed",
+                        lambda p, m: (1.0, False))
+    monkeypatch.setattr(deathwatch.time, "sleep", _SleepSentinel(stop_after))
+    monkeypatch.setattr(deathwatch.capture, "is_foreground", lambda h: True)
+    monkeypatch.setattr(deathwatch.capture, "grab_region", grab_fn)
+    return find_calls
+
+
+def test_deathwatch_runtime_error_reacquires(monkeypatch):
+    """A capture/window RuntimeError is the only 'lost window': hwnd reset and
+    re-acquire, not a crash (T-154)."""
+    def grab_boom(hwnd, region):
+        raise RuntimeError("window gone")
+    find_calls = _run_deathwatch_loop(monkeypatch, grab_boom, stop_after=3)
+    try:
+        deathwatch.main(replace=False)
+    except KeyboardInterrupt:
+        pass  # sentinel ended the loop after the reacquire cycle
+    assert len(find_calls) >= 2  # re-acquired after the lost window
+
+
+def test_deathwatch_keyerror_is_fatal_not_lost_window(monkeypatch):
+    def grab_boom(hwnd, region):
+        raise KeyError("config bug")
+    find_calls = _run_deathwatch_loop(monkeypatch, grab_boom)
+    try:
+        deathwatch.main(replace=False)
+        raise AssertionError("KeyError was swallowed - must be FATAL (T-154)")
+    except KeyError:
+        pass  # correct: programming error propagates
+    except KeyboardInterrupt:
+        raise AssertionError("KeyError was swallowed and looped until sentinel")
+    assert len(find_calls) == 1  # never treated as lost window, no reacquire
+
+
+def test_deathwatch_typeerror_is_fatal_not_lost_window(monkeypatch):
+    def grab_boom(hwnd, region):
+        raise TypeError("programming error")
+    find_calls = _run_deathwatch_loop(monkeypatch, grab_boom)
+    try:
+        deathwatch.main(replace=False)
+        raise AssertionError("TypeError was swallowed - must be FATAL (T-154)")
+    except TypeError:
+        pass  # correct: programming error propagates
+    except KeyboardInterrupt:
+        raise AssertionError("TypeError was swallowed and looped until sentinel")
+    assert len(find_calls) == 1
+
+
+# --- T-155: deathwatch hot reload is transactional as a WHOLE -----------------
+
+_LABEL_MARK = "<deathwatch-label-marker>"
+
+
+def _run_deathwatch_reload(monkeypatch, make_candidate, stop_after=4):
+    import json as _json
+    state = {"load_calls": 0, "probes": 0, "find_titles": [],
+             "imread_paths": [], "warns": 0}
+    real_cfg = _json.load(open(deathwatch.CONFIG_PATH, encoding="utf-8"))
+
+    def _load():
+        state["load_calls"] += 1
+        return real_cfg if state["load_calls"] == 1 else make_candidate()
+
+    def _changed(p, m):
+        state["probes"] += 1
+        return (2.0, state["probes"] == 1)  # exactly one config change
+
+    def _imread(path, flags):
+        state["imread_paths"].append(path)
+        if str(path).endswith("missing_label.png"):
+            return None
+        return _LABEL_MARK
+
+    def _find(title):
+        state["find_titles"].append(title)
+        return 12345
+
+    def _print(*a, **k):
+        line = " ".join(str(x) for x in a)
+        if "WARN" in line:
+            state["warns"] += 1
+
+    monkeypatch.setattr(deathwatch.engine_config, "setup_logging", lambda: None)
+    monkeypatch.setattr(deathwatch.single_instance, "ensure_single_instance",
+                        lambda *a, **k: None)
+    monkeypatch.setattr(deathwatch.single_instance, "start_parent_watchdog",
+                        lambda: None)
+    monkeypatch.setattr(deathwatch.window_ctl, "set_dpi_aware", lambda: None)
+    monkeypatch.setattr(deathwatch.key_blocker, "start", lambda *a, **k: None)
+    monkeypatch.setattr(deathwatch.key_blocker, "stop", lambda *a, **k: None)
+    monkeypatch.setattr(deathwatch, "load_config", _load)
+    monkeypatch.setattr(deathwatch.engine_config, "mtime_changed", _changed)
+    monkeypatch.setattr(deathwatch.digit_reader, "load_templates",
+                        lambda path: {"0": _LABEL_MARK}
+                        if "missing_digits" not in str(path)
+                        else (_ for _ in ()).throw(OSError(2, "no dir", path)))
+    monkeypatch.setattr(deathwatch.cv2, "imread", _imread)
+    monkeypatch.setattr(deathwatch.win32gui, "IsWindow", lambda h: True)
+    monkeypatch.setattr(deathwatch.capture, "find_window", _find)
+    monkeypatch.setattr(deathwatch.capture, "is_minimized", lambda h: False)
+    monkeypatch.setattr(deathwatch.time, "sleep", _SleepSentinel(stop_after))
+    monkeypatch.setattr(deathwatch.capture, "is_foreground", lambda h: True)
+    monkeypatch.setattr(deathwatch.capture, "grab_region",
+                        lambda h, r: np.zeros((10, 10, 3), dtype=np.uint8))
+    monkeypatch.setattr(deathwatch, "label_match_score",
+                        lambda crop, tmpl: 0.0)
+    monkeypatch.setattr("builtins.print", _print)
+    return state
+
+
+def _candidate(window_title="NewTitle", digits_dir="templates/digits",
+               label="templates/death_label.png"):
+    import json as _json
+    cfg = _json.load(open(deathwatch.CONFIG_PATH, encoding="utf-8"))
+    cfg["window_title"] = window_title
+    cfg["digit_templates_dir"] = digits_dir
+    cfg["death_label_template"] = label
+    return cfg
+
+
+def test_reload_bad_label_rejects_whole_candidate(monkeypatch):
+    """Bad label path: old cfg stays active (window title unchanged), the
+    rejection warns ONCE per revision, not per poll (T-155)."""
+    state = _run_deathwatch_reload(
+        monkeypatch, lambda: _candidate(label="missing_label.png"))
+    try:
+        deathwatch.main(replace=False)
+    except KeyboardInterrupt:
+        pass
+    assert state["find_titles"] == ["BlueStacks App Player"] * len(state["find_titles"])
+    assert "NewTitle" not in state["find_titles"]
+    assert state["warns"] == 1  # one warning, not one per polling iteration
+
+
+def test_reload_bad_digits_dir_rejects_whole_candidate(monkeypatch):
+    state = _run_deathwatch_reload(
+        monkeypatch, lambda: _candidate(digits_dir="missing_digits"))
+    try:
+        deathwatch.main(replace=False)
+    except KeyboardInterrupt:
+        pass
+    assert "NewTitle" not in state["find_titles"]
+    assert state["warns"] == 1
+
+
+def test_reload_valid_candidate_commits_together(monkeypatch):
+    """Valid candidate: cfg + resources commit together - new window title is
+    watched and the new label is used, no warning."""
+    state = _run_deathwatch_reload(monkeypatch, lambda: _candidate())
+    try:
+        deathwatch.main(replace=False)
+    except KeyboardInterrupt:
+        pass
+    assert "NewTitle" in state["find_titles"]
+    assert state["warns"] == 0

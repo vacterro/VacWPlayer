@@ -24,7 +24,7 @@ class BuyTab(tk.Frame):
     def __init__(self, parent):
         super().__init__(parent, bg=TOKENS["background"])
         self.cfg_path = os.path.join(BASE, self.CONFIG_NAME)
-        cfg = load_json(self.cfg_path)
+        cfg = load_json(self.cfg_path, self.CONFIG_NAME)
 
         head = tk.Frame(self, bg=TOKENS["background"])
         head.pack(fill="x", padx=4, pady=(4, 1))
@@ -152,7 +152,7 @@ class BuyTab(tk.Frame):
             cfg["controlsend_z"] = self.controlsend_z.get()
         try:
             ok = update_json(self.cfg_path, mutate,
-                             canonical_default(self.CONFIG_NAME))
+                             canonical_default(self.CONFIG_NAME), config_name=self.CONFIG_NAME)
         except ValueError as e:
             if silent:
                 print(f"BuyTab save skipped: {e}", file=sys.stderr)

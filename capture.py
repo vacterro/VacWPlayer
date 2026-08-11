@@ -111,6 +111,8 @@ def grab_region(hwnd: int, region: list[int]) -> np.ndarray:
     """
     x0, y0, x1, y1 = region
     w, h = x1 - x0, y1 - y0
+    if w <= 0 or h <= 0:
+        raise RuntimeError("grab_region rejected: non-positive region size")
     screen_x, screen_y = win32gui.ClientToScreen(hwnd, (x0, y0))
 
     desktop_dc = win32gui.GetWindowDC(0)

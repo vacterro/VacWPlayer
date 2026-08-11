@@ -11,6 +11,7 @@ numerics must be finite). The load path turns any problems into the existing
 FATAL SystemExit policy.
 """
 
+import copy
 import logging
 import math
 import os
@@ -124,8 +125,9 @@ ENGINE_DEFAULTS = {
 
 
 def canonical_default(config_name: str) -> dict:
-    """Complete canonical config for an engine, copied so callers may mutate."""
-    return dict(ENGINE_DEFAULTS.get(config_name, {}))
+    """Complete canonical config for an engine, deep-copied so callers may
+    mutate it freely (T-159) - nested buttons/templates/regions included."""
+    return copy.deepcopy(ENGINE_DEFAULTS.get(config_name, {}))
 
 
 # Per-engine REQUIRED contracts (T-139): the keys each engine's runtime indexes
@@ -152,6 +154,13 @@ def _is_number(v):
 
 def _is_finite(v):
     return _is_number(v) and math.isfinite(v)
+
+
+def _is_pixel_int(v):
+    """A pixel coordinate is a non-bool integer (T-151): bools pass isinstance
+    int, floats are not coordinates, and click_at feeds these straight into
+    MAKELONG which needs integer coords."""
+    return isinstance(v, int) and not isinstance(v, bool)
 
 
 def quickbuy_key_vk(key) -> int | None:
@@ -216,8 +225,8 @@ def _collect_problems(cfg, name):
         if key not in cfg:
             return
         r = cfg[key]
-        if not isinstance(r, list) or len(r) != 4 or not all(_is_finite(x) for x in r):
-            _p("key %r must be a list of exactly 4 finite numbers, got %r", key, r)
+        if not isinstance(r, list) or len(r) != 4 or not all(_is_pixel_int(x) for x in r):
+            _p("key %r must be a list of exactly 4 integer pixels, got %r", key, r)
             return
         x0, y0, x1, y1 = r
         if x1 <= x0 or y1 <= y0:
@@ -247,14 +256,41 @@ def _collect_problems(cfg, name):
                        key, i, t)
             if "region" in item:
                 r = item["region"]
-                if not isinstance(r, list) or len(r) != 4 or not all(_is_finite(x) for x in r):
-                    _p("key %r[%d].region must be a list of exactly 4 finite "
-                       "numbers, got %r", key, i, r)
+                if not isinstance(r, list) or len(r) != 4 or not all(_is_pixel_int(x) for x in r):
+                    _p("key %r[%d].region must be a list of exactly 4 integer "
+                       "pixels, got %r", key, i, r)
                 else:
                     x0, y0, x1, y1 = r
                     if x1 <= x0 or y1 <= y0:
                         _p("key %r[%d].region must satisfy x1>x0 and y1>y0, got %r",
                            key, i, r)
+
+    def _check_autocontinue_buttons():
+        """T-151: autocontinue's build_buttons/group_by_region/_scan index
+        b["template"], b["region"], b["threshold"] and b["name"] directly, so
+        every configured button must carry them (generic .get()-based template
+        checks would let [{}] through). accept/surrender read via .get() and
+        keep their loose optional fields."""
+        items = cfg.get("buttons")
+        if not isinstance(items, list):
+            return  # generic check already flagged the non-list
+        for i, b in enumerate(items):
+            if not isinstance(b, dict):
+                continue  # generic check flagged
+            for fld in ("name", "template"):
+                v = b.get(fld)
+                if not (isinstance(v, str) and v.strip()):
+                    _p("key 'buttons'[%d].%s must be a non-empty string, got %r",
+                       i, fld, v)
+            r = b.get("region")
+            if not (isinstance(r, list) and len(r) == 4
+                    and all(_is_pixel_int(x) for x in r)):
+                _p("key 'buttons'[%d].region is required: exactly 4 integer "
+                   "pixels, got %r", i, r)
+            t = b.get("threshold")
+            if not (_is_finite(t) and 0.0 <= t <= 1.0):
+                _p("key 'buttons'[%d].threshold is required: a finite number "
+                   "in 0..1, got %r", i, t)
 
     # Shared surface across the poller engines and deathwatch.
     _check_bool("monitor_enabled")
@@ -269,6 +305,8 @@ def _collect_problems(cfg, name):
     _check_number("match_threshold", minimum=0)
     _check_template_list("templates")
     _check_template_list("buttons")
+    if name == "autocontinue_config.json":
+        _check_autocontinue_buttons()
 
     # Deathwatch-specific fields - every consumed value is validated.
     _check_region("death_label_region")
@@ -323,3 +361,11 @@ def validate_engine_config(cfg: dict, config_name: str) -> dict:
         print("FATAL: failed to load %s: %s" % (config_name, "; ".join(problems)))
         raise SystemExit(1)
     return cfg
+
+
+def semantic_problems(cfg: dict, config_name: str) -> list[str]:
+    """Non-exiting semantic problem collector (T-152): the SAME validation the
+    engines FATAL on, exposed for the GUI read path. The GUI must not
+    duplicate engine validation - it consumes this one, and a config with
+    problems is display-canonical + write-refused instead of engine-FATAL."""
+    return _collect_problems(cfg, config_name)

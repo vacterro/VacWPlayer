@@ -567,6 +567,36 @@ def test_save_config_writes_split_files(monkeypatch, tmp_path):
     assert local["champions"]["ryze"] == {"enabled_pvp": True}
 
 
+# --- T-161: save_config must not commit the PRIMARY half on a failed save -----
+
+def test_save_config_local_failure_leaves_primary_unchanged(tmp_path, monkeypatch):
+    """When the volatile (config.local.json) write fails, save_config returns
+    False AND the primary config.json must NOT be ahead of the failure - a
+    reported-failed save must not have already committed the main config
+    (T-161). The local half is written first so the stable half is only ever
+    committed on a fully-successful save."""
+    import main as main_mod
+    cfg_file = tmp_path / "config.json"
+    local_file = tmp_path / "config.local.json"
+    cfg_file.write_text('{"mode": "old"}', encoding="utf-8")
+    local_file.write_text('{"window": {"active_tab": 0}}', encoding="utf-8")
+    main_mod.CONFIG_FILE = str(cfg_file)
+    main_mod.CONFIG_LOCAL_FILE = str(local_file)
+
+    real_atomic = main_mod.config_store.atomic_write
+
+    def selective(path, data):
+        if os.path.normcase(str(path)) == os.path.normcase(str(local_file)):
+            raise OSError(13, "denied", path)
+        return real_atomic(path, data)
+
+    monkeypatch.setattr(main_mod.config_store, "atomic_write", selective)
+    cfg = {"mode": "ryze", "window": {"active_tab": 1}}
+    assert main_mod.save_config(cfg) is False
+    assert json.loads(cfg_file.read_text(encoding="utf-8")) == {"mode": "old"}
+    main_mod.config_write_blocked = None
+
+
 # --- T-090: tracked config baseline stays volatile-free ---------------------
 
 def test_committed_config_has_no_volatile_keys():
@@ -757,23 +787,24 @@ def test_import_clears_write_guard(monkeypatch, tmp_path):
     w = object.__new__(main_mod.VacWPlayer)
     w.config = {}
     w.status_lbl = type("S", (), {"config": lambda *a, **k: None})()
-    saved = []
-    monkeypatch.setattr(main_mod, "save_config", lambda cfg: saved.append(cfg) or True)
-    monkeypatch.setattr(main_mod, "load_config",
-                        lambda: {"mode": "ryze", "toggles": {}, "combos": [],
-                                 "champions": {}, "minimap": {}, "afkfarm": {}})
+    cfg_file = tmp_path / "config.json"
+    main_mod.CONFIG_FILE = str(cfg_file)
+    main_mod.CONFIG_LOCAL_FILE = str(tmp_path / "config.local.json")
+    cfg_file.write_text("{corrupt", encoding="utf-8")
     monkeypatch.setattr(main_mod.messagebox, "askyesno", lambda *a, **k: True)
     monkeypatch.setattr(main_mod.messagebox, "showerror", lambda *a, **k: None)
     monkeypatch.setattr(w, "_rebuild_ui", lambda: None)
-    main_mod.config_write_blocked = "io_error"
 
     good = tmp_path / "good.json"
     good.write_text('{"mode": "ryze", "toggles": {}, "combos": [], '
                     '"champions": {}, "minimap": {}, "afkfarm": {}, "lang": "en"}',
                     encoding="utf-8")
+    main_mod.config_write_blocked = "io_error"
     w._do_import_file(str(good))
-    assert len(saved) == 1
-    assert main_mod.config_write_blocked is None  # explicit import clears guard
+    data = json.loads(cfg_file.read_text(encoding="utf-8"))
+    assert data["mode"] == "ryze"
+    assert main_mod.config_write_blocked is None  # cleared only after write+read-back
+    main_mod.config_write_blocked = None
 
 
 def test_save_config_guarded_writes_nothing(monkeypatch, tmp_path):
@@ -794,7 +825,7 @@ def test_import_valid_config_saved(monkeypatch, tmp_path):
     w.config = {}
     w.status_lbl = type("S", (), {"config": lambda *a, **k: None})()
     saved = []
-    monkeypatch.setattr(main_mod, "save_config", lambda cfg: saved.append(cfg) or True)
+    monkeypatch.setattr(main_mod, "save_config", lambda cfg, bypass_guard=False: saved.append(cfg) or True)
     monkeypatch.setattr(main_mod, "load_config",
                         lambda: {"mode": "ryze", "toggles": {}, "combos": [],
                                  "champions": {}, "minimap": {}, "afkfarm": {}})
@@ -921,3 +952,113 @@ def test_setup_tray_wires_quit_through_marshaling(monkeypatch):
     quit_item = [i for i in FakeIcon.last[3].items
                  if i.text == main_mod.Locale.tr("tray_quit")]
     assert quit_item and quit_item[0].action == w._tray_quit
+
+# --- T-156: import must not clear the write guard before persistence ----------
+
+_VALID_IMPORT = '{"mode": "ryze", "toggles": {}, "combos": [], "champions": {}, "minimap": {}, "afkfarm": {}, "lang": "en"}'
+
+
+def _import_harness(tmp_path, monkeypatch):
+    import main as main_mod
+    w = object.__new__(main_mod.VacWPlayer)
+    w.config = {}
+    w.status_lbl = type("S", (), {"config": lambda *a, **k: None})()
+    cfg_file = tmp_path / "config.json"
+    local_file = tmp_path / "config.local.json"
+    cfg_file.write_text("{corrupt source", encoding="utf-8")
+    main_mod.CONFIG_FILE = str(cfg_file)
+    main_mod.CONFIG_LOCAL_FILE = str(local_file)
+    monkeypatch.setattr(main_mod.messagebox, "askyesno", lambda *a, **k: True)
+    monkeypatch.setattr(main_mod.messagebox, "showerror", lambda *a, **k: None)
+    monkeypatch.setattr(w, "_rebuild_ui", lambda: None)
+    import_file = tmp_path / "import.json"
+    import_file.write_text(_VALID_IMPORT, encoding="utf-8")
+    return main_mod, w, cfg_file, import_file
+
+
+def test_import_failed_write_restores_guard(tmp_path, monkeypatch):
+    """A recovery import whose WRITE fails must leave the old guard armed - a
+    later autosave/apply must stay blocked (T-156)."""
+    main_mod, w, cfg_file, import_file = _import_harness(tmp_path, monkeypatch)
+
+    def boom(path, data):
+        raise OSError(13, "denied", path)
+
+    monkeypatch.setattr(main_mod.config_store, "atomic_write", boom)
+    main_mod.config_write_blocked = "corrupt"
+    w._do_import_file(str(import_file))
+    assert main_mod.config_write_blocked == "corrupt"  # guard retained
+    assert cfg_file.read_text(encoding="utf-8") == "{corrupt source"  # untouched
+    # ordinary save remains blocked after the failed recovery
+    assert main_mod.save_config({"mode": "ryze"}) is False
+    main_mod.config_write_blocked = None
+
+
+def test_import_success_clears_guard_and_persists(tmp_path, monkeypatch):
+    """Successful recovery import persists the candidate and clears the guard
+    only after the write landed (T-156)."""
+    main_mod, w, cfg_file, import_file = _import_harness(tmp_path, monkeypatch)
+    main_mod.config_write_blocked = "corrupt"
+    w._do_import_file(str(import_file))
+    data = json.loads(cfg_file.read_text(encoding="utf-8"))
+    assert data["mode"] == "ryze"
+    assert main_mod.config_write_blocked is None  # cleared only on success
+    main_mod.config_write_blocked = None
+
+# --- T-157: backup must not report success after failed/blocked save ----------
+
+def _backup_harness(tmp_path, monkeypatch):
+    import main as main_mod
+    main_mod.config_write_blocked = None  # fresh guard per test
+    w = object.__new__(main_mod.VacWPlayer)
+    cfg_file = tmp_path / "config.json"
+    local_file = tmp_path / "config.local.json"
+    main_mod.CONFIG_FILE = str(cfg_file)
+    main_mod.CONFIG_LOCAL_FILE = str(local_file)
+    main_mod.BASE = str(tmp_path)  # backups/ land in tmp, not the repo
+    cfg_file.write_text("{corrupt source", encoding="utf-8")
+    status = []
+    w.status_lbl = type("S", (), {"config": lambda *a, **k: status.append(a)})()
+    w.collect_config = lambda: None
+    w.config = {"mode": "ryze", "toggles": {}, "combos": [], "champions": {},
+                "minimap": {}, "afkfarm": {}, "lang": "en"}
+    errors = []
+    monkeypatch.setattr(main_mod.messagebox, "showerror",
+                        lambda *a, **k: errors.append(a))
+    return main_mod, w, cfg_file, status, errors
+
+
+def test_backup_guarded_source_aborts_no_success(tmp_path, monkeypatch):
+    """Write-guarded degraded source: backup must abort and never claim a
+    successful current-config backup (T-157)."""
+    main_mod, w, cfg_file, status, errors = _backup_harness(tmp_path, monkeypatch)
+    main_mod.config_write_blocked = "corrupt"
+    w.backup_config()
+    assert status == []          # no success status shown
+    assert errors                # a failure diagnostic was shown
+    assert not (tmp_path / "backups").exists() or \
+        not list((tmp_path / "backups").glob("config_*.json"))
+    main_mod.config_write_blocked = None
+
+
+def test_backup_save_failure_aborts_no_success(tmp_path, monkeypatch):
+    """save_config failing (disk error) must abort backup, no success text."""
+    main_mod, w, cfg_file, status, errors = _backup_harness(tmp_path, monkeypatch)
+    def boom(path, data):
+        raise OSError(13, "denied", path)
+    monkeypatch.setattr(main_mod.config_store, "atomic_write", boom)
+    w.backup_config()
+    assert status == []
+    assert errors
+    assert not list((tmp_path / "backups").glob("config_*.json"))
+
+
+def test_backup_success_copies_stable_config(tmp_path, monkeypatch):
+    main_mod, w, cfg_file, status, errors = _backup_harness(tmp_path, monkeypatch)
+    w.backup_config()
+    backups = tmp_path / "backups"
+    files = list(backups.glob("config_*.json"))
+    assert len(files) == 1
+    data = json.loads(files[0].read_text(encoding="utf-8"))
+    assert data["mode"] == "ryze"
+    assert status and not errors

@@ -71,6 +71,15 @@ def toggle_mouse_lock(hwnd=None):
                 print(f"failed to release {vk:#04x} after mouse lock: {e}")
 
 
+def _grab_safe(hwnd, region):
+    """Occlusion-safe region read (T-153): foreground -> cheap BitBlt fast
+    path, otherwise PrintWindow + crop. NO death decision (is_dead / timer OCR)
+    may ever be computed from another application's topmost desktop pixels."""
+    if capture.is_foreground(hwnd):
+        return capture.grab_region(hwnd, region)
+    return capture.grab_client_region(hwnd, region)
+
+
 def _set_block(sec):
     """Convenience: start or stop the pedal key block."""
     if sec > 0:
@@ -109,7 +118,7 @@ def handle_death(hwnd, cfg, templates):
         print("waiting shop buffer")
         time.sleep(cfg["shop_buffer_sec"])
 
-        digits_crop = capture.grab_region(hwnd, cfg["timer_digits_region"])
+        digits_crop = _grab_safe(hwnd, cfg["timer_digits_region"])
         n = digit_reader.read_number(digits_crop, templates)
 
         if n is None:
@@ -236,9 +245,50 @@ def main(replace=False):
             try:
                 cfg_last_mtime, changed = engine_config.mtime_changed(cfg_path, cfg_last_mtime)
                 if changed:
-                    # Same validator as the initial load - the candidate cfg is
-                    # committed only after it fully validates (T-082).
-                    cfg = load_config()
+                    # T-155: hot reload is transactional as a WHOLE. The
+                    # candidate cfg commits only when every required resource
+                    # it points at (digit templates dir, death label template)
+                    # actually builds. If any fails, the candidate is rejected
+                    # entirely - old cfg, old resources and old blocked-key /
+                    # window state stay live, and the mtime is consumed so the
+                    # rejection warning fires ONCE per file revision instead of
+                    # every polling iteration.
+                    candidate_cfg = load_config()
+                    reject = False
+                    candidate_templates = None
+                    if candidate_cfg["digit_templates_dir"] != loaded_digits_dir:
+                        try:
+                            candidate_templates = digit_reader.load_templates(
+                                os.path.join(BASE, candidate_cfg["digit_templates_dir"]))
+                        except OSError as e:
+                            print("WARN: config change rejected: digit templates "
+                                  "load failed (%s); keeping previous" % e)
+                            reject = True
+                        if not reject and not candidate_templates:
+                            print("WARN: config change rejected: no usable digit "
+                                  "templates in '%s'; keeping previous"
+                                  % candidate_cfg["digit_templates_dir"])
+                            reject = True
+                    candidate_label = None
+                    if not reject and candidate_cfg["death_label_template"] != loaded_label_path:
+                        candidate_label = cv2.imread(
+                            os.path.join(BASE, candidate_cfg["death_label_template"]),
+                            cv2.IMREAD_GRAYSCALE)
+                        if candidate_label is None:
+                            print("WARN: config change rejected: death label template "
+                                  "not found '%s'; keeping previous"
+                                  % candidate_cfg["death_label_template"])
+                            reject = True
+                    if not reject:
+                        cfg = candidate_cfg
+                        if candidate_templates is not None:
+                            templates = candidate_templates
+                            loaded_digits_dir = candidate_cfg["digit_templates_dir"]
+                            print("reloaded digit templates")
+                        if candidate_label is not None:
+                            label_template = candidate_label
+                            loaded_label_path = candidate_cfg["death_label_template"]
+                            print("reloaded death label template")
 
                 if cfg["window_title"] != loaded_window_title:
                     loaded_window_title = cfg["window_title"]
@@ -263,43 +313,7 @@ def main(replace=False):
                     time.sleep(cfg["poll_interval_sec"])
                     continue
 
-                # Template reloads are transactional: a candidate that fails to
-                # load never commits, so the engine keeps the last-good
-                # templates instead of falling into the "lost window" path.
-                if cfg["digit_templates_dir"] != loaded_digits_dir:
-                    try:
-                        candidate = digit_reader.load_templates(
-                            os.path.join(BASE, cfg["digit_templates_dir"]))
-                    except OSError as e:
-                        print("WARN: digit templates load failed (%s); "
-                              "keeping previous from '%s'"
-                              % (e, loaded_digits_dir))
-                        candidate = {}
-                    if candidate:
-                        templates = candidate
-                        loaded_digits_dir = cfg["digit_templates_dir"]
-                        print("reloaded digit templates")
-                    else:
-                        print("WARN: no usable digit templates in '%s'; "
-                              "keeping previous" % cfg["digit_templates_dir"])
-
-                if cfg["death_label_template"] != loaded_label_path:
-                    candidate = cv2.imread(
-                        os.path.join(BASE, cfg["death_label_template"]),
-                        cv2.IMREAD_GRAYSCALE)
-                    if candidate is not None:
-                        label_template = candidate
-                        loaded_label_path = cfg["death_label_template"]
-                        print("reloaded death label template")
-                    else:
-                        print("WARN: death label template not found: '%s'; "
-                              "keeping previous" % cfg["death_label_template"])
-
-                if capture.is_minimized(hwnd):
-                    time.sleep(cfg["poll_interval_sec"])
-                    continue
-
-                label_crop = capture.grab_region(hwnd, cfg["death_label_region"])
+                label_crop = _grab_safe(hwnd, cfg["death_label_region"])
                 score = label_match_score(label_crop, label_template)
                 is_dead = score >= cfg["match_threshold"]
 
@@ -314,11 +328,18 @@ def main(replace=False):
             except KeyboardInterrupt:
                 print("stopped")
                 break
-            except Exception as e:
+            except RuntimeError as e:
+                # (T-154) Only capture/window failures are 'lost window' and
+                # retryable. Anything else - a config bug, a resource problem,
+                # a programming error - is FATAL: swallowing it here would loop
+                # forever while pretending to be a transient window loss.
                 print(f"lost window ({e}); will try to re-acquire...")
                 was_dead = False
                 hwnd = None
                 time.sleep(1.0)
+            except Exception as e:
+                print(f"FATAL: unhandled deathwatch error ({type(e).__name__}: {e}); re-raising")
+                raise
     finally:
         key_blocker.stop()
 

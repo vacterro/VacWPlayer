@@ -125,7 +125,7 @@ class DeathWatchTab(tk.Frame):
     def __init__(self, parent):
         super().__init__(parent, bg=TOKENS["background"])
         self.cfg_path = os.path.join(BASE, self.CONFIG_NAME)
-        self._static_cfg = load_json(self.cfg_path)
+        self._static_cfg = load_json(self.cfg_path, self.CONFIG_NAME)
         cfg = self._static_cfg
 
         form = tk.Frame(self, bg=TOKENS["background"])
@@ -290,9 +290,9 @@ class DeathWatchTab(tk.Frame):
                 self.monitor_var.set(True)  # disk still says enabled - restore
 
     def save_monitor_state(self):
-        update_json(self.cfg_path,
+        return update_json(self.cfg_path,
                     lambda c: c.__setitem__("monitor_enabled", self.monitor_var.get()),
-                    canonical_default(self.CONFIG_NAME))
+                    canonical_default(self.CONFIG_NAME), config_name=self.CONFIG_NAME)
 
     def stop_all(self):
         self.runner.stop()
@@ -332,7 +332,7 @@ class DeathWatchTab(tk.Frame):
             cfg["lock_window_resurrect"] = self.lock_window.get()
         try:
             ok = update_json(self.cfg_path, mutate,
-                             canonical_default(self.CONFIG_NAME))
+                             canonical_default(self.CONFIG_NAME), config_name=self.CONFIG_NAME)
         except ValueError as e:
             if silent:
                 print(f"DeathWatch save skipped (invalid input): {e}", file=sys.stderr)

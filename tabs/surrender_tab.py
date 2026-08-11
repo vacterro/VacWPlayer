@@ -33,8 +33,8 @@ class SurrenderTab(tk.Frame):
         
         if not os.path.exists(self.cfg_path):
             update_json(self.cfg_path, lambda c: None,
-                        canonical_default(self.CONFIG_NAME))
-        cfg = load_json(self.cfg_path)
+                        canonical_default(self.CONFIG_NAME), config_name=self.CONFIG_NAME)
+        cfg = load_json(self.cfg_path, self.CONFIG_NAME)
 
         form = tk.Frame(self, bg=TOKENS["background"])
         form.pack(fill="x", padx=4, pady=(4, 2))
@@ -170,7 +170,7 @@ class SurrenderTab(tk.Frame):
 
     def _refresh_tree(self):
         self.tree.delete(*self.tree.get_children())
-        cfg = load_json(self.cfg_path)
+        cfg = load_json(self.cfg_path, self.CONFIG_NAME)
         for i, t in enumerate(cfg.get("templates", [])):
             self.tree.insert("", "end", iid=str(i),
                              text=t.get("name", "?"),
@@ -193,7 +193,7 @@ class SurrenderTab(tk.Frame):
             "name": name,
             "file": rel,
             "threshold": 0.75,
-        }), canonical_default(self.CONFIG_NAME))
+        }), canonical_default(self.CONFIG_NAME), config_name=self.CONFIG_NAME)
         self._refresh_tree()
 
     def remove_template(self):
@@ -205,7 +205,7 @@ class SurrenderTab(tk.Frame):
         update_json(self.cfg_path,
                     lambda c: c["templates"].pop(idx)
                     if 0 <= idx < len(c["templates"]) else None,
-                    canonical_default(self.CONFIG_NAME))
+                    canonical_default(self.CONFIG_NAME), config_name=self.CONFIG_NAME)
         self._refresh_tree()
 
     def _trigger_apply(self):
@@ -230,9 +230,9 @@ class SurrenderTab(tk.Frame):
                 self.monitor_var.set(True)  # disk still says enabled - restore
 
     def save_monitor_state(self):
-        update_json(self.cfg_path,
+        return update_json(self.cfg_path,
                     lambda c: c.__setitem__("monitor_enabled", self.monitor_var.get()),
-                    canonical_default(self.CONFIG_NAME))
+                    canonical_default(self.CONFIG_NAME), config_name=self.CONFIG_NAME)
 
     def stop_all(self):
         self.runner.stop()
@@ -259,7 +259,7 @@ class SurrenderTab(tk.Frame):
             cfg["auto_accept"] = self.auto_accept_var.get()
         try:
             ok = update_json(self.cfg_path, mutate,
-                             canonical_default(self.CONFIG_NAME))
+                             canonical_default(self.CONFIG_NAME), config_name=self.CONFIG_NAME)
         except ValueError as e:
             if silent:
                 print(f"Surrender save skipped (invalid input): {e}", file=sys.stderr)

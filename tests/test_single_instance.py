@@ -13,12 +13,13 @@ import single_instance as si
 
 def test_pid_runs_our_script_accepts_own_cmdline(monkeypatch):
     calls = []
+    expected = si._expected_script_path("accept.py")
 
     def fake_run(args, **kw):
         calls.append(args)
         return type("R", (), {
-            "stdout": ("C:\\Python\\python.exe -u C:\\app\\accept.py "
-                       "--replace\r\n").encode("utf-8")})()
+            "stdout": ("C:\\Python\\python.exe -u %s "
+                       "--replace\r\n" % expected).encode("utf-8")})()
 
     monkeypatch.setattr(si.subprocess, "run", fake_run)
     assert si._pid_runs_our_script(1234, "accept") is True
@@ -51,15 +52,31 @@ def test_split_command_line_respects_quotes():
         "python", "accept.py a.py"]
 
 
-def test_script_identity_is_exact_basename():
-    assert si._script_matches("C:\\app\\accept.py", "accept.py") is True
-    assert si._script_matches('"C:\\app\\accept.py"', "accept.py") is True
-    assert si._script_matches("C:\\app\\ACCEPT.PY", "accept.py") is True
+def test_script_identity_is_exact_absolute_path():
+    """T-158: identity is the normalized ABSOLUTE path of the script OUR
+    instance launches. Basename equality is never proof - a same-named script
+    in another directory must not be killable as ours."""
+    expected = si._expected_script_path("accept.py")
+    assert si._script_matches(expected, "accept.py") is True          # our exact path
+    assert si._script_matches('"%s"' % expected, "accept.py") is True  # quoted
+    assert si._script_matches(expected.upper(), "accept.py") is True   # case normalization
+    assert si._script_matches("C:\\Other\\accept.py", "accept.py") is False  # other dir
+    assert si._script_matches("accept.py", "accept.py") is True  # relative from our dir
     assert si._script_matches("C:\\app\\not_accept.py", "accept.py") is False
     assert si._script_matches("C:\\app\\accept.py.bak", "accept.py") is False
     assert si._script_matches("--accept.py", "accept.py") is False
     assert si._script_matches("C:\\app\\accept_runner.py", "accept.py") is False
     assert si._script_matches("", "accept.py") is False
+
+
+def test_pid_runs_our_script_rejects_other_dir_same_basename(monkeypatch):
+    """A stale PID file pointing at C:\\Other\\accept.py must NEVER be killed
+    as our accept.py (T-158)."""
+    def fake_run(args, **kw):
+        return type("R", (), {
+            "stdout": b"C:\\Python\\python.exe -u C:\\Other\\accept.py\r\n"})()
+    monkeypatch.setattr(si.subprocess, "run", fake_run)
+    assert si._pid_runs_our_script(7777, "accept") is False
 
 
 def test_pid_runs_our_script_rejects_substring_lookalike(monkeypatch):

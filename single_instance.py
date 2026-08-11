@@ -245,11 +245,21 @@ def _split_command_line(cmd):
     return tokens
 
 
+def _expected_script_path(script):
+    """The absolute path of the script this single-instance name launches.
+    ProcessRunner launches engines from this exact absolute path, so the same
+    invariant is the only acceptable identity proof for a destructive kill."""
+    return os.path.normcase(os.path.abspath(
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), script)))
+
+
 def _script_matches(token, script):
-    """Exact-token identity for a script path token (T-144): the token's file
-    basename must EQUAL the expected script's basename (case-insensitive).
-    Substring agreement - 'not_accept.py', 'accept.py.bak', '--accept.py' -
-    never counts as identity."""
+    """Exact-token identity for a script path token (T-144/T-158): the token's
+    normalized ABSOLUTE path must equal the expected absolute path of the
+    script our instance launches. Basename equality is diagnostic evidence at
+    most, never destructive proof - a same-named script in another directory
+    (C:\\Other\\accept.py) must not be killable as ours. Returns False whenever
+    identity cannot be proven."""
     if not isinstance(token, str):
         return False
     norm = token.strip()
@@ -261,9 +271,13 @@ def _script_matches(token, script):
     if norm.lower() in ("-m", "--module"):
         return False  # a python -m <name> arg is not a script path
     base = os.path.basename(norm.replace("/", "\\")).lower()
-    if not base:
+    if base != script.lower():
+        return False  # fast reject on basename mismatch
+    try:
+        actual = os.path.normcase(os.path.abspath(norm))
+    except Exception:
         return False
-    return base == script.lower()
+    return actual == _expected_script_path(script)
 
 
 def _pid_runs_our_script(pid, name):

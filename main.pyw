@@ -211,20 +211,30 @@ def load_config_merge(on_disk, cfg):
     return cfg
 
 
-def save_config(config):
+def save_config(config, bypass_guard=False):
     """Persist the stable+local halves. Returns True only on a successful write.
 
     While the write guard is armed (degraded startup: corrupt/rejected/
     unreadable source) NOTHING is written - defaults may run in memory, but
-    automatic saves must never overwrite the source (T-135)."""
-    if config_write_blocked:
+    automatic saves must never overwrite the source (T-135).
+
+    `bypass_guard` is reserved for EXPLICIT recovery writes (import): the
+    candidate is written over the damaged source on purpose, but the guard is
+    only cleared afterwards, when the write succeeded (T-156).
+    """
+    if config_write_blocked and not bypass_guard:
         print("config_store: save skipped (%s); recover config or import a "
               "backup to re-enable saving" % config_write_blocked, file=sys.stderr)
         return False
     stable, local = config_store.split_volatile(config)
     try:
-        config_store.atomic_write(CONFIG_FILE, stable)
+        # Local (volatile) half FIRST, stable half LAST (T-161): on a failed
+        # save the PRIMARY config.json is never left ahead of the failure -
+        # "False" always means the main config did not change. The local half
+        # may be ahead, which is harmless (it only holds runtime-volatile
+        # state and is rewritten on the next successful save).
         config_store.atomic_write(CONFIG_LOCAL_FILE, local)
+        config_store.atomic_write(CONFIG_FILE, stable)
     except OSError as e:
         print("config_store: save failed: %s" % e, file=sys.stderr)
         return False
@@ -541,14 +551,18 @@ class VacWPlayer:
         if not messagebox.askyesno(Locale.tr("import_config_title"),
                                    Locale.tr("import_config_confirm") + "\n%s?" % os.path.basename(path)):
             return
-        # Explicit import is a sanctioned recovery: it clears the write guard.
+        # Explicit import is a sanctioned recovery: the candidate write may
+        # bypass the guard, but the guard is only released after the write
+        # actually landed and the result validates. A failed recovery write
+        # restores the previous guard so later autosaves stay blocked (T-156).
         global config_write_blocked
-        config_write_blocked = None
-        if not save_config(imported):
+        previous_guard = config_write_blocked
+        if not save_config(imported, bypass_guard=True):
+            config_write_blocked = previous_guard
             messagebox.showerror(Locale.tr("import_failed"),
                                  Locale.tr("import_write_failed", fallback="Import was not saved: config file write failed."))
             return
-        self.config = load_config()
+        self.config = load_config()  # read-back; re-arms guard if disk invalid
         self._rebuild_ui()
         self.status_lbl.config(text=Locale.tr("import_ok"), fg=TOKENS["success"])
 
@@ -568,7 +582,16 @@ class VacWPlayer:
             messagebox.showerror(Locale.tr("backup_failed"), str(e))
             return
         self.collect_config()
-        save_config(self.config)
+        # The backup must contain the CURRENT STABLE config. If the write is
+        # blocked (guard) or fails, there is no stable current config to back
+        # up - abort instead of copying the corrupt/rejected source and
+        # calling it a successful backup (T-157).
+        if not save_config(self.config):
+            reason = config_write_blocked or "config file write failed"
+            messagebox.showerror(
+                Locale.tr("backup_failed"),
+                Locale.tr("backup_blocked", fallback="No current-config backup created: %s" % reason))
+            return
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         backup_path = os.path.join(backup_dir, "config_%s.json" % ts)
         try:

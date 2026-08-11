@@ -26,7 +26,7 @@ class AcceptTab(tk.Frame):
     def __init__(self, parent):
         super().__init__(parent, bg=TOKENS["background"])
         self.cfg_path = os.path.join(BASE, self.CONFIG_NAME)
-        cfg = load_json(self.cfg_path)
+        cfg = load_json(self.cfg_path, self.CONFIG_NAME)
 
         form = tk.Frame(self, bg=TOKENS["background"])
         form.pack(fill="x", padx=4, pady=(4, 2))
@@ -144,7 +144,7 @@ class AcceptTab(tk.Frame):
 
     def _refresh_tree(self):
         self.tree.delete(*self.tree.get_children())
-        cfg = load_json(self.cfg_path)
+        cfg = load_json(self.cfg_path, self.CONFIG_NAME)
         for i, t in enumerate(cfg.get("templates", [])):
             self.tree.insert("", "end", iid=str(i),
                              text=t.get("name", "?"),
@@ -167,7 +167,7 @@ class AcceptTab(tk.Frame):
             "name": name,
             "file": rel,
             "threshold": 0.8,
-        }), canonical_default(self.CONFIG_NAME))
+        }), canonical_default(self.CONFIG_NAME), config_name=self.CONFIG_NAME)
         self._refresh_tree()
 
     def remove_template(self):
@@ -179,7 +179,7 @@ class AcceptTab(tk.Frame):
         update_json(self.cfg_path,
                     lambda c: c["templates"].__delitem__(idx)
                     if 0 <= idx < len(c["templates"]) else None,
-                    canonical_default(self.CONFIG_NAME))
+                    canonical_default(self.CONFIG_NAME), config_name=self.CONFIG_NAME)
         self._refresh_tree()
 
     def toggle_monitor(self):
@@ -194,9 +194,9 @@ class AcceptTab(tk.Frame):
                 self.monitor_var.set(True)  # disk still says enabled - restore
 
     def save_monitor_state(self):
-        update_json(self.cfg_path,
+        return update_json(self.cfg_path,
                     lambda c: c.__setitem__("monitor_enabled", self.monitor_var.get()),
-                    canonical_default(self.CONFIG_NAME))
+                    canonical_default(self.CONFIG_NAME), config_name=self.CONFIG_NAME)
 
     def stop_all(self):
         self.runner.stop()
@@ -232,7 +232,7 @@ class AcceptTab(tk.Frame):
             cfg["click_cooldown_sec"] = float(self.click_cooldown.get())
         try:
             ok = update_json(self.cfg_path, mutate,
-                             canonical_default(self.CONFIG_NAME))
+                             canonical_default(self.CONFIG_NAME), config_name=self.CONFIG_NAME)
         except ValueError as e:
             if silent:
                 print(f"Accept save skipped (invalid input): {e}", file=sys.stderr)

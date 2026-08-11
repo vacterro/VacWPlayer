@@ -13,7 +13,7 @@ if str(BASE) not in sys.path:
     sys.path.insert(0, str(BASE))
 
 from engine_config import canonical_default
-from tabs.tab_config import read_json, update_json, save_json
+from tabs.tab_config import read_json, load_json, update_json, save_json
 
 
 # --- read_json statuses -----------------------------------------------------
@@ -253,10 +253,13 @@ def test_buy_tab_corrupt_config_save_touches_nothing(tmp_path):
 
 
 def test_death_then_buy_save_preserves_both_subsets(tmp_path):
+    """Subset saves must preserve unrelated keys - source is a COMPLETE valid
+    deathwatch doc (T-152 refuses to RMW a config the engine would reject)."""
     p = tmp_path / "deathwatch_config.json"
-    p.write_text(json.dumps({"window_title": "W", "poll_interval_sec": 0.4,
-                             "quickbuy_key": "Q", "my_key": 7}),
-                 encoding="utf-8")
+    base = dict(canonical_default("deathwatch_config.json"))
+    base["quickbuy_key"] = "Q"
+    base["my_key"] = 7
+    p.write_text(json.dumps(base), encoding="utf-8")
     assert _fake_buy_tab(p).save(silent=True) is True
     assert _fake_death_tab(p).save(silent=True) is True
     data = json.loads(p.read_text(encoding="utf-8"))
@@ -340,6 +343,95 @@ def test_surrender_tab_corrupt_config_save_touches_nothing(tmp_path):
     tab.auto_accept_var = _FakeVar(True)
     assert tab.save(silent=True) is False
     assert p.read_text(encoding="utf-8") == "{corrupt"
+
+
+# --- T-152: GUI engine-config reads must be deep-safe, not just shallow -------
+
+def test_load_json_semantic_invalid_returns_display_safe(tmp_path):
+    """Nested garbage that parses as JSON must NOT reach tab constructors:
+    display falls back to canonical defaults ({}), never crashes on
+    item.get()/iteration (T-152)."""
+    cases = [
+        ("accept_config.json", {"window_title": "W", "templates": {"x": 1}}),
+        ("accept_config.json", {"window_title": "W", "templates": [1]}),
+        ("autocontinue_config.json", {"window_title": "W", "buttons": {"x": 1}}),
+        ("autocontinue_config.json", {"window_title": "W", "buttons": [{}]}),
+        ("deathwatch_config.json", {
+            "window_title": "W", "poll_interval_sec": 1.0, "quickbuy_key": "Z",
+            "quickbuy_presses": 5, "quickbuy_window_ms": 10.0,
+            "shop_buffer_sec": 0.0, "timer_digits_region": [1, 2, 3],
+            "restore_buffer_sec": 0.0, "max_death_wait_sec": 90.0,
+            "digit_templates_dir": "d", "death_label_template": "t",
+            "death_label_region": [900, 118, 1165, 145], "match_threshold": 0.75}),
+    ]
+    for name, doc in cases:
+        p = tmp_path / name
+        p.write_text(json.dumps(doc), encoding="utf-8")
+        assert load_json(str(p), name) == {}, name
+        assert p.read_text(encoding="utf-8") == json.dumps(doc)  # read never writes
+
+
+def test_load_json_accepts_semantically_valid(tmp_path):
+    p = tmp_path / "accept_config.json"
+    p.write_text(json.dumps({"window_title": "W", "templates": []}),
+                 encoding="utf-8")
+    assert load_json(str(p), "accept_config.json") == {
+        "window_title": "W", "templates": []}
+
+
+def test_update_json_semantic_invalid_source_aborts(tmp_path):
+    p = tmp_path / "autocontinue_config.json"
+    p.write_text(json.dumps({"window_title": "W", "buttons": [{}]}),
+                 encoding="utf-8")
+    orig = p.read_bytes()
+    assert update_json(str(p), lambda c: c.__setitem__("window_title", "X"),
+                       canonical_default("autocontinue_config.json"),
+                       config_name="autocontinue_config.json") is False
+    assert p.read_bytes() == orig
+
+
+def test_update_json_candidate_invalid_aborts_no_write(tmp_path):
+    """A mutate that makes the candidate semantically invalid must not land."""
+    p = tmp_path / "autocontinue_config.json"
+    p.write_text(json.dumps(canonical_default("autocontinue_config.json")),
+                 encoding="utf-8")
+    orig = p.read_bytes()
+    assert update_json(str(p), lambda c: c.__setitem__("buttons", [{}]),
+                       canonical_default("autocontinue_config.json"),
+                       config_name="autocontinue_config.json") is False
+    assert p.read_bytes() == orig
+
+
+def test_update_json_valid_candidate_writes(tmp_path):
+    p = tmp_path / "accept_config.json"
+    p.write_text(json.dumps({"window_title": "W", "templates": []}),
+                 encoding="utf-8")
+    assert update_json(str(p), lambda c: c.__setitem__("monitor_enabled", True),
+                       canonical_default("accept_config.json"),
+                       config_name="accept_config.json") is True
+    data = json.loads(p.read_text(encoding="utf-8"))
+    assert data["monitor_enabled"] is True
+
+
+def test_apply_refused_when_source_semantically_invalid(tmp_path):
+    """Monitor start on a semantically invalid engine config is refused and the
+    checkbox is restored (T-152), same as corrupt-source handling."""
+    from tabs.accept_tab import AcceptTab
+    p = tmp_path / "accept_config.json"
+    p.write_text(json.dumps({"window_title": "W", "templates": [1]}),
+                 encoding="utf-8")
+    tab = object.__new__(AcceptTab)
+    tab.cfg_path = str(p)
+    tab.save = lambda silent=False: update_json(
+        str(p), lambda c: c.__setitem__("monitor_enabled", True),
+        canonical_default("accept_config.json"),
+        config_name="accept_config.json")
+    tab.runner = _FakeRunner()
+    tab.monitor_var = _FakeVar(True)
+    tab.toggle_monitor()
+    assert tab.runner.started == 0
+    assert tab.monitor_var.get() is False
+    assert json.loads(p.read_text(encoding="utf-8"))["templates"] == [1]
 
 
 # --- T-141: reset must reset (canonical app defaults, not the live config) ----
@@ -457,3 +549,61 @@ def test_trigger_apply_starts_on_successful_save(cls_name):
     tab.event_generate = lambda *a, **k: None
     tab._trigger_apply()
     assert tab.runner.started == 1
+
+
+# --- T-150: real save_monitor_state() must return update_json result ---------
+
+@pytest.mark.parametrize("cls_name", list(_TAB_MODULES))
+def test_toggle_monitor_off_success_persists_and_keeps_checkbox(tmp_path, cls_name):
+    """REAL implementation (no monkeypatch): successful OFF must keep the
+    checkbox False and persist monitor_enabled=False - a None return used to
+    bounce the checkbox back to True (T-150). Source is a COMPLETE valid doc
+    (T-152 refuses to RMW a config the engine would reject)."""
+    tab = _new_tab(cls_name)
+    p = tmp_path / (tab.CONFIG_NAME)
+    if tab.CONFIG_NAME == "deathwatch_config.json":
+        doc = dict(canonical_default(tab.CONFIG_NAME))
+    elif tab.CONFIG_NAME == "autocontinue_config.json":
+        doc = {"window_title": "W", "buttons": []}
+    else:
+        doc = {"window_title": "W"}
+    p.write_text(json.dumps(doc), encoding="utf-8")
+    tab.cfg_path = str(p)
+    tab.runner = _FakeRunner()
+    tab.monitor_var = _FakeVar(False)  # clicked OFF
+    tab.toggle_monitor()
+    assert tab.runner.stopped == 1
+    assert tab.monitor_var.get() is False       # checkbox stays OFF
+    data = json.loads(p.read_text(encoding="utf-8"))
+    assert data["monitor_enabled"] is False     # disk agrees - no trace bounce
+
+
+@pytest.mark.parametrize("cls_name", list(_TAB_MODULES))
+def test_toggle_monitor_off_failure_restores_checkbox_real(tmp_path, cls_name):
+    """REAL implementation: corrupt source -> update_json False -> checkbox
+    restored True, source bytes untouched."""
+    tab = _new_tab(cls_name)
+    p = tmp_path / tab.CONFIG_NAME
+    p.write_text("{corrupt", encoding="utf-8")
+    tab.cfg_path = str(p)
+    tab.runner = _FakeRunner()
+    tab.monitor_var = _FakeVar(False)
+    tab.toggle_monitor()
+    assert tab.runner.stopped == 1
+    assert tab.monitor_var.get() is True        # persisted state restored
+    assert p.read_text(encoding="utf-8") == "{corrupt"
+
+
+@pytest.mark.parametrize("cls_name", list(_TAB_MODULES))
+def test_toggle_monitor_on_success_real(tmp_path, cls_name):
+    """Successful ON unchanged: save ok + engine started + checkbox stays ON."""
+    tab = _new_tab(cls_name)
+    p = tmp_path / tab.CONFIG_NAME
+    p.write_text(json.dumps({"window_title": "W"}), encoding="utf-8")
+    tab.cfg_path = str(p)
+    tab.save = lambda silent=False: True
+    tab.runner = _FakeRunner()
+    tab.monitor_var = _FakeVar(True)
+    tab.toggle_monitor()
+    assert tab.runner.started == 1
+    assert tab.monitor_var.get() is True

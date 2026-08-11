@@ -26,7 +26,7 @@ class AutoContinueTab(tk.Frame):
     def __init__(self, parent):
         super().__init__(parent, bg=TOKENS["background"])
         self.cfg_path = os.path.join(BASE, self.CONFIG_NAME)
-        cfg = load_json(self.cfg_path)
+        cfg = load_json(self.cfg_path, self.CONFIG_NAME)
         self.buttons = [dict(b) for b in cfg.get("buttons", canonical_default(self.CONFIG_NAME)["buttons"])]
 
 
@@ -162,9 +162,9 @@ class AutoContinueTab(tk.Frame):
                 self.monitor_var.set(True)  # disk still says enabled - restore
 
     def save_monitor_state(self):
-        update_json(self.cfg_path,
+        return update_json(self.cfg_path,
                     lambda c: c.__setitem__("monitor_enabled", self.monitor_var.get()),
-                    canonical_default(self.CONFIG_NAME))
+                    canonical_default(self.CONFIG_NAME), config_name=self.CONFIG_NAME)
 
     def stop_all(self):
         self.runner.stop()
@@ -205,7 +205,7 @@ class AutoContinueTab(tk.Frame):
             cfg["buttons"] = [dict(b) for b in self.buttons]
         try:
             ok = update_json(self.cfg_path, mutate,
-                             canonical_default(self.CONFIG_NAME))
+                             canonical_default(self.CONFIG_NAME), config_name=self.CONFIG_NAME)
         except ValueError as e:
             if silent:
                 print(f"AutoContinue save skipped (invalid input): {e}", file=sys.stderr)

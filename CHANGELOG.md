@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.3.29 (2026-08-11)
+- Safety audit pass 2, 11 tickets (T-150..T-162). Monitor OFF fixed: save_monitor_state now returns the persistence result, so the checkbox no longer bounces back to ON after a successful disable (T-150).
+- Engine config contracts: autocontinue buttons now require name/template/region/threshold (runtime indexes them directly) and all pixel-coordinate regions must be integer pixels - bool/float coordinates are rejected (T-151). The GUI reads engine configs through the engine's own validator: nested garbage parses as display-canonical and can never be written back over (T-152).
+- Deathwatch: region reads are occlusion-safe (foreign screen pixels can never trigger automation), only real window/capture errors are treated as "lost window", and hot reload commits config + templates atomically or not at all (T-153, T-154, T-155).
+- Recovery integrity: a failed import keeps the write guard armed, backup aborts instead of copying a corrupt source, and a failed save never leaves the primary config ahead of the failure (T-156, T-157, T-161).
+- Identity: single-instance kill protection now requires the exact absolute script path - a same-named script in another directory is never killed (T-158). grab_region rejects zero/negative sizes before any GDI allocation (T-162). Canonical defaults are deep-copied (T-159).
+- Tests: suite 449 -> 500 PASS, pyflakes 0.
+
 ## v0.3.28 (2026-08-11)
 - Safety audit pass, 15 tickets (T-135..T-149). Config: fail-closed read/write with a write-guard that blocks saving over a corrupt/unreadable config, validated `.bak` restore, and deep semantic validation of combos/champions/minimap/afkfarm/toggles (T-135, T-136). Engine-tab JSON I/O: guarded read-modify-write that never overwrites an unsafe source, complete canonical defaults on first run, atomic saves with `.bak`, one canonical defaults source per engine (T-137, T-141).
 - Engines: autocontinue never blind-clicks on a missing template and refuses to start with zero usable targets; per-engine REQUIRED config contracts (runtime-indexed keys); one canonical quickbuy-key parser shared by validator and runtime; save failure aborts apply/monitor start; only real window/capture errors are treated as "lost window", other failures are fatal instead of looping (T-138, T-139, T-140, T-142, T-149-B).
