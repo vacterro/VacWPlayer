@@ -227,19 +227,27 @@ def load_config_merge(on_disk, cfg):
 
 
 def save_config(config, bypass_guard=False):
-    """Persist the stable+local halves. Returns True only on a successful write.
+    """Persist the stable+local halves. Returns True only on a FULLY persisted
+    write; False means NO durable candidate half was committed (T-170/T-186).
 
-    While the write guard is armed (degraded startup: corrupt/rejected/
-    unreadable source) NOTHING is written - defaults may run in memory, but
-    automatic saves must never overwrite the source (T-135).
+    While the primary guard is armed (degraded startup: corrupt/rejected/
+    unreadable source) NOTHING is written (T-135). While the LOCAL guard is
+    armed, the requested volatile half cannot be persisted, so the save is
+    refused entirely rather than reporting partial success as full (T-186) -
+    unless `bypass_guard` (explicit recovery/import) is used.
 
-    `bypass_guard` is reserved for EXPLICIT recovery writes (import): the
-    candidate is written over the damaged source on purpose, but the guard is
-    only cleared afterwards, when the write succeeded (T-156).
+    `bypass_guard` recovery writes use promote_bak=False so a known-bad source
+    never overwrites the last-good .bak (T-188).
     """
+    global config_write_blocked, local_write_blocked
     if config_write_blocked and not bypass_guard:
         print("config_store: save skipped (%s); recover config or import a "
               "backup to re-enable saving" % config_write_blocked, file=sys.stderr)
+        return False
+    if local_write_blocked and not bypass_guard:
+        print("config_store: save skipped (config.local.json %s); fix or "
+              "reset the local file to re-enable saving" % local_write_blocked,
+              file=sys.stderr)
         return False
     stable, local = config_store.split_volatile(config)
     # T-170: snapshot the previous local half so a failed save can roll it
@@ -255,23 +263,28 @@ def save_config(config, bypass_guard=False):
     local_written = False
     try:
         # Local (volatile) half FIRST, stable half LAST (T-161): on a failed
-        # save the PRIMARY config.json is never left ahead of the failure -
-        # "False" always means the main config did not change.
-        if not local_write_blocked or bypass_guard:
-            config_store.atomic_write(CONFIG_LOCAL_FILE, local)
-            local_written = True
-        config_store.atomic_write(CONFIG_FILE, stable)
+        # save the PRIMARY config.json is never left ahead of the failure.
+        # T-188: recovery writes never promote the source to .bak.
+        config_store.atomic_write(CONFIG_LOCAL_FILE, local, promote_bak=not bypass_guard)
+        local_written = True
+        config_store.atomic_write(CONFIG_FILE, stable, promote_bak=not bypass_guard)
     except OSError as e:
         print("config_store: save failed: %s" % e, file=sys.stderr)
         if local_written:
             try:
                 if local_existed and local_prev is not None:
-                    config_store.atomic_write(
-                        CONFIG_LOCAL_FILE, json.loads(local_prev.decode("utf-8")))
+                    config_store.atomic_write_bytes(
+                        CONFIG_LOCAL_FILE, local_prev, promote_bak=False)
                 elif not local_existed:
                     os.remove(CONFIG_LOCAL_FILE)
             except Exception:
-                pass  # rollback is best-effort; primary config was not touched
+                # T-187: a rollback that itself fails is PARTIAL_COMMIT, never
+                # an ordinary False - keep the write guards armed so nothing
+                # else persists on top of the unknown state.
+                config_write_blocked = "partial_commit"
+                local_write_blocked = "partial_commit"
+                print("config_store: FATAL - rollback failed after partial "
+                      "write; write guards armed", file=sys.stderr)
         return False
     return True
 
@@ -688,7 +701,12 @@ class VacWPlayer:
             return
         self._applying = True
         self.collect_config()
-        if not save_config(self.config):
+        # T-185: freeze ONE immutable candidate on the main thread. The same
+        # snapshot flows through save -> worker -> generate -> done; a GUI
+        # autosave/mutation of self.config mid-transaction can never change
+        # what gets generated or what is recorded as last-applied.
+        candidate = copy.deepcopy(self.config)
+        if not save_config(candidate):
             # Degraded state (corrupt/unreadable config, guard armed): the
             # candidate must not overwrite the source, and automation must not
             # run on unvalidated defaults (T-135).
@@ -700,20 +718,22 @@ class VacWPlayer:
             return
         self._engine_should_run = True
         self.status_lbl.config(text=Locale.tr("generating"), fg=TOKENS["warning"])
-        threading.Thread(target=self._apply_worker, daemon=True).start()
+        threading.Thread(target=self._apply_worker, args=(candidate,),
+                         daemon=True).start()
 
-    def _apply_worker(self):
+    def _apply_worker(self, candidate):
         try:
-            ok, msg = ahk_generator.generate_and_run(self.config)
+            ok, msg = ahk_generator.generate_and_run(candidate)
         except Exception as e:
             print("ahk apply worker failed: %s" % e, file=sys.stderr)
             ok, msg = False, "Apply failed: %s" % e
-        self.root.after(0, lambda: self._apply_done(ok, msg, self.config))
+        self.root.after(0, lambda: self._apply_done(ok, msg, candidate))
 
     def _apply_done(self, ok, msg, candidate=None):
         # A rejected candidate must not paint the last-good runtime dead: the
         # AHK dot reflects the ACTUAL runtime state, not the apply result.
-        running = ok or ahk_generator.is_running()
+        # is_running() may be None (UNKNOWN) - never claim alive on unknown.
+        running = ok or ahk_generator.is_running() is True
         if not ok and running:
             msg = msg + " - last-good AHK still running"
         if ok and candidate is not None:
@@ -740,20 +760,30 @@ class VacWPlayer:
 
     def _engine_watchdog(self):
         if getattr(self, "_engine_should_run", False) and not self._applying:
-            if not ahk_generator.is_running():
+            # T-183/T-184: only a VERIFIED-False is a restart trigger; UNKNOWN
+            # (None) must not spawn a duplicate replacement.
+            if ahk_generator.is_running() is False:
                 self._applying = True
                 self.status_lbl.config(text=Locale.tr("auto_restarting"), fg=TOKENS["warning"])
-                threading.Thread(target=self._watchdog_worker, daemon=True).start()
+                # T-185: freeze the restart candidate on the MAIN thread before
+                # the background worker starts (never hand it a mutable dict).
+                last = getattr(self, "_last_applied_config", None)
+                frozen = copy.deepcopy(last) if last is not None \
+                    else copy.deepcopy(self.config)
+                threading.Thread(target=self._watchdog_worker, args=(frozen,),
+                                 daemon=True).start()
         try:
             self.root.after(3000, self._engine_watchdog)
         except tk.TclError:
             pass
 
-    def _watchdog_worker(self):
-        # T-177: resurrect the LAST-APPLIED config, never the mutable editor
-        # draft (fall back to self.config only before any Apply succeeded).
-        last = getattr(self, "_last_applied_config", None)
-        cfg = last if last is not None else self.config
+    def _watchdog_worker(self, cfg=None):
+        # T-177/T-185: resurrect the LAST-APPLIED config, never the mutable
+        # editor draft. The candidate is normally frozen by _engine_watchdog on
+        # the main thread; the fallback here guards direct calls (tests).
+        if cfg is None:
+            last = getattr(self, "_last_applied_config", None)
+            cfg = last if last is not None else self.config
         try:
             ok, msg = ahk_generator.generate_and_run(cfg)
         except Exception as e:
@@ -762,7 +792,7 @@ class VacWPlayer:
         self.root.after(0, lambda: self._watchdog_done(ok, msg))
 
     def _watchdog_done(self, ok, msg):
-        running = ok or ahk_generator.is_running()
+        running = ok or ahk_generator.is_running() is True
         self.status_lbl.config(text=self._short_status(Locale.tr("auto_restarted") + " " + msg),
                                fg=TOKENS["warning"])
         self._update_ahk_dot(running)

@@ -30,6 +30,25 @@ def load_config(config_path, config_name):
     return engine_config.validate_engine_config(cfg, config_name)
 
 
+def reload_candidate(config_path, config_name):
+    """Non-exiting candidate load for HOT RELOAD (T-191).
+
+    Startup keeps the FATAL policy (load_config); a hot reload must NEVER kill
+    a healthy running engine over one bad edit. Returns (cfg, None) or
+    (None, diagnostic) - the caller keeps the last-good cfg and warns once
+    (the changed mtime is already consumed, so the same revision does not
+    re-trigger every poll)."""
+    try:
+        with open(config_path) as f:
+            data = json.load(f)
+    except (OSError, ValueError) as e:
+        return None, "unreadable: %s" % e
+    problems = engine_config.semantic_problems(data, config_name)
+    if problems:
+        return None, "; ".join(problems[:2])
+    return data, None
+
+
 def build_scaled_templates(cfg, base_dir):
     """Load each template file plus 0.8/0.9/1.1/1.2 scale versions."""
     loaded = []
@@ -168,23 +187,30 @@ def run_poller(name, config_path, config_name, build_targets, scan_targets,
         try:
             cfg_last_mtime, changed = engine_config.mtime_changed(config_path, cfg_last_mtime)
             if changed:
-                new_cfg = load_config(config_path, config_name)
-                new_targets = build_targets(new_cfg)
-                if usable is not None and not usable(new_targets):
-                    # transactional hot reload (T-138): an unusable rebuild is
-                    # dropped whole; the engine keeps running the last-good set.
-                    print("config change ignored: no usable targets in %s; "
-                          "keeping last-good config" % config_name)
+                # T-191: a hot reload that cannot validate is REJECTED whole
+                # (keep last-good, warn once) - never a SystemExit that kills
+                # the healthy running engine over one bad edit.
+                new_cfg, reload_err = reload_candidate(config_path, config_name)
+                if new_cfg is None:
+                    print("WARN: config change rejected: %s; "
+                          "keeping last-good" % reload_err)
                 else:
-                    cfg = new_cfg
-                    targets = new_targets
-                    if cfg["window_title"] != loaded_window_title:
-                        loaded_window_title = cfg["window_title"]
-                        hwnd = None
-                        print("window title changed, now watching '%s'" % loaded_window_title)
-                    msg = reload_msg(cfg, targets)
-                    if msg:
-                        print(msg)
+                    new_targets = build_targets(new_cfg)
+                    if usable is not None and not usable(new_targets):
+                        # transactional hot reload (T-138): an unusable rebuild is
+                        # dropped whole; the engine keeps running the last-good set.
+                        print("config change ignored: no usable targets in %s; "
+                              "keeping last-good config" % config_name)
+                    else:
+                        cfg = new_cfg
+                        targets = new_targets
+                        if cfg["window_title"] != loaded_window_title:
+                            loaded_window_title = cfg["window_title"]
+                            hwnd = None
+                            print("window title changed, now watching '%s'" % loaded_window_title)
+                        msg = reload_msg(cfg, targets)
+                        if msg:
+                            print(msg)
 
             if not hwnd or not win32gui.IsWindow(hwnd):
                 try:

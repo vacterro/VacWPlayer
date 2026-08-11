@@ -673,10 +673,10 @@ def test_save_config_local_failure_leaves_primary_unchanged(tmp_path, monkeypatc
 
     real_atomic = main_mod.config_store.atomic_write
 
-    def selective(path, data):
+    def selective(path, data, **kw):
         if os.path.normcase(str(path)) == os.path.normcase(str(local_file)):
             raise OSError(13, "denied", path)
-        return real_atomic(path, data)
+        return real_atomic(path, data, **kw)
 
     monkeypatch.setattr(main_mod.config_store, "atomic_write", selective)
     cfg = {"mode": "ryze", "window": {"active_tab": 1}}
@@ -1069,7 +1069,7 @@ def test_import_failed_write_restores_guard(tmp_path, monkeypatch):
     later autosave/apply must stay blocked (T-156)."""
     main_mod, w, cfg_file, import_file = _import_harness(tmp_path, monkeypatch)
 
-    def boom(path, data):
+    def boom(path, data, **kw):
         raise OSError(13, "denied", path)
 
     monkeypatch.setattr(main_mod.config_store, "atomic_write", boom)
@@ -1132,7 +1132,7 @@ def test_backup_guarded_source_aborts_no_success(tmp_path, monkeypatch):
 def test_backup_save_failure_aborts_no_success(tmp_path, monkeypatch):
     """save_config failing (disk error) must abort backup, no success text."""
     main_mod, w, cfg_file, status, errors = _backup_harness(tmp_path, monkeypatch)
-    def boom(path, data):
+    def boom(path, data, **kw):
         raise OSError(13, "denied", path)
     monkeypatch.setattr(main_mod.config_store, "atomic_write", boom)
     w.backup_config()
@@ -1183,15 +1183,59 @@ def test_load_config_arms_local_guard_on_invalid_local(tmp_path, monkeypatch):
 
 def test_save_config_preserves_unsafe_local(tmp_path, monkeypatch):
     """A healthy primary must never authorize overwriting an unsafe local
-    file: normal save leaves corrupt local byte-identical (T-169)."""
+    file - and a save that cannot persist the requested volatile half is NOT
+    a full success (T-169 + T-186): it writes nothing and returns False."""
     main_mod, cfg_file, local_file = _local_harness(tmp_path, monkeypatch)
     main_mod.load_config()
     assert main_mod.local_write_blocked == "corrupt"
     ok = main_mod.save_config({"mode": "ryze", "window": {"active_tab": 1}})
-    assert ok is True
+    assert ok is False
     assert local_file.read_text(encoding="utf-8") == "{corrupt local"
+    assert cfg_file.read_text(encoding="utf-8") == _VALID_STABLE  # nothing durable
+
+
+def test_save_config_local_blocked_writes_nothing(tmp_path, monkeypatch):
+    """T-186: local_write_blocked => save refuses entirely (False), never a
+    partial-success-as-True with the volatile half silently skipped."""
+    main_mod, cfg_file, local_file = _local_harness(tmp_path, monkeypatch)
+    main_mod.local_write_blocked = "io_error"
+    ok = main_mod.save_config({"mode": "ryze", "window": {"active_tab": 1}})
+    assert ok is False
+    assert cfg_file.read_text(encoding="utf-8") == _VALID_STABLE
+
+
+def test_import_corrupt_local_rollback_restores_exact_bytes(tmp_path, monkeypatch):
+    """T-187: failed recovery with a CORRUPT old local must roll back the
+    EXACT old bytes (never json-parse them) - no candidate local survives."""
+    main_mod, w, cfg_file, import_file = _import_harness(tmp_path, monkeypatch)
+    local_file = tmp_path / "config.local.json"
+    local_file.write_bytes(b"{corrupt local\x00")  # corrupt OLD local
+    real_atomic = main_mod.config_store.atomic_write
+
+    def selective(path, data, **kw):
+        if os.path.normcase(str(path)) == os.path.normcase(str(cfg_file)):
+            raise OSError(13, "denied", path)
+        return real_atomic(path, data, **kw)
+
+    monkeypatch.setattr(main_mod.config_store, "atomic_write", selective)
+    main_mod.config_write_blocked = "corrupt"
+    w._do_import_file(str(import_file))
+    assert local_file.read_bytes() == b"{corrupt local\x00"  # EXACT bytes back
+    assert main_mod.config_write_blocked == "corrupt"
+
+
+def test_import_recovery_does_not_poison_good_bak(tmp_path, monkeypatch):
+    """T-188: explicit recovery over a KNOWN-bad primary must never overwrite
+    the last-good .bak with the rejected source."""
+    main_mod, w, cfg_file, import_file = _import_harness(tmp_path, monkeypatch)
+    bak = tmp_path / "config.json.bak"
+    bak.write_text(_VALID_STABLE, encoding="utf-8")  # last-good backup
+    main_mod.config_write_blocked = "corrupt"
+    w._do_import_file(str(import_file))
     data = json.loads(cfg_file.read_text(encoding="utf-8"))
-    assert data["mode"] == "ryze"
+    assert data["mode"] == "general"  # candidate imported
+    assert bak.read_text(encoding="utf-8") == _VALID_STABLE  # .bak untouched
+    assert main_mod.config_write_blocked is None
 
 
 def test_save_config_missing_local_creates_it_normally(tmp_path, monkeypatch):
@@ -1230,10 +1274,10 @@ def test_save_config_stable_failure_rolls_back_local(tmp_path, monkeypatch):
 
     real_atomic = main_mod.config_store.atomic_write
 
-    def selective(path, data):
+    def selective(path, data, **kw):
         if os.path.normcase(str(path)) == os.path.normcase(str(cfg_file)):
             raise OSError(13, "denied", path)  # stable write fails
-        return real_atomic(path, data)
+        return real_atomic(path, data, **kw)
 
     monkeypatch.setattr(main_mod.config_store, "atomic_write", selective)
     assert main_mod.save_config({"mode": "B",
@@ -1258,10 +1302,10 @@ def test_save_config_stable_failure_removes_new_local(tmp_path, monkeypatch):
 
     real_atomic = main_mod.config_store.atomic_write
 
-    def selective(path, data):
+    def selective(path, data, **kw):
         if os.path.normcase(str(path)) == os.path.normcase(str(cfg_file)):
             raise OSError(13, "denied", path)
-        return real_atomic(path, data)
+        return real_atomic(path, data, **kw)
 
     monkeypatch.setattr(main_mod.config_store, "atomic_write", selective)
     assert main_mod.save_config({"mode": "B",
@@ -1276,10 +1320,10 @@ def test_import_stable_failure_rolls_back_and_restores_guard(tmp_path, monkeypat
     local_file = tmp_path / "config.local.json"
     real_atomic = main_mod.config_store.atomic_write
 
-    def selective(path, data):
+    def selective(path, data, **kw):
         if os.path.normcase(str(path)) == os.path.normcase(str(cfg_file)):
             raise OSError(13, "denied", path)
-        return real_atomic(path, data)
+        return real_atomic(path, data, **kw)
 
     monkeypatch.setattr(main_mod.config_store, "atomic_write", selective)
     main_mod.config_write_blocked = "corrupt"
@@ -1337,7 +1381,7 @@ def test_apply_success_records_last_applied(monkeypatch):
     w.status_lbl = type("S", (), {"config": lambda *a, **k: None})()
     w._update_ahk_dot = lambda r: None
     w._applying = False
-    w._apply_worker()
+    w._apply_worker(copy.deepcopy(good))
     assert w._last_applied_config is not None
     assert w._last_applied_config["combos"] == []
 
@@ -1359,7 +1403,7 @@ def test_apply_failure_keeps_previous_last_applied(monkeypatch):
     w.status_lbl = type("S", (), {"config": lambda *a, **k: None})()
     w._update_ahk_dot = lambda r: None
     w._applying = False
-    w._apply_worker()
+    w._apply_worker(copy.deepcopy(w.config))
     assert w._last_applied_config["combos"][0]["trigger"] == "F13"
 
 
@@ -1378,3 +1422,35 @@ def test_default_config_is_deep_copied():
     assert d2["minimap"]["top"]["x"] != 999
     assert d2["afkfarm"]["slots"]["top"]["enabled"] is True
     assert all(c["trigger"] != "F99" for c in d2["combos"])
+
+# --- T-185: Apply must freeze ONE immutable candidate -------------------------
+
+def test_apply_worker_uses_frozen_candidate_not_mutable_draft(monkeypatch):
+    """Editor autosave mutating self.config mid-worker must not change what is
+    generated nor what becomes last-applied (T-185)."""
+    import main as main_mod, copy
+    w = object.__new__(main_mod.VacWPlayer)
+    a_cfg = {"mode": "general", "toggles": {},
+             "combos": [{"trigger": "F13", "keys": "q", "interval": 50}]}
+    w.config = copy.deepcopy(a_cfg)
+    seen = []
+
+    def fake_gen(cfg):
+        seen.append(cfg)
+        w.config["combos"][0]["trigger"] = "F14"  # draft mutates mid-worker
+        return True, "ok"
+
+    monkeypatch.setattr(main_mod.ahk_generator, "generate_and_run", fake_gen)
+
+    class _Root:
+        def after(self, ms, func, *args):
+            func(*args)
+
+    w.root = _Root()
+    w.status_lbl = type("S", (), {"config": lambda *a, **k: None})()
+    w._update_ahk_dot = lambda r: None
+    w._applying = False
+    w._apply_worker(copy.deepcopy(a_cfg))  # FROZEN candidate from apply_and_start
+    assert seen[0]["combos"][0]["trigger"] == "F13"  # generated from A
+    assert w._last_applied_config["combos"][0]["trigger"] == "F13"
+    assert w.config["combos"][0]["trigger"] == "F14"  # draft B unchanged

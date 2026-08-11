@@ -1,8 +1,7 @@
 """ahk_generator PID-scan tests: silent-except removal (T-032), throttle
-vs zero distinction (T-087), PID identity verification (T-088)."""
+vs zero distinction (T-087), PID identity verification (T-088), exact-token
+ownership (T-181)."""
 
-import os
-import re
 import subprocess
 import sys
 from pathlib import Path
@@ -25,42 +24,60 @@ def _monkey_ts(monkeypatch, value=99.0):
     monkeypatch.setattr(ag.time, "monotonic", lambda: value)
 
 
-# --- _probe_pids -----------------------------------------------------------
+def _ours(pid=777):
+    """(pid, cmdline) pair launching OUR script exactly (T-181)."""
+    return (pid, '"C:\\Python\\AutoHotkeyU64.exe" "%s" 1' % ag.AHK_PATH)
 
-def test_probe_parses_pid_lines(monkeypatch):
+
+# --- _probe_entries (JSON pid+cmdline) --------------------------------------
+
+def test_probe_entries_parses_json(monkeypatch):
+    import json as _j
     calls = []
 
     def fake_run(args, **kw):
         calls.append(args)
-        return FakeOut("123\n456\n\nnot-a-pid\n")
+        return FakeOut(_j.dumps([
+            {"ProcessId": 123, "CommandLine": 'x "a.ahk"'},
+            {"ProcessId": 456, "CommandLine": "y"},
+        ]))
 
     monkeypatch.setattr(ag.subprocess, "run", fake_run)
-    assert ag._probe_pids("SOME CMD") == [123, 456]
+    assert ag._probe_entries("CMD") == [(123, 'x "a.ahk"'), (456, "y")]
     assert "powershell" in calls[0][0]
 
 
-def test_probe_empty_output(monkeypatch):
+def test_probe_entries_empty_and_single_object(monkeypatch):
+    import json as _j
     monkeypatch.setattr(ag.subprocess, "run", lambda *a, **k: FakeOut(""))
-    assert ag._probe_pids("") == []
-
-def test_probe_returns_empty_for_no_pids(monkeypatch):
-    monkeypatch.setattr(ag.subprocess, "run", lambda *a, **k: FakeOut("nothing here\n"))
-    assert ag._probe_pids("CMD") == []
+    assert ag._probe_entries("") == []
+    monkeypatch.setattr(ag.subprocess, "run",
+                        lambda *a, **k: FakeOut(_j.dumps(
+                            {"ProcessId": 1, "CommandLine": "x"})))
+    assert ag._probe_entries("") == [(1, "x")]
 
 
 # --- _find_our_pids (state, pids) contract ---------------------------------
 
 def test_find_our_pids_success(monkeypatch):
     _monkey_ts(monkeypatch)
-    monkeypatch.setattr(ag.subprocess, "run", lambda *a, **k: FakeOut("777\n"))
+    monkeypatch.setattr(ag, "_probe_entries", lambda ps_cmd: [_ours(777)])
     state, pids = ag._find_our_pids()
     assert state == "ok"
     assert pids == [777]
 
 
+def test_find_our_pids_verified_zero(monkeypatch):
+    _monkey_ts(monkeypatch)
+    monkeypatch.setattr(ag, "_probe_entries", lambda ps_cmd: [])
+    state, pids = ag._find_our_pids()
+    assert state == "ok"
+    assert pids == []
+
+
 def test_find_our_pids_throttle_reuses_cached(monkeypatch):
     _monkey_ts(monkeypatch)
-    monkeypatch.setattr(ag.subprocess, "run", lambda *a, **k: FakeOut("1\n"))
+    monkeypatch.setattr(ag, "_probe_entries", lambda ps_cmd: [_ours(1)])
     state, pids = ag._find_our_pids()  # first call runs the scan
     assert state == "ok"
     assert pids == [1]
@@ -75,11 +92,11 @@ def test_find_our_pids_force_bypasses_throttle(monkeypatch):
     _monkey_ts(monkeypatch)
     calls = []
 
-    def fake_run(*a, **k):
+    def fake(ps_cmd):
         calls.append(1)
-        return FakeOut("42\n")
+        return [_ours(42)]
 
-    monkeypatch.setattr(ag.subprocess, "run", fake_run)
+    monkeypatch.setattr(ag, "_probe_entries", fake)
     ag._find_our_pids()
     state, pids = ag._find_our_pids(force=True)
     assert state == "ok"
@@ -91,13 +108,13 @@ def test_find_our_pids_timeout_retries_once(monkeypatch, capsys):
     _monkey_ts(monkeypatch, value=99.0)
     calls = []
 
-    def flaky(*a, **k):
+    def flaky(ps_cmd):
         calls.append(1)
         if len(calls) == 1:
             raise subprocess.TimeoutExpired("powershell", 10)
-        return FakeOut("42\n")
+        return [_ours(42)]
 
-    monkeypatch.setattr(ag.subprocess, "run", flaky)
+    monkeypatch.setattr(ag, "_probe_entries", flaky)
     state, pids = ag._find_our_pids()
     assert state == "ok"
     assert pids == [42]
@@ -109,11 +126,11 @@ def test_find_our_pids_double_timeout_gives_up(monkeypatch, capsys):
     _monkey_ts(monkeypatch, value=99.0)
     calls = []
 
-    def always_timeout(*a, **k):
+    def always_timeout(ps_cmd):
         calls.append(1)
         raise subprocess.TimeoutExpired("powershell", 10)
 
-    monkeypatch.setattr(ag.subprocess, "run", always_timeout)
+    monkeypatch.setattr(ag, "_probe_entries", always_timeout)
     state, pids = ag._find_our_pids()
     assert state == "failed"
     assert pids == []
@@ -124,57 +141,36 @@ def test_find_our_pids_double_timeout_gives_up(monkeypatch, capsys):
 def test_find_our_pids_other_exception_logs(monkeypatch, capsys):
     _monkey_ts(monkeypatch, value=99.0)
 
-    def boom(*a, **k):
+    def boom(ps_cmd):
         raise OSError("powershell missing")
 
-    monkeypatch.setattr(ag.subprocess, "run", boom)
+    monkeypatch.setattr(ag, "_probe_entries", boom)
     state, pids = ag._find_our_pids()
     assert state == "failed"
     assert pids == []
     assert "PID scan failed" in capsys.readouterr().err
 
 
-def test_scan_pattern_matches_single_backslash_cmdline(monkeypatch):
-    """Regression (auto-restart loop): the scan pattern must match a real AHK
-    command line, which carries the script path with SINGLE backslashes. Two
-    historical traps: the -like wildcard doubled them, and a backtick before
-    `$_` made PowerShell treat `$_.CommandLine` as a command name instead of
-    the process's command line - both made the scan return an authoritative
-    empty set and the engine watchdog restart forever."""
+def test_scan_uses_json_not_substring_regex(monkeypatch):
+    """Identity moved to Python exact-token matching (T-181): the PowerShell
+    probe fetches ProcessId + CommandLine as JSON - no -match substring regex
+    is allowed to authorize anything."""
     captured = {}
-    monkeypatch.setattr(ag, "_probe_pids",
-                        lambda ps_cmd: captured.setdefault("cmd", ps_cmd) or [123])
+
+    def fake(ps_cmd):
+        captured["cmd"] = ps_cmd
+        return [(123, "x")]
+
+    monkeypatch.setattr(ag, "_probe_entries", fake)
     monkeypatch.setattr(ag, "_last_scan_ts", 0.0)
     monkeypatch.setattr(ag.time, "monotonic", lambda: 99.0)
 
     ag._find_our_pids(force=True)
 
     cmd = captured["cmd"]
-    assert "`$_.CommandLine" not in cmd, \
-        "backtick escapes break the member access in PowerShell"
-    assert "$_.CommandLine -match" in cmd, \
-        "scan must use plain $_.CommandLine member access"
-    m = re.search(r"-match '([^']*)'", cmd)
-    assert m, "scan must use a regex -match on the command line"
-    pattern = m.group(1)
-    sample = '"C:\\AutoHotkeyU64.exe" "%s" 1234' % os.path.abspath(ag.AHK_PATH)
-    assert re.search(pattern, sample), "pattern does not match a real cmdline"
-
-
-def test_scan_pattern_matches_real_path(monkeypatch):
-    """The constructed pattern must match the ACTUAL project script path with
-    its real (single-backslash) form - the live loop regression."""
-    captured = {}
-    monkeypatch.setattr(ag, "_probe_pids",
-                        lambda ps_cmd: captured.setdefault("cmd", ps_cmd) or [1])
-    monkeypatch.setattr(ag, "_last_scan_ts", 0.0)
-    monkeypatch.setattr(ag.time, "monotonic", lambda: 99.0)
-
-    ag._find_our_pids(force=True)
-
-    m = re.search(r"-match '([^']*)'", captured["cmd"])
-    sample = '"C:\\AutoHotkeyU64.exe" "%s" 4242' % os.path.abspath(ag.AHK_PATH)
-    assert re.search(m.group(1), sample)
+    assert "-match" not in cmd
+    assert "ProcessId" in cmd and "CommandLine" in cmd
+    assert "ConvertTo-Json" in cmd
 
 
 # --- T-087: throttle must not mean "no process" ----------------------------
@@ -258,3 +254,136 @@ def test_stop_ahk_uses_force_scan(monkeypatch):
     monkeypatch.setattr(ag.os, "remove", lambda *a, **k: None)
     ag.stop_ahk()
     assert forces == [True]
+
+# --- T-182: kill by handle with instance re-verify (TOCTOU) -------------------
+
+def test_stop_pids_kills_only_verified_ahk_instances(monkeypatch):
+    killed, closed = [], []
+    monkeypatch.setattr(ag.win32api, "OpenProcess",
+                        lambda acc, inh, pid: pid)
+    monkeypatch.setattr(ag.win32process, "GetModuleFileNameEx",
+                        lambda h, i: {101: r"C:\AHK\AutoHotkeyU64.exe",
+                                      202: r"C:\WINDOWS\notepad.exe"}[h])
+    monkeypatch.setattr(ag.win32api, "TerminateProcess",
+                        lambda h, c: killed.append(h))
+    monkeypatch.setattr(ag.win32api, "CloseHandle", lambda h: closed.append(h))
+    monkeypatch.setattr(ag.win32event, "WaitForSingleObject",
+                        lambda h, ms: 0)
+    ag._stop_pids([101, 202])
+    assert killed == [101]   # reused non-AHK pid is NEVER terminated
+    assert 202 in closed     # foreign handle is closed, not killed
+
+
+def test_stop_pids_open_failure_skips(monkeypatch):
+    killed = []
+    monkeypatch.setattr(ag.win32api, "OpenProcess",
+                        lambda *a: (_ for _ in ()).throw(
+                            __import__("pywintypes").error(5)))
+    monkeypatch.setattr(ag.win32api, "TerminateProcess",
+                        lambda h, c: killed.append(h))
+    ag._stop_pids([101])
+    assert killed == []
+
+
+# --- T-184: verified data keeps its OWN clock ---------------------------------
+
+def test_scan_failure_does_not_refresh_verified_age(monkeypatch):
+    monkeypatch.setattr(ag, "_last_scan_ts", 0.0)
+    monkeypatch.setattr(ag, "_last_verified_ts", 0.0)
+    monkeypatch.setattr(ag, "_last_scan_pids", [111])
+    monkeypatch.setattr(ag.time, "monotonic", lambda: 5.0)
+
+    def boom(ps_cmd):
+        raise OSError("scan unavailable")
+
+    monkeypatch.setattr(ag, "_probe_entries", boom)
+    state, pids = ag._find_our_pids(force=True)
+    assert state == "failed"
+    assert ag._last_verified_ts == 0.0  # NOT bumped to 5.0 by the failure
+    assert ag._last_scan_pids == [111]  # ownership evidence retained
+
+
+def test_repeated_failures_do_not_extend_verified_ttl(monkeypatch):
+    monkeypatch.setattr(ag, "_last_scan_ts", 0.0)
+    monkeypatch.setattr(ag, "_last_verified_ts", 0.0)
+    monkeypatch.setattr(ag, "_last_scan_pids", [111])
+    t = {"v": 0.0}
+
+    def clock():
+        t["v"] += 5.0
+        return t["v"]
+
+    monkeypatch.setattr(ag.time, "monotonic", clock)
+
+    def boom(ps_cmd):
+        raise OSError("scan unavailable")
+
+    monkeypatch.setattr(ag, "_probe_entries", boom)
+    for _ in range(5):
+        ag._find_our_pids(force=True)
+    assert ag._last_verified_ts == 0.0  # still the ORIGINAL verified time
+
+
+def test_is_running_unknown_when_cache_expired_and_scan_fails(monkeypatch):
+    """Expired verified cache + failed scan => UNKNOWN (None), never True."""
+    monkeypatch.setattr(ag, "_read_pidfile", lambda: 111)
+    monkeypatch.setattr(ag, "_last_scan_ts", 0.0)
+    monkeypatch.setattr(ag, "_last_verified_ts", 0.0)
+    monkeypatch.setattr(ag, "_last_scan_pids", [111])
+    monkeypatch.setattr(ag.time, "monotonic", lambda: 100.0)  # past 30s TTL
+    monkeypatch.setattr(ag, "_find_our_pids",
+                        lambda force=False: ("failed", []))
+    assert ag.is_running() is None
+
+
+def test_is_running_verified_fresh_stays_true(monkeypatch):
+    monkeypatch.setattr(ag, "_read_pidfile", lambda: 111)
+    monkeypatch.setattr(ag, "_last_verified_ts", 10.0)
+    monkeypatch.setattr(ag, "_last_scan_pids", [111])
+    monkeypatch.setattr(ag.time, "monotonic", lambda: 20.0)  # inside 30s TTL
+    monkeypatch.setattr(ag, "_pid_is_ahk_image", lambda pid: True)
+    scanned = []
+    monkeypatch.setattr(ag, "_find_our_pids",
+                        lambda force=False: scanned.append(1) or ("cached", [111]))
+    assert ag.is_running() is True
+    assert scanned == []
+
+
+# --- T-183: stop_ahk result contract ------------------------------------------
+
+def test_stop_ahk_scan_failure_keeps_ownership(monkeypatch):
+    monkeypatch.setattr(ag, "_read_pidfile", lambda: 111)
+    monkeypatch.setattr(ag, "_find_our_pids",
+                        lambda force=False: ("failed", []))
+    removed = []
+    monkeypatch.setattr(ag.os, "remove", lambda p: removed.append(p))
+    monkeypatch.setattr(ag, "_stop_pids", lambda pids, wait_ms=500: None)
+    monkeypatch.setattr(ag, "_last_scan_pids", [111])
+    res = ag.stop_ahk()
+    assert res == "UNKNOWN_IDENTITY"
+    assert removed == []  # PID tracking evidence retained
+    assert ag._last_scan_pids == [111]  # cache NOT erased as "stopped"
+
+
+def test_stop_ahk_already_stopped_when_verified_empty(monkeypatch):
+    monkeypatch.setattr(ag, "_read_pidfile", lambda: None)
+    monkeypatch.setattr(ag, "_find_our_pids",
+                        lambda force=False: ("ok", []))
+    removed = []
+    monkeypatch.setattr(ag.os, "remove", lambda p: removed.append(p))
+    res = ag.stop_ahk()
+    assert res == "ALREADY_STOPPED"
+
+
+def test_stop_ahk_stops_verified_pids(monkeypatch):
+    killed = []
+    monkeypatch.setattr(ag, "_read_pidfile", lambda: 111)
+    monkeypatch.setattr(ag, "_find_our_pids",
+                        lambda force=False: ("ok", [111]))
+    monkeypatch.setattr(ag, "_stop_pids",
+                        lambda pids, wait_ms=500: killed.extend(pids))
+    monkeypatch.setattr(ag.os, "remove", lambda p: None)
+    res = ag.stop_ahk()
+    assert res == "STOPPED"
+    assert killed == [111]
+    assert ag._last_scan_pids == []

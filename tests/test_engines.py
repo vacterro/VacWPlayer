@@ -1029,6 +1029,7 @@ def _run_deathwatch_reload(monkeypatch, make_candidate, stop_after=4):
     monkeypatch.setattr(deathwatch.key_blocker, "start", lambda *a, **k: None)
     monkeypatch.setattr(deathwatch.key_blocker, "stop", lambda *a, **k: None)
     monkeypatch.setattr(deathwatch, "load_config", _load)
+    monkeypatch.setattr(deathwatch, "_reload_candidate", _load)
     monkeypatch.setattr(deathwatch.engine_config, "mtime_changed", _changed)
     monkeypatch.setattr(deathwatch.digit_reader, "load_templates",
                         lambda path: {"0": _LABEL_MARK}

@@ -1,5 +1,5 @@
+import json
 import os
-import re
 import subprocess
 import sys
 import time
@@ -7,8 +7,10 @@ import time
 import pywintypes
 import win32api
 import win32con
+import win32event
 import win32process
 from ahk_builder import generate_script, validate_config, check_hotkey_conflicts
+from single_instance import _split_command_line
 
 """Renders wr_runtime.ahk from config and manages its process.
 
@@ -42,16 +44,21 @@ SCAN_THROTTLE_SEC = 10.0
 # the engine watchdog off the main thread's spawn cost; bounded so a reused
 # pid can never be trusted forever.
 VERIFIED_WINDOW_SEC = 30.0
-_last_scan_ts = 0.0
-_last_scan_pids = []
+# T-184: scan ATTEMPT time (throttle gate) is separate from the time of the
+# last SUCCESSFUL identity scan. A failed scan must never refresh the age of
+# verified data - only a successful scan updates _last_verified_ts.
+_last_scan_ts = 0.0          # last scan ATTEMPT (throttle gate)
+_last_verified_ts = 0.0      # when the last SUCCESSFUL identity scan ran
+_last_scan_pids = []         # pids verified by that successful scan
 
 
 def _reset_scan_cache():
     """Force the next is_running()/stop_ahk() to do a fresh scan. Called when
     the runtime world changes (launch, stop) so a cached pre-change result is
     never mistaken for the current one."""
-    global _last_scan_ts, _last_scan_pids
+    global _last_scan_ts, _last_verified_ts, _last_scan_pids
     _last_scan_ts = 0.0
+    _last_verified_ts = 0.0
     _last_scan_pids = []
 
 
@@ -141,16 +148,45 @@ def generate_and_run(config):
     # Commit point: atomic script replace, then stop the old runtime, then
     # launch the candidate. Order is fixed - the old runtime stays up until
     # the new script file is fully on disk.
+    # T-189: snapshot the previous script bytes first so a candidate LAUNCH
+    # failure can restore the last-good script instead of leaving it dead.
+    prev_script = None
+    try:
+        with open(AHK_PATH, "rb") as f:
+            prev_script = f.read()
+    except OSError:
+        prev_script = None  # no previous script to restore
+
     try:
         _atomic_write_script(script)
     except (OSError, UnicodeEncodeError) as e:
         return False, "Failed to write AHK script: %s" % e
 
-    stop_ahk()
+    stop_res = stop_ahk()
+    if stop_res == "UNKNOWN_IDENTITY":
+        # T-190: we could not verify the previous owner is gone - launching
+        # another runtime on top of an unknown owner can only double the
+        # process count. Abort and restore the previous script state.
+        _restore_previous_script(prev_script)
+        _reset_scan_cache()
+        return False, "AHK restart aborted: previous runtime identity unknown"
 
     try:
         proc = subprocess.Popen([exe, AHK_PATH, str(os.getpid())])
     except (OSError, subprocess.SubprocessError) as e:
+        # T-189: the candidate passed every gate but failed to launch after
+        # the old runtime was stopped. Restore the last-good script and
+        # best-effort relaunch it so the runtime is not silently dead.
+        _restore_previous_script(prev_script)
+        _reset_scan_cache()
+        if prev_script is not None:
+            try:
+                old_proc = subprocess.Popen([exe, AHK_PATH, str(os.getpid())])
+                return False, ("Failed to launch candidate; last-good runtime "
+                               "relaunched (PID %d): %s" % (old_proc.pid, e))
+            except Exception as e2:
+                return False, ("Failed to launch candidate AND last-good "
+                               "relaunch failed: %s / %s" % (e, e2))
         return False, "Failed to launch AutoHotkey: %s" % e
 
     # Runtime writes its own PID to .ahk.pid on start - nothing to do here.
@@ -178,6 +214,17 @@ def _atomic_write_script(script):
     tmp = AHK_PATH + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         f.write(script)
+    os.replace(tmp, AHK_PATH)
+
+
+def _restore_previous_script(prev_bytes):
+    """T-189: atomically restore the previous script bytes (None = nothing to
+    restore). Used when a replacement that already committed fails to launch."""
+    if prev_bytes is None:
+        return
+    tmp = AHK_PATH + ".restore"
+    with open(tmp, "wb") as f:
+        f.write(prev_bytes)
     os.replace(tmp, AHK_PATH)
 
 
@@ -254,9 +301,57 @@ def _pid_alive(pid):
         win32api.CloseHandle(handle)
 
 
+def _cmdline_launches_our_script(cmdline):
+    """Exact-token ownership (T-181): AutoHotkey's script argument is the FIRST
+    command-line token that looks like a script path; that token's normalized
+    ABSOLUTE path must equal AHK_PATH exactly. A substring/regex occurrence of
+    our path anywhere in the command line is discovery only - it never
+    authorizes a kill. Shares the single_instance command-line philosophy."""
+    expected = os.path.normcase(os.path.abspath(AHK_PATH))
+    try:
+        tokens = _split_command_line(cmdline)
+    except Exception:
+        return False
+    for tok in tokens:
+        t = tok.strip()
+        low = t.lower()
+        if low.endswith(".ahk") or low.endswith(".ahk.exe"):
+            try:
+                return os.path.normcase(os.path.abspath(t)) == expected
+            except Exception:
+                return False
+    return False
+
+
+def _probe_entries(ps_cmd):
+    """Run the PowerShell probe once; return [(pid, command_line), ...] for
+    every AutoHotkey process. Command lines are matched in Python by exact
+    token, not inside PowerShell by substring regex (T-181)."""
+    out = subprocess.run(
+        ["powershell", "-NoProfile", "-Command", ps_cmd],
+        capture_output=True, creationflags=0x08000000,
+        timeout=10).stdout.decode("utf-8", errors="replace")
+    try:
+        data = json.loads(out)
+    except ValueError:
+        return []
+    if not data:
+        return []
+    if isinstance(data, dict):
+        data = [data]
+    entries = []
+    for item in data:
+        pid = item.get("ProcessId")
+        cmd = item.get("CommandLine")
+        if isinstance(pid, int) and isinstance(cmd, str):
+            entries.append((pid, cmd))
+    return entries
+
+
 def _find_our_pids(force=False):
     """Return (state, pids) where pids are command-line VERIFIED: only AHK
-    processes whose command line carries our script path.
+    processes whose command line carries our script path as the exact first
+    script argument (T-181 - exact-token, not substring regex).
 
     state:
       'ok'      - a fresh scan ran (pids may be empty = verified zero)
@@ -264,31 +359,25 @@ def _find_our_pids(force=False):
       'failed'  - scan error; pids empty (unknown, NOT verified zero)
 
     A throttled skip is never converted into an authoritative empty list, so
-    callers can never read "not scanned" as "not running".
+    callers can never read "not scanned" as "not running". A FAILED scan never
+    touches the verified timestamp/data (T-184).
     """
-    global _last_scan_ts, _last_scan_pids
+    global _last_scan_ts, _last_verified_ts, _last_scan_pids
     now = time.monotonic()
     if not force and now - _last_scan_ts < SCAN_THROTTLE_SEC:
         return "cached", list(_last_scan_pids)
-    _last_scan_ts = now
-    # Regex (-match) + re.escape: the command line carries the script path with
-    # SINGLE backslashes. Two historical traps: the -like wildcard doubled them
-    # and never matched, and a backtick before `$_` made PowerShell treat
-    # `$_.CommandLine` as a command name instead of the process's command line -
-    # both made the scan silently return zero and the engine watchdog restart
-    # forever. Plain member access + -match (case-insensitive) works.
-    script_esc = re.escape(os.path.abspath(AHK_PATH))
+    _last_scan_ts = now  # attempt clock only; failure must not age verified data
     ps_cmd = (
         "Get-CimInstance Win32_Process -Filter \"name like '%AutoHotkey%'\" | "
-        "Where-Object {{ $_.CommandLine -match '{script}' }} | "
-        "Select-Object -ExpandProperty ProcessId"
-    ).format(script=script_esc)
+        "Select-Object ProcessId, CommandLine | "
+        "ConvertTo-Json -Compress"
+    )
     try:
-        pids = _probe_pids(ps_cmd)
+        entries = _probe_entries(ps_cmd)
     except subprocess.TimeoutExpired:
         print("ahk_generator: PID scan timed out (10s), retrying once", file=sys.stderr)
         try:
-            pids = _probe_pids(ps_cmd)
+            entries = _probe_entries(ps_cmd)
         except subprocess.TimeoutExpired:
             print("ahk_generator: PID scan timed out again, giving up", file=sys.stderr)
             return "failed", []
@@ -298,6 +387,10 @@ def _find_our_pids(force=False):
     except Exception as e:
         print(f"ahk_generator: PID scan failed: {e}", file=sys.stderr)
         return "failed", []
+    pids = [pid for pid, cmd in entries
+            if _cmdline_launches_our_script(cmd)]
+    # Only a SUCCESSFUL scan promotes verified time/data (T-184).
+    _last_verified_ts = time.monotonic()
     _last_scan_pids = pids
     return "ok", pids
 
@@ -317,48 +410,78 @@ def _probe_pids(ps_cmd):
 
 
 def _stop_pids(pids, wait_ms=500):
-    """Force-kill PIDs and wait briefly for exit."""
+    """Force-kill PIDs and wait briefly for exit.
+
+    T-182: the PID verified by the scan may be REUSED by Windows before we act.
+    Every PID is opened as a PROCESS HANDLE and THIS INSTANCE is re-verified as
+    an AHK binary immediately before the destructive call - a reused PID now
+    pointing at a foreign process is never terminated. All termination happens
+    through the handle, never by stale PID number.
+    """
     if not pids:
         return
+    handles = []
     for pid in pids:
-        r = subprocess.run(["taskkill", "/F", "/PID", str(pid)],
-                       capture_output=True, creationflags=0x08000000)
-        if r.returncode != 0:
-            print(f"taskkill {pid} failed (code {r.returncode}): {r.stderr.decode().strip()}")
-    # Wait briefly for processes to die
-    if wait_ms:
-        import time
+        try:
+            h = win32api.OpenProcess(
+                win32con.PROCESS_TERMINATE | win32con.SYNCHRONIZE
+                | win32con.PROCESS_QUERY_LIMITED_INFORMATION,
+                False, pid)
+        except pywintypes.error:
+            continue  # already gone or access denied - not ours to kill
+        try:
+            img = win32process.GetModuleFileNameEx(h, 0)
+            if not img or os.path.basename(img).lower() not in AHK_IMAGE_NAMES:
+                win32api.CloseHandle(h)
+                continue  # reused PID -> foreign process, refuse to kill
+        except pywintypes.error:
+            win32api.CloseHandle(h)
+            continue
+        handles.append(h)
+    for h in handles:
+        try:
+            win32api.TerminateProcess(h, 0)
+        except pywintypes.error as e:
+            print(f"ahk_generator: terminate pid failed: {e}")
+        finally:
+            win32api.CloseHandle(h)
+    # Wait briefly for the terminated instances to exit.
+    if wait_ms and handles:
         deadline = time.monotonic() + wait_ms / 1000
-        while pids and time.monotonic() < deadline:
-            alive = []
-            for pid in pids:
-                r = subprocess.run(["tasklist", "/FI", "PID eq %d" % pid, "/NH"],
-                                   capture_output=True, creationflags=0x08000000)
-                if str(pid) in r.stdout.decode("utf-8", errors="replace"):
-                    alive.append(pid)
-            pids = alive
-            if pids:
-                time.sleep(0.05)
+        for h in handles:
+            if time.monotonic() >= deadline:
+                break
+            try:
+                win32event.WaitForSingleObject(h, max(0, int((deadline - time.monotonic()) * 1000)))
+            except pywintypes.error:
+                pass
 
 
 def is_running():
-    """True when our managed AHK runtime is VERIFIED alive.
+    """True / False / None (UNKNOWN).
 
-    The PID file is only a hint (Windows reuses PIDs): a live process behind
-    the file counts as ours only when a command-line scan proved it runs our
-    script - the cheap path reuses the last verified result within the
-    throttle window. A skipped scan is never read as "not running".
+    True when our managed AHK runtime is VERIFIED alive. The PID file is only
+    a hint (Windows reuses PIDs): a live process behind the file counts as
+    ours only when a command-line scan proved it runs our script. The cheap
+    path reuses the last VERIFIED result only while its OWN verified TTL is
+    valid (T-184) - a failed scan never extends that age. None means the
+    identity state is genuinely unknown (verified cache expired AND no fresh
+    scan could run): callers must not treat UNKNOWN as either stopped or
+    running.
     """
     pid = _read_pidfile()
     now = time.monotonic()
-    if pid is not None and now - _last_scan_ts < VERIFIED_WINDOW_SEC:
+    if pid is not None and _last_scan_pids and now - _last_verified_ts < VERIFIED_WINDOW_SEC:
         if pid in _last_scan_pids and _pid_is_ahk_image(pid):
             return True
     state, pids = _find_our_pids(force=False)
-    if state == "failed" and now - _last_scan_ts < VERIFIED_WINDOW_SEC:
-        # Scan unavailable (broken powershell etc.): reuse the last VERIFIED
-        # result rather than blind-restarting from a genuinely unknown state.
-        return bool(_last_scan_pids)
+    if state in ("failed", "cached"):
+        # Scan unavailable or throttled: reuse the last VERIFIED result only
+        # while its ORIGINAL verified TTL is still valid. A verified EMPTY set
+        # within TTL is a genuine False (stopped); an expired cache is UNKNOWN.
+        if now - _last_verified_ts < VERIFIED_WINDOW_SEC:
+            return bool(_last_scan_pids)
+        return None
     return bool(pids)
 
 
@@ -368,10 +491,26 @@ def stop_ahk():
     The PID file is a hint: a tracked PID is killed only when a fresh forced
     command-line scan proves it runs our script. A stale reused PID belonging
     to an unrelated process never matches the scan and is never terminated.
+
+    Returns one of:
+      'STOPPED'          - verified our runtime(s), terminated, evidence cleared
+      'ALREADY_STOPPED'  - fresh scan verified zero of our processes
+      'UNKNOWN_IDENTITY' - identity scan failed; ownership evidence is RETAINED
+                           (PID file + verified cache), nothing was claimed
+      'KILL_FAILED'      - verified process could not be terminated
+
+    T-183: on UNKNOWN_IDENTITY the PID file and verified cache are NOT erased -
+    the runtime may still be alive and the application must not pretend to have
+    stopped it, nor launch a replacement as if zero were proven.
     """
     global _last_scan_pids
     tracked = _read_pidfile()
     state, pids = _find_our_pids(force=True)
+    if state == "failed":
+        # Scan unavailable: we cannot prove ownership of anything. Keep the
+        # PID file and verified cache as the only tracking evidence.
+        print("ahk_generator: stop aborted - identity scan failed (UNKNOWN)", file=sys.stderr)
+        return "UNKNOWN_IDENTITY"
     if tracked is not None and tracked not in pids:
         tracked = None
     orphans = [p for p in pids if p != tracked]
@@ -381,7 +520,5 @@ def stop_ahk():
         os.remove(PID_PATH)
     except OSError:
         pass  # PID file already gone
-    # Everything we kill came from the verified set; the cache now holds that
-    # same set, so a cached-empty read within the throttle window correctly
-    # reports stopped.
     _last_scan_pids = []
+    return "ALREADY_STOPPED" if not pids else "STOPPED"

@@ -1,5 +1,6 @@
 """generate_and_run chain + _apply_worker thread-boundary tests (T-081)."""
 
+import os
 import sys
 from pathlib import Path
 
@@ -133,8 +134,8 @@ def test_apply_worker_unexpected_exception_clears_applying(monkeypatch):
     def boom(config):
         raise RuntimeError("explosion in the apply worker")
 
-    main_mod.ahk_generator.generate_and_run = boom
-    w._apply_worker()
+    monkeypatch.setattr(main_mod.ahk_generator, "generate_and_run", boom)
+    w._apply_worker(_base_cfg())
 
     assert w._applying is False
     assert w.status_lbl.last["text"] == "Apply failed: explosion in the apply worker"
@@ -150,7 +151,7 @@ def test_watchdog_worker_unexpected_exception_clears_applying(monkeypatch):
     def boom(config):
         raise RuntimeError("explosion in the watchdog worker")
 
-    main_mod.ahk_generator.generate_and_run = boom
+    monkeypatch.setattr(main_mod.ahk_generator, "generate_and_run", boom)
     w._watchdog_worker()
 
     assert w._applying is False
@@ -183,3 +184,101 @@ def test_apply_done_rejection_red_dot_when_runtime_dead(monkeypatch):
     assert w._applying is False
     assert w.ahk_dot.fills == [TOKENS["danger"]]
     assert "still running" not in w.status_lbl.last["text"]
+# --- T-181: AHK ownership must be exact-token, never command-line regex -------
+
+def test_cmdline_launches_our_script_exact():
+    ours = ag.AHK_PATH
+    assert ag._cmdline_launches_our_script(
+        '"C:\\Python\\AutoHotkeyU64.exe" "%s" 1234' % ours) is True
+
+
+def test_cmdline_other_dir_same_name_foreign():
+    assert ag._cmdline_launches_our_script(
+        '"C:\\Python\\AutoHotkeyU64.exe" "C:\\Other\\wr_runtime.ahk"') is False
+
+
+def test_cmdline_first_script_arg_wins():
+    """AutoHotkey's script arg is the FIRST .ahk token - our path appearing as
+    a LATER/unrelated argument must not claim ownership (T-181)."""
+    ours = ag.AHK_PATH
+    cmd = '"C:\\Python\\AutoHotkeyU64.exe" "C:\\Other\\x.ahk" "%s"' % ours
+    assert ag._cmdline_launches_our_script(cmd) is False
+
+
+def test_cmdline_bak_and_suffix_foreign():
+    assert ag._cmdline_launches_our_script(
+        '"C:\\Python\\AutoHotkeyU64.exe" "%s.bak"' % ag.AHK_PATH) is False
+    assert ag._cmdline_launches_our_script(
+        '"C:\\Python\\AutoHotkeyU64.exe" "C:\\x\\wr_runtime.ahk.old"') is False
+
+
+def test_cmdline_no_script_arg_foreign():
+    assert ag._cmdline_launches_our_script(
+        '"C:\\Python\\AutoHotkeyU64.exe" /ErrorStdOut') is False
+
+
+def test_find_our_pids_filters_by_exact_token(monkeypatch):
+    ours = ag.AHK_PATH
+    entries = [
+        (101, '"C:\\Python\\AutoHotkeyU64.exe" "%s" 1' % ours),
+        (202, '"C:\\Python\\AutoHotkeyU64.exe" "C:\\Other\\wr_runtime.ahk"'),
+        (303, '"C:\\Python\\AutoHotkeyU64.exe" "C:\\Other\\x.ahk" "%s"' % ours),
+    ]
+    monkeypatch.setattr(ag, "_probe_entries", lambda ps_cmd: entries)
+    monkeypatch.setattr(ag.time, "monotonic", lambda: 100.0)
+    monkeypatch.setattr(ag, "_last_scan_ts", 0.0)
+    state, pids = ag._find_our_pids(force=True)
+    assert state == "ok"
+    assert pids == [101]  # only the exact launch wins
+
+# --- T-189/T-190: replacement transactional after commit + stop gate ----------
+
+def test_candidate_launch_failure_restores_last_good(monkeypatch):
+    intruded = {}
+    monkeypatch.setattr(ag, "find_ahk_exe", lambda: "AutoHotkeyU64.exe")
+    monkeypatch.setattr(ag, "_atomic_write_script",
+                        lambda s: intruded.setdefault("wrote", s))
+    monkeypatch.setattr(ag, "stop_ahk", lambda: "STOPPED")
+    monkeypatch.setattr(ag, "_restore_previous_script",
+                        lambda b: intruded.setdefault("restored", b))
+    monkeypatch.setattr(ag, "_reset_scan_cache", lambda: None)
+    launches = []
+    real_popen = ag.subprocess.Popen
+
+    def flaky(*a, **k):
+        args = a[0]
+        target = args[1] if len(args) > 1 else ""
+        launches.append(target)
+        # the CANDIDATE (wr_runtime.ahk) launch always fails; preflight probe
+        # uses a temp path and passes through untouched
+        if os.path.normcase(target) == os.path.normcase(ag.AHK_PATH):
+            raise OSError(13, "no launch")
+        return real_popen(*a, **k)
+
+    monkeypatch.setattr(ag.subprocess, "Popen", flaky)
+    ok, msg = ag.generate_and_run(_base_cfg())
+    assert ok is False
+    assert "restored" in intruded       # last-good script restored (T-189)
+    assert any(os.path.normcase(t) == os.path.normcase(ag.AHK_PATH)
+               for t in launches)       # candidate launch was attempted
+
+
+def test_stop_unknown_aborts_replacement_no_launch(monkeypatch):
+    monkeypatch.setattr(ag, "find_ahk_exe", lambda: "AutoHotkeyU64.exe")
+    monkeypatch.setattr(ag, "_atomic_write_script", lambda s: None)
+    monkeypatch.setattr(ag, "stop_ahk", lambda: "UNKNOWN_IDENTITY")
+    restored = []
+    monkeypatch.setattr(ag, "_restore_previous_script",
+                        lambda b: restored.append(b))
+    monkeypatch.setattr(ag, "_reset_scan_cache", lambda: None)
+    launched = []
+    monkeypatch.setattr(ag.subprocess, "Popen",
+                        lambda *a, **k: launched.append(
+                            a[0][1] if len(a[0]) > 1 else "?"))
+    ok, msg = ag.generate_and_run(_base_cfg())
+    assert ok is False
+    # preflight may spawn the probe; the CANDIDATE (our script) must not
+    candidate_launches = [t for t in launched
+                          if os.path.normcase(t) == os.path.normcase(ag.AHK_PATH)]
+    assert candidate_launches == []     # no second runtime on unknown owner
+    assert "unknown" in msg.lower()

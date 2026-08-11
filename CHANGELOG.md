@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.3.32 (2026-08-12)
+- Safety audit pass 6, 12 tickets (T-181..T-191, T-195). AHK ownership is now EXACT-TOKEN: the identity scan fetches pid+command-line as JSON and requires the first script argument to equal wr_runtime.ahk exactly (no substring regex); every kill opens a process HANDLE and re-verifies that same instance as an AutoHotkey binary before terminating (PID-reuse TOCTOU closed); stop_ahk returns a result contract - on an UNKNOWN identity scan it retains the PID file and cache instead of erasing ownership; verified cache data keeps its own clock (failed scans never extend its TTL, is_running returns UNKNOWN instead of guessing) (T-181, T-182, T-183, T-184).
+- Apply determinism: the Apply candidate is deep-copied and frozen on the main thread - editor/autosave mutations mid-generation can no longer change what is generated or recorded as applied; the watchdog freezes its restart candidate the same way (T-185). save_config(False) now means NO durable half was committed (a blocked local half refuses the whole save instead of reporting partial success); failed recovery rolls back the previous local as exact bytes (never re-parsed); recovery writes never overwrite a good .bak with a rejected source (T-186, T-187, T-188).
+- AHK replacement is transactional after the commit point: the previous script is snapshotted and restored (with a best-effort relaunch) if the candidate fails to launch, and an UNKNOWN previous-owner state aborts replacement instead of doubling the runtime (T-189, T-190).
+- Hot reload can no longer kill a healthy engine: a semantically-invalid revision is rejected whole and the last-good config keeps running (startup stays FATAL); the same policy now covers the deathwatch resources and JSON in one transaction (T-191).
+- Tests: suite 593 -> 614 PASS, pyflakes 0.
+
 ## v0.3.31 (2026-08-11)
 - Safety audit pass 4, 8 tickets (T-173..T-180). ProcessRunner: a stream failure while the child is still alive deliberately terminates it instead of marking Stopped and losing ownership - a live child is never left untracked (T-173).
 - Config/codegen: champions booleans require exact bool (qwer_as_uiop="false" can never enable the QWER->UIOP remap), a canonical trigger grammar rejects malformed hotkeys before generation, config strings interpolated into AHK (target_exe, window_title, template paths) are validated for AHK-unsafe characters, and unmapped Unicode combo keys are rejected (native probe: AHK would send them as literal text into the game) (T-174, T-175, T-176, T-180).

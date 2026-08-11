@@ -1579,8 +1579,9 @@ def generate_script(config):
 def _afk_usable_position_count(config):
     """Number of AFK slots that translate to a usable minimap position - the
     SAME rule _gen_afk_farm uses to decide whether a cycle can exist (T-164).
-    A usable slot needs its minimap entry with valid x/y (current rule also
-    requires the minimap trigger; T-165 revisits that dependency)."""
+    A usable slot needs its minimap entry with valid x/y; a minimap hotkey
+    trigger is NOT required (T-165 decoupled it - the AFK cycle consumes
+    coordinates only)."""
     afk = config.get("afkfarm", {})
     mm = config.get("minimap", {})
     slots = afk.get("slots", {}) if isinstance(afk, dict) else {}

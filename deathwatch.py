@@ -117,6 +117,21 @@ def _client_bounds_ok(hwnd, x, y):
     return 0 <= x < w and 0 <= y < h
 
 
+def _reload_candidate():
+    """Non-exiting candidate config read for HOT RELOAD (T-191): returns the
+    parsed+semantically-valid config, or None (keep last-good, warn once).
+    Startup keeps the FATAL SystemExit policy via load_config()."""
+    try:
+        with open(CONFIG_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or engine_config.semantic_problems(
+            data, "deathwatch_config.json"):
+        return None
+    return data
+
+
 def _set_block(sec):
     """Convenience: start or stop the pedal key block."""
     if sec > 0:
@@ -285,15 +300,15 @@ def main(replace=False):
             try:
                 cfg_last_mtime, changed = engine_config.mtime_changed(cfg_path, cfg_last_mtime)
                 if changed:
-                    # T-155: hot reload is transactional as a WHOLE. The
-                    # candidate cfg commits only when every required resource
-                    # it points at (digit templates dir, death label template)
-                    # actually builds. If any fails, the candidate is rejected
-                    # entirely - old cfg, old resources and old blocked-key /
-                    # window state stay live, and the mtime is consumed so the
-                    # rejection warning fires ONCE per file revision instead of
-                    # every polling iteration.
-                    candidate_cfg = load_config()
+                    # T-155/T-191: hot reload is transactional as a WHOLE and
+                    # NEVER kills the healthy running engine over one bad edit.
+                    # A semantically-invalid revision is rejected (keep last-good,
+                    # warn once); the mtime is consumed so the same revision does
+                    # not re-trigger every poll.
+                    candidate_cfg = _reload_candidate()
+                    if candidate_cfg is None:
+                        print("WARN: config change rejected (invalid); keeping last-good")
+                        continue
                     reject = False
                     candidate_templates = None
                     if candidate_cfg["digit_templates_dir"] != loaded_digits_dir:

@@ -65,6 +65,8 @@ def _run(monkeypatch, cfg=None, scan_result=False, mtime=(1.0, False),
                         lambda: None)
     monkeypatch.setattr(poller_engine.window_ctl, "set_dpi_aware", lambda: None)
     monkeypatch.setattr(poller_engine, "load_config", lambda p, n: cfg)
+    monkeypatch.setattr(poller_engine, "reload_candidate",
+                        lambda p, n: (cfg, None))
     monkeypatch.setattr(poller_engine.os.path, "getmtime", lambda p: 1.0)
     monkeypatch.setattr(poller_engine.engine_config, "mtime_changed",
                         lambda p, m: mtime)
@@ -133,6 +135,8 @@ def test_window_title_change_reacquires_hwnd(monkeypatch):
                         lambda: None)
     monkeypatch.setattr(poller_engine.window_ctl, "set_dpi_aware", lambda: None)
     monkeypatch.setattr(poller_engine, "load_config", _load)
+    monkeypatch.setattr(poller_engine, "reload_candidate",
+                        lambda p, n: (_load(p, n), None))
     monkeypatch.setattr(poller_engine.os.path, "getmtime", lambda p: 1.0)
     monkeypatch.setattr(poller_engine.engine_config, "mtime_changed", _changed)
     monkeypatch.setattr(poller_engine.capture, "find_window", _find)
@@ -417,6 +421,8 @@ def _run_poller_min(monkeypatch, cfg=None):
                         lambda: None)
     monkeypatch.setattr(poller_engine.window_ctl, "set_dpi_aware", lambda: None)
     monkeypatch.setattr(poller_engine, "load_config", lambda p, n: cfg)
+    monkeypatch.setattr(poller_engine, "reload_candidate",
+                        lambda p, n: (cfg, None))
     monkeypatch.setattr(poller_engine.os.path, "getmtime", lambda p: 1.0)
     monkeypatch.setattr(poller_engine.engine_config, "mtime_changed",
                         lambda p, m: (1.0, False))
@@ -461,3 +467,28 @@ def test_reload_unusable_targets_keeps_last_good(monkeypatch):
         usable=lambda t: bool(t))
     assert serves["n"] >= 2  # reload was attempted and targets were rebuilt
     assert all(t == ["t1"] for t in seen)  # scans never saw the unusable []
+
+
+def test_invalid_reload_keeps_last_good_engine(monkeypatch):
+    """T-191: a semantically-invalid hot-reload revision is REJECTED whole -
+    the healthy engine keeps running the last-good config, no SystemExit."""
+    _run_poller_min(monkeypatch)
+    state = {"calls": 0}
+    seen = []
+
+    def _scan(h, c, t):
+        seen.append(t)
+        if len(seen) >= 3:
+            raise KeyboardInterrupt
+        return False
+
+    monkeypatch.setattr(poller_engine, "reload_candidate",
+                        lambda p, n: (None, "window_title must be a string"))
+    monkeypatch.setattr(poller_engine.engine_config, "mtime_changed",
+                        lambda p, m: (2.0, state.__setitem__("calls", state["calls"] + 1) or state["calls"] == 1))
+    poller_engine.run_poller(
+        "test", "cfg.json", "cfg.json",
+        build_targets=lambda c: ["t1"], scan_targets=_scan,
+        startup=lambda c, t: "started", reload_msg=lambda c, t: None)
+    # engine kept scanning with the last-good targets - never crashed
+    assert len(seen) >= 2

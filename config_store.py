@@ -39,19 +39,35 @@ def read_raw(path: str) -> tuple[object, str | None]:
         return None, "corrupt"
 
 
-def atomic_write(path: str, data: dict) -> None:
+def atomic_write(path: str, data: dict, promote_bak: bool = True) -> None:
     """Write `data` as JSON to `path`, keeping the previous content as .bak.
 
     Writes to a temp file in the same directory, then replaces the target so
     a crash mid-write leaves either the old file or the new one, never a
     truncated mix. Before the replace the current file (if any) is copied to
     path + .bak, so the last good config survives even a bad write.
+
+    `promote_bak=False` (T-188): used for explicit recovery over a KNOWN-bad
+    source - a corrupt/rejected file must never overwrite the last-good .bak
+    with garbage. Recovery writes never promote the damaged source.
     """
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=4)
         f.write("\n")
-    if os.path.exists(path):
+    if promote_bak and os.path.exists(path):
+        shutil.copy2(path, path + BAK_SUFFIX)
+    os.replace(tmp, path)
+
+
+def atomic_write_bytes(path: str, data: bytes, promote_bak: bool = True) -> None:
+    """Atomic write of EXACT bytes (T-187): restores a previous file byte-for-
+    byte, never re-parsing/re-serializing it (a corrupt old file must roll back
+    as the same corrupt bytes)."""
+    tmp = path + ".tmp"
+    with open(tmp, "wb") as f:
+        f.write(data)
+    if promote_bak and os.path.exists(path):
         shutil.copy2(path, path + BAK_SUFFIX)
     os.replace(tmp, path)
 
