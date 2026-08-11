@@ -44,6 +44,10 @@ class ProcessRunner:
         with self._lock:
             if self.is_running():
                 return True
+            # Reaching here means proc is None or a DEAD old child. Drop the
+            # stale reference now so a failed spawn below leaves proc = None,
+            # never a pointer to the dead process (T-171).
+            self.proc = None
             self._gen += 1
             gen = self._gen
             try:

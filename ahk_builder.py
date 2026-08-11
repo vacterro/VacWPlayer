@@ -1,7 +1,8 @@
 import json
 import os
 import re
-import sys
+
+import engine_config
 
 """Renders wr_runtime.ahk from config and manages its process.
 
@@ -441,17 +442,11 @@ def _gen_header(a, target_exe, combos, afk, toggles):
     a.append("#MaxHotkeysPerInterval 200")
     a.append("#HotkeyInterval 1000")
     a.append("")
-    a.append("DetectHiddenWindows, On")
-    a.append("SetTitleMatchMode, RegEx")
-    a.append("WinGet, id, List, i)^wr.*\\.ahk - AutoHotkey")
-    a.append("Loop, %id%")
-    a.append("{")
-    a.append("    this_id := id%A_Index%")
-    a.append("    WinGet, this_pid, PID, ahk_id %this_id%")
-    a.append('    if (this_pid != DllCall("GetCurrentProcessId"))')
-    a.append("        WinClose, ahk_id %this_id%")
-    a.append("}")
-    a.append("DetectHiddenWindows, Off")
+    # NOTE (T-163): no window-title/wildcard cleanup here. A generated script
+    # must never close other AHK processes by pattern (^wr.*\.ahk) - basename
+    # similarity is never proof of ownership, and wr_notes.ahk / wr_test.ahk
+    # belong to the user. Ownership + replacement of the previous runtime is
+    # python-side, PID/exact-identity verified (ahk_generator.stop_ahk).
     a.append("CoordMode, Mouse, Client")
     a.append("CoordMode, Pixel, Client")
     a.append("")
@@ -499,6 +494,7 @@ def _gen_header(a, target_exe, combos, afk, toggles):
             a.append("global P_afk_DeathCheck := 0")
             a.append("global P_afk_PosIndex := 0")
             a.append("global P_afk_LastMove := 0")
+            a.append("global P_afk_DetectorFault := false")
     a.append("")
     a.append("global ParentPID := %1%")
     a.append('ahkPid := DllCall("GetCurrentProcessId")')
@@ -512,65 +508,78 @@ def _gen_header(a, target_exe, combos, afk, toggles):
     a.append("")
 
 def _gen_autobuy(a, target_exe, config):
-    """Optional deathwatch quick-buy block (from deathwatch_config.json)."""
+    """Autobuy block (B-press quickbuy) from deathwatch_config.json.
+
+    T-167: consumed through the CANONICAL engine validation path
+    (engine_config.semantic_problems + quickbuy_key_vk) - no raw re-parse, no
+    duplicate quickbuy interpretation, no broad except that silently turns a
+    requested feature into a no-op. autobuy_after_b=False is a legitimate
+    omission; autobuy_after_b=True with invalid/corrupt required config is a
+    candidate REJECT (ValueError -> generate_and_run fails, last-good AHK
+    survives).
+    """
+    dw_path = os.path.join(BASE, "deathwatch_config.json")
     try:
-        dw_path = os.path.join(os.path.dirname(__file__), "deathwatch_config.json")
-        with open(dw_path) as f:
+        with open(dw_path, encoding="utf-8") as f:
             dw_cfg = json.load(f)
-        if not dw_cfg.get("autobuy_after_b"):
-            return
-        qb_key = dw_cfg.get("quickbuy_key", "")
-        qb_presses = int(dw_cfg.get("quickbuy_presses", 1))
-        buy_delay_ms = int(float(dw_cfg.get("buy_after_b_delay_sec", 5.5)) * 1000)
-        win_title = dw_cfg.get("window_title", "")
-        if not qb_key or not win_title:
-            return
-        if len(qb_key) == 1 and 'A' <= qb_key.upper() <= 'Z':
-            qb_vk = "vk%02X" % ord(qb_key.upper())
-        else:
-            qb_vk = qb_key
-        controlsend = dw_cfg.get("controlsend_z", False)
-        a.append(f"#IfWinActive, {win_title}")
-        a.append("~" + _sc_key("b") + "::")
-        a.append("    ReleaseMoveToggle()")
-        a.append("    SetTimer, DoAutoBuy, Off")
-        a.append(f"    SetTimer, DoAutoBuy, -{buy_delay_ms}")
-        a.append("return\n")
-        a.append("DoAutoBuy:")
-        a.append(f"    if (!WinActive(\"{win_title}\"))")
-        a.append("        return")
-        a.append(f"    Loop, {qb_presses} {{")
-        if controlsend:
-            a.append(f"        ControlSend, , {{{qb_vk}}}, ahk_exe {target_exe}")
-        else:
-            a.append(f"        SendEvent {{Blind}}{{{qb_vk}}}")
-        a.append("        Sleep 50")
-        a.append("    }")
-        if controlsend:
-            a.append(f"    ControlSend, , {{Shift Up}}{{Ctrl Up}}{{Alt Up}}{{LWin Up}}, ahk_exe {target_exe}")
-        else:
-            a.append("    SendEvent {Shift Up}{Ctrl Up}{Alt Up}{LWin Up}")
-        if dw_cfg.get("autobuy_then_mid"):
-            mid_delay = int(float(dw_cfg.get("autobuy_then_mid_delay_sec", 0.5)) * 1000)
-            mid_cfg = config.get("minimap", {}).get("mid", {})
-            mx = int(mid_cfg.get("x", 0))
-            my = int(mid_cfg.get("y", 0))
-            if mx > 0 and my > 0:
-                a.append(f"    Sleep, {mid_delay}")
-                a.append(f"    if (!WinActive(\"{win_title}\"))")
-                a.append("        return")
-                if controlsend:
-                    a.append(f'    ControlClick, x{mx} y{my}, ahk_exe {target_exe}, , , , NA')
-                else:
-                    a.append('    MouseGetPos, _ab_mm_x, _ab_mm_y')
-                    a.append(f'    MouseMove, {mx}, {my}, 0')
-                    a.append('    SendEvent {Blind}{LButton}')
-                    a.append('    MouseMove, _ab_mm_x, _ab_mm_y, 0')
-        a.append("return")
-        a.append("#IfWinActive")
-        a.append("")
-    except Exception as e:
-        print(f"ahk_builder: autobuy block skipped (bad deathwatch_config.json?): {e}", file=sys.stderr)
+    except FileNotFoundError:
+        return  # no deathwatch config = autobuy never configured
+    except (OSError, ValueError):
+        raise ValueError("autobuy: deathwatch_config.json could not be read")
+    if not isinstance(dw_cfg, dict):
+        raise ValueError("autobuy: deathwatch_config.json is malformed")
+    problems = engine_config.semantic_problems(dw_cfg, "deathwatch_config.json")
+    if problems:
+        raise ValueError("autobuy: deathwatch_config.json invalid: %s"
+                         % "; ".join(problems[:2]))
+    if not dw_cfg.get("autobuy_after_b"):
+        return  # legitimate omission - feature not requested
+    win_title = dw_cfg["window_title"]
+    if not win_title:
+        raise ValueError("autobuy enabled but window_title is empty")
+    qb_vk = "vk%02X" % engine_config.quickbuy_key_vk(dw_cfg["quickbuy_key"])
+    qb_presses = dw_cfg["quickbuy_presses"]
+    buy_delay_ms = int(float(dw_cfg["buy_after_b_delay_sec"]) * 1000)
+    controlsend = dw_cfg.get("controlsend_z", False)
+    a.append(f"#IfWinActive, {win_title}")
+    a.append("~" + _sc_key("b") + "::")
+    a.append("    ReleaseMoveToggle()")
+    a.append("    SetTimer, DoAutoBuy, Off")
+    a.append(f"    SetTimer, DoAutoBuy, -{buy_delay_ms}")
+    a.append("return\n")
+    a.append("DoAutoBuy:")
+    a.append(f"    if (!WinActive(\"{win_title}\"))")
+    a.append("        return")
+    a.append(f"    Loop, {qb_presses} {{")
+    if controlsend:
+        a.append(f"        ControlSend, , {{{qb_vk}}}, ahk_exe {target_exe}")
+    else:
+        a.append(f"        SendEvent {{Blind}}{{{qb_vk}}}")
+    a.append("        Sleep 50")
+    a.append("    }")
+    if controlsend:
+        a.append(f"    ControlSend, , {{Shift Up}}{{Ctrl Up}}{{Alt Up}}{{LWin Up}}, ahk_exe {target_exe}")
+    else:
+        a.append("    SendEvent {Shift Up}{Ctrl Up}{Alt Up}{LWin Up}")
+    if dw_cfg.get("autobuy_then_mid"):
+        mid_delay = int(float(dw_cfg.get("autobuy_then_mid_delay_sec", 0.5)) * 1000)
+        mid_cfg = config.get("minimap", {}).get("mid", {})
+        mx = int(mid_cfg.get("x", 0))
+        my = int(mid_cfg.get("y", 0))
+        if mx > 0 and my > 0:
+            a.append(f"    Sleep, {mid_delay}")
+            a.append(f"    if (!WinActive(\"{win_title}\"))")
+            a.append("        return")
+            if controlsend:
+                a.append(f'    ControlClick, x{mx} y{my}, ahk_exe {target_exe}, , , , NA')
+            else:
+                a.append('    MouseGetPos, _ab_mm_x, _ab_mm_y')
+                a.append(f'    MouseMove, {mx}, {my}, 0')
+                a.append('    SendEvent {Blind}{LButton}')
+                a.append('    MouseMove, _ab_mm_x, _ab_mm_y, 0')
+    a.append("return")
+    a.append("#IfWinActive")
+    a.append("")
 
 def _gen_watchdog(a):
     """Watchdog timer + MouseIsOver helper."""
@@ -1106,25 +1115,29 @@ def _gen_master_spammer(a, target_exe, toggles, combos):
     a.append("")
 
 def _deathwatch_cfg():
-    """Load deathwatch_config.json for AFK death-pause region/template.
+    """Load deathwatch_config.json for the AFK death-pause detector THROUGH
+    the canonical engine validation path (T-166).
 
-    Falls back to the classic hardcoded defaults if the file is missing or
-    malformed - the AFK farm must never die on a bad engine config.
+    Returns (region, template) only when the source is semantically valid AND
+    the template resource actually exists. Returns None otherwise - the
+    detector is DISABLED, never fed a hardcoded region/template that could
+    pause or automate on the wrong pixels. UNKNOWN != SAFE.
     """
     dw_path = os.path.join(BASE, "deathwatch_config.json")
     try:
         with open(dw_path, encoding="utf-8") as f:
             dw = json.load(f)
-        region = dw.get("death_label_region", [900, 118, 1165, 145])
-        template = dw.get("death_label_template",
-                          "templates/death_label.png")
-        if len(region) != 4:
-            region = [900, 118, 1165, 145]
-        if not template.endswith(".png"):
-            template = "templates/death_label.png"
-        return [int(v) for v in region], template
-    except (OSError, ValueError, TypeError, json.JSONDecodeError):
-        return [900, 118, 1165, 145], "templates/death_label.png"
+    except (OSError, ValueError):
+        return None
+    if not isinstance(dw, dict):
+        return None
+    if engine_config.semantic_problems(dw, "deathwatch_config.json"):
+        return None
+    region = dw["death_label_region"]
+    template = dw["death_label_template"]
+    if not os.path.isfile(os.path.join(BASE, template)):
+        return None  # a missing template must disable, not fabricate
+    return region, template
 
 
 def _gen_afk_farm(a, target_exe, config, afk, afk_k):
@@ -1147,10 +1160,9 @@ def _gen_afk_farm(a, target_exe, config, afk, afk_k):
         # Old format: list of slot keys
         for mk in slots_cfg:
             entry = mm.get(mk, {}) if isinstance(mm, dict) else {}
-            trig = (entry.get("trigger") or "").strip()
             x = int(entry.get("x", 0))
             y = int(entry.get("y", 0))
-            if trig and x > 0 and y > 0:
+            if x > 0 and y > 0:
                 positions.append({"name": mk, "x": x, "y": y})
     else:
         # New format: dict with slot configs
@@ -1158,15 +1170,29 @@ def _gen_afk_farm(a, target_exe, config, afk, afk_k):
             if not slot_cfg.get("enabled", False):
                 continue
             entry = mm.get(mk, {}) if isinstance(mm, dict) else {}
-            trig = (entry.get("trigger") or "").strip()
             x = int(entry.get("x", 0))
             y = int(entry.get("y", 0))
-            if trig and x > 0 and y > 0:
+            # T-165: the AFK cycle consumes the slot's x/y only - a manual
+            # minimap hotkey trigger is unrelated to AFK position availability.
+            if x > 0 and y > 0:
                 positions.append({"name": mk, "x": x, "y": y})
                 if slot_cfg.get("move_when_pressed", False):
                     move_slots.append(mk)
-    
-    dl_region, dl_template = _deathwatch_cfg()
+
+    # T-164: NEVER fabricate coordinates. AFK enabled with zero usable
+    # positions = the AFK block is DISABLED (no clicks/moves) and
+    # validate_config reports why - an invented Mid would automate the wrong
+    # spot on the map.
+    if not positions:
+        return
+
+    dl = _deathwatch_cfg()
+    if dl is None:
+        # T-166: no valid death detector (missing/corrupt config or template)
+        # -> AFK is DISABLED, fail-closed. validate_config reports why; a
+        # fabricated detector could pause/automate on the wrong pixels.
+        return
+    dl_region, dl_template = dl
     dl_x1, dl_y1, dl_x2, dl_y2 = dl_region
     death_template = dl_template
     if not os.path.isabs(death_template):
@@ -1183,8 +1209,6 @@ def _gen_afk_farm(a, target_exe, config, afk, afk_k):
     a.append("        return")
     a.append("    currentTime := A_TickCount")
     a.append("")
-    if not positions:
-        positions = [{"name": "Mid", "x": 116, "y": 293}]
     a.append("    ; --- restart -------------------------------------------------")
     a.append("    if (P_afk_NeedRestart) {")
     a.append("        P_afk_NeedRestart := false")
@@ -1199,14 +1223,24 @@ def _gen_afk_farm(a, target_exe, config, afk, afk_k):
     a.append("        P_afk_DeathCheck := currentTime")
     a.append("        ImageSearch, , , " + str(dl_x1) + ", " + str(dl_y1) + ", " + str(dl_x2) + ", " + str(dl_y2) + ", *40 " + death_template)
     a.append("        if (ErrorLevel = 0) {")
+    a.append("            ; found death label -> dead, pause")
     a.append("            if (!P_afk_WasDead) {")
     a.append("                P_afk_WasDead := true")
     a.append("            }")
-    a.append("        } else {")
+    a.append("            P_afk_DetectorFault := false")
+    a.append("        } else if (ErrorLevel = 1) {")
+    a.append("            ; confidently not found -> alive")
     a.append("            if (P_afk_WasDead) {")
     a.append("                P_afk_WasDead := false")
     a.append("                P_afk_NeedRestart := true")
     a.append("            }")
+    a.append("            P_afk_DetectorFault := false")
+    a.append("        } else {")
+    a.append("            ; ErrorLevel 2 = search could not be conducted.")
+    a.append("            ; FAIL CLOSED (T-166): UNKNOWN != SAFE. Treat as dead so")
+    a.append("            ; the cycle skips every move/click/combo below.")
+    a.append("            P_afk_WasDead := true")
+    a.append("            P_afk_DetectorFault := true")
     a.append("        }")
     a.append("    }")
     a.append("")
@@ -1409,6 +1443,41 @@ def generate_script(config):
     a.append("")
     return "\n".join(a), dropped
 
+def _afk_usable_position_count(config):
+    """Number of AFK slots that translate to a usable minimap position - the
+    SAME rule _gen_afk_farm uses to decide whether a cycle can exist (T-164).
+    A usable slot needs its minimap entry with valid x/y (current rule also
+    requires the minimap trigger; T-165 revisits that dependency)."""
+    afk = config.get("afkfarm", {})
+    mm = config.get("minimap", {})
+    slots = afk.get("slots", {}) if isinstance(afk, dict) else {}
+    usable = 0
+
+    def _usable(entry):
+        if not isinstance(entry, dict):
+            return False
+        try:
+            x = int(entry.get("x", 0))
+            y = int(entry.get("y", 0))
+        except (TypeError, ValueError):
+            return False
+        # T-165: valid coordinates alone make the slot usable for AFK - a
+        # minimap hotkey trigger is unrelated to the AFK cycle.
+        return x > 0 and y > 0
+
+    if isinstance(slots, list):
+        for mk in slots:
+            if _usable(mm.get(mk, {}) if isinstance(mm, dict) else {}):
+                usable += 1
+    elif isinstance(slots, dict):
+        for mk, sc in slots.items():
+            if not sc.get("enabled", False):
+                continue
+            if _usable(mm.get(mk, {}) if isinstance(mm, dict) else {}):
+                usable += 1
+    return usable
+
+
 def validate_config(config):
     """Check config for common mistakes before generation. Returns list of warnings."""
     warnings = []
@@ -1479,6 +1548,18 @@ def validate_config(config):
         tk = (afk.get("toggle_key") or "").strip()
         if tk:
             _check(tk, "AFK toggle")
+            if _afk_usable_position_count(config) == 0:
+                # T-164: enabled AFK with zero usable positions must be
+                # reported, not silently given fabricated coordinates.
+                warnings.append(
+                    "AFK Farm enabled but no usable minimap positions - "
+                    "AFK disabled (no automated clicks will be generated)")
+            if _deathwatch_cfg() is None:
+                # T-166: the death detector must exist and be valid, or AFK
+                # is disabled fail-closed - never a hardcoded detector.
+                warnings.append(
+                    "AFK death detector unavailable (missing/invalid "
+                    "deathwatch config or template) - AFK disabled")
 
     # Check target_exe
     target = toggles.get("target_exe", "")

@@ -69,6 +69,12 @@ config_warning = None
 # writable; otherwise the reason the guard is armed. Cleared only by an
 # explicit successful recovery/import/reset.
 config_write_blocked = None
+# Independent guard for config.local.json (T-169): a corrupt/unreadable/
+# semantic-invalid local file may be ignored IN MEMORY, but automatic
+# save/apply/quit must never overwrite it - a healthy primary config does not
+# authorize destroying an unsafe local file. Missing local = first run,
+# writable. Cleared only by an explicit successful local recovery/write.
+local_write_blocked = None
 
 
 def default_config():
@@ -96,7 +102,7 @@ def _load_validated_on_disk(data):
 
 
 def load_config():
-    global config_warning, config_write_blocked
+    global config_warning, config_write_blocked, local_write_blocked
     config_write_blocked = None
     cfg = default_config()
     data, err = config_store.read_raw(CONFIG_FILE)
@@ -127,17 +133,23 @@ def load_config():
 
     local_data, local_err = config_store.read_raw(CONFIG_LOCAL_FILE)
     if local_err == "corrupt":
+        local_write_blocked = "corrupt"
         print("config_store: config.local.json corrupt, ignoring runtime state",
               file=sys.stderr)
     elif local_err == "io_error":
+        local_write_blocked = "io_error"
         print("config_store: config.local.json unreadable, ignoring runtime state",
               file=sys.stderr)
+    elif local_err == "missing":
+        local_write_blocked = None  # first run: writable
     elif local_err is None:
         local_problems = config_store.validate_local_config(local_data)
         if local_problems:
+            local_write_blocked = "invalid"
             for p in local_problems:
                 print("config_store: config.local.json ignored: %s" % p, file=sys.stderr)
         else:
+            local_write_blocked = None  # healthy: writable
             cfg = config_store.merge_volatile(cfg, local_data)
     return cfg
 
@@ -227,16 +239,36 @@ def save_config(config, bypass_guard=False):
               "backup to re-enable saving" % config_write_blocked, file=sys.stderr)
         return False
     stable, local = config_store.split_volatile(config)
+    # T-170: snapshot the previous local half so a failed save can roll it
+    # back - save_config(False) must leave NO durable candidate half behind.
+    local_existed = os.path.exists(CONFIG_LOCAL_FILE)
+    local_prev = None
+    if local_existed:
+        try:
+            with open(CONFIG_LOCAL_FILE, "rb") as f:
+                local_prev = f.read()
+        except OSError:
+            local_prev = None
+    local_written = False
     try:
         # Local (volatile) half FIRST, stable half LAST (T-161): on a failed
         # save the PRIMARY config.json is never left ahead of the failure -
-        # "False" always means the main config did not change. The local half
-        # may be ahead, which is harmless (it only holds runtime-volatile
-        # state and is rewritten on the next successful save).
-        config_store.atomic_write(CONFIG_LOCAL_FILE, local)
+        # "False" always means the main config did not change.
+        if not local_write_blocked or bypass_guard:
+            config_store.atomic_write(CONFIG_LOCAL_FILE, local)
+            local_written = True
         config_store.atomic_write(CONFIG_FILE, stable)
     except OSError as e:
         print("config_store: save failed: %s" % e, file=sys.stderr)
+        if local_written:
+            try:
+                if local_existed and local_prev is not None:
+                    config_store.atomic_write(
+                        CONFIG_LOCAL_FILE, json.loads(local_prev.decode("utf-8")))
+                elif not local_existed:
+                    os.remove(CONFIG_LOCAL_FILE)
+            except Exception:
+                pass  # rollback is best-effort; primary config was not touched
         return False
     return True
 

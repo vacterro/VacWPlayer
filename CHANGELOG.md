@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.3.30 (2026-08-11)
+- Safety audit pass 3, 10 tickets (T-163..T-172). Generated AHK no longer closes other AHK processes by filename wildcard (^wr.*\.ahk) - ownership and replacement are python-side, PID/identity-verified only (T-163).
+- AFK farm: never fabricates map coordinates (no invented Mid fallback; enabled-with-zero-positions is disabled and reported), positions no longer depend on the minimap hotkey trigger, and the death detector fails CLOSED - ImageSearch ErrorLevel 2 (search could not be conducted) pauses AFK instead of running the alive path; the deathwatch config is consumed through the canonical validator with a template-resource check (T-164, T-165, T-166).
+- Autobuy now loads deathwatch_config.json through the canonical engine validator and the canonical quickbuy parser - an enabled autobuy with invalid/corrupt config is a rejected candidate, never a silent no-op (T-167).
+- Validators: afkfarm covers move_duration/combo_interval/follow_cursor (string "false" can never become bool True); unknown mode ("general" or a configured champion) is rejected (T-168, T-172).
+- Persistence: config.local.json has its own write guard (an unsafe local file is never overwritten by a healthy primary save); a failed two-file save rolls back the local half so no durable hybrid state survives (T-169, T-170).
+- ProcessRunner: a dead child is cleared before a replacement spawn - a failed spawn leaves proc=None (T-171).
+- Tests: suite 449 -> 543 PASS, pyflakes 0.
+
 ## v0.3.29 (2026-08-11)
 - Safety audit pass 2, 11 tickets (T-150..T-162). Monitor OFF fixed: save_monitor_state now returns the persistence result, so the checkbox no longer bounces back to ON after a successful disable (T-150).
 - Engine config contracts: autocontinue buttons now require name/template/region/threshold (runtime indexes them directly) and all pixel-coordinate regions must be integer pixels - bool/float coordinates are rejected (T-151). The GUI reads engine configs through the engine's own validator: nested garbage parses as display-canonical and can never be written back over (T-152).

@@ -14,6 +14,19 @@ if str(BASE) not in sys.path:
 import config_store
 
 
+@pytest.fixture(autouse=True)
+def _reset_main_globals():
+    """main module guards are process-wide globals; a test that arms one must
+    not leak it into the next (T-169 guards are module state)."""
+    yield
+    try:
+        import main as _m
+    except Exception:
+        return
+    _m.config_write_blocked = None
+    _m.local_write_blocked = None
+
+
 # --- read_raw --------------------------------------------------------------
 
 def test_read_raw_missing_file(tmp_path):
@@ -94,7 +107,7 @@ def test_restore_backup_missing_returns_false(tmp_path):
 
 def test_validate_config_ok():
     assert config_store.validate_config({
-        "mode": "ryze", "lang": "ru",
+        "mode": "general", "lang": "ru",
         "toggles": {}, "combos": [], "champions": {},
         "minimap": {}, "afkfarm": {},
     }) == []
@@ -234,6 +247,52 @@ def test_validate_config_afkfarm_valid_pass():
                     "slots": {"top": {"enabled": True,
                                       "move_when_pressed": False}}},
         "afkfarm_extra": 5}) == []
+
+
+# --- T-168: afkfarm validator must cover builder-consumed fields ---------------
+
+@pytest.mark.parametrize("bad", [
+    {"move_duration": "x"},
+    {"move_duration": True},        # bool is not a duration
+    {"move_duration": 100},         # below UI minimum 500
+    {"move_duration": -1},
+    {"combo_interval": []},
+    {"combo_interval": True},       # bool is not an interval
+    {"combo_interval": 5},          # below UI minimum 15
+    {"follow_cursor": "false"},     # string must NEVER become bool True
+    {"follow_cursor": 1},
+])
+def test_validate_config_afkfarm_builder_fields_rejected(bad):
+    problems = config_store.validate_config({"afkfarm": bad})
+    assert problems, bad
+
+
+def test_validate_config_afkfarm_builder_fields_valid():
+    assert config_store.validate_config({
+        "afkfarm": {"move_duration": 5000, "combo_interval": 128,
+                    "follow_cursor": True}}) == []
+
+
+def test_validate_config_afkfarm_boundary_minimums():
+    assert config_store.validate_config({"afkfarm": {"move_duration": 500}}) == []
+    assert config_store.validate_config({"afkfarm": {"combo_interval": 15}}) == []
+    assert config_store.validate_config({"afkfarm": {"move_duration": 499}})
+    assert config_store.validate_config({"afkfarm": {"combo_interval": 14}})
+
+
+# --- T-172: unknown mode must not pass structural validation ------------------
+
+def test_validate_config_unknown_mode_rejected():
+    """mode != 'general' must name a configured champion - anything else
+    silently generates no combos (T-172)."""
+    champions = {"ryze": {"trigger_pvp": "F15", "keys_pvp": "q,w,e"}}
+    problems = config_store.validate_config(
+        {"mode": "definitely_not_a_champion", "champions": champions})
+    assert problems
+    assert config_store.validate_config(
+        {"mode": "ryze", "champions": champions}) == []
+    assert config_store.validate_config({"mode": "general"}) == []
+    assert config_store.validate_config({}) == []
 
 
 def test_validate_config_toggles_hostile_values():
@@ -769,7 +828,7 @@ def test_load_config_corrupt_valid_bak_restores_and_unblocks(monkeypatch, tmp_pa
     main_mod.CONFIG_FILE = str(cfg_file)
     main_mod.CONFIG_LOCAL_FILE = str(tmp_path / "config.local.json")
     cfg_file.write_text("{corrupt", encoding="utf-8")
-    good = '{"mode": "ryze", "toggles": {"stop_key": "k"}, "combos": [], ' \
+    good = '{"mode": "general", "toggles": {"stop_key": "k"}, "combos": [], ' \
            '"champions": {}, "minimap": {}, "afkfarm": {}}'
     bak = tmp_path / "config.json.bak"
     bak.write_text(good, encoding="utf-8")
@@ -796,13 +855,13 @@ def test_import_clears_write_guard(monkeypatch, tmp_path):
     monkeypatch.setattr(w, "_rebuild_ui", lambda: None)
 
     good = tmp_path / "good.json"
-    good.write_text('{"mode": "ryze", "toggles": {}, "combos": [], '
+    good.write_text('{"mode": "general", "toggles": {}, "combos": [], '
                     '"champions": {}, "minimap": {}, "afkfarm": {}, "lang": "en"}',
                     encoding="utf-8")
     main_mod.config_write_blocked = "io_error"
     w._do_import_file(str(good))
     data = json.loads(cfg_file.read_text(encoding="utf-8"))
-    assert data["mode"] == "ryze"
+    assert data["mode"] == "general"
     assert main_mod.config_write_blocked is None  # cleared only after write+read-back
     main_mod.config_write_blocked = None
 
@@ -834,7 +893,7 @@ def test_import_valid_config_saved(monkeypatch, tmp_path):
     monkeypatch.setattr(w, "_rebuild_ui", lambda: None)
 
     good = tmp_path / "good.json"
-    good.write_text('{"mode": "ryze", "toggles": {}, "combos": [], '
+    good.write_text('{"mode": "general", "toggles": {}, "combos": [], '
                     '"champions": {}, "minimap": {}, "afkfarm": {}, "lang": "en"}',
                     encoding="utf-8")
     w._do_import_file(str(good))
@@ -955,7 +1014,7 @@ def test_setup_tray_wires_quit_through_marshaling(monkeypatch):
 
 # --- T-156: import must not clear the write guard before persistence ----------
 
-_VALID_IMPORT = '{"mode": "ryze", "toggles": {}, "combos": [], "champions": {}, "minimap": {}, "afkfarm": {}, "lang": "en"}'
+_VALID_IMPORT = '{"mode": "general", "toggles": {}, "combos": [], "champions": {}, "minimap": {}, "afkfarm": {}, "lang": "en"}'
 
 
 def _import_harness(tmp_path, monkeypatch):
@@ -1001,7 +1060,7 @@ def test_import_success_clears_guard_and_persists(tmp_path, monkeypatch):
     main_mod.config_write_blocked = "corrupt"
     w._do_import_file(str(import_file))
     data = json.loads(cfg_file.read_text(encoding="utf-8"))
-    assert data["mode"] == "ryze"
+    assert data["mode"] == "general"
     assert main_mod.config_write_blocked is None  # cleared only on success
     main_mod.config_write_blocked = None
 
@@ -1062,3 +1121,140 @@ def test_backup_success_copies_stable_config(tmp_path, monkeypatch):
     data = json.loads(files[0].read_text(encoding="utf-8"))
     assert data["mode"] == "ryze"
     assert status and not errors
+
+# --- T-169: config.local.json needs its own write guard -----------------------
+
+_VALID_STABLE = '{"mode": "general", "toggles": {}, "combos": [], "champions": {}, "minimap": {}, "afkfarm": {}, "lang": "en"}'
+
+
+def _local_harness(tmp_path, monkeypatch, local_bytes="{corrupt local"):
+    import main as main_mod
+    cfg_file = tmp_path / "config.json"
+    local_file = tmp_path / "config.local.json"
+    cfg_file.write_text(_VALID_STABLE, encoding="utf-8")
+    local_file.write_text(local_bytes, encoding="utf-8")
+    main_mod.CONFIG_FILE = str(cfg_file)
+    main_mod.CONFIG_LOCAL_FILE = str(local_file)
+    main_mod.config_write_blocked = None
+    main_mod.local_write_blocked = None
+    return main_mod, cfg_file, local_file
+
+
+def test_load_config_arms_local_guard_on_corrupt_local(tmp_path, monkeypatch):
+    main_mod, _, _ = _local_harness(tmp_path, monkeypatch)
+    main_mod.load_config()
+    assert main_mod.local_write_blocked == "corrupt"
+
+
+def test_load_config_arms_local_guard_on_invalid_local(tmp_path, monkeypatch):
+    main_mod, _, _ = _local_harness(tmp_path, monkeypatch, '{"window": {"active_tab": "x"}}')
+    main_mod.load_config()
+    assert main_mod.local_write_blocked == "invalid"
+
+
+def test_save_config_preserves_unsafe_local(tmp_path, monkeypatch):
+    """A healthy primary must never authorize overwriting an unsafe local
+    file: normal save leaves corrupt local byte-identical (T-169)."""
+    main_mod, cfg_file, local_file = _local_harness(tmp_path, monkeypatch)
+    main_mod.load_config()
+    assert main_mod.local_write_blocked == "corrupt"
+    ok = main_mod.save_config({"mode": "ryze", "window": {"active_tab": 1}})
+    assert ok is True
+    assert local_file.read_text(encoding="utf-8") == "{corrupt local"
+    data = json.loads(cfg_file.read_text(encoding="utf-8"))
+    assert data["mode"] == "ryze"
+
+
+def test_save_config_missing_local_creates_it_normally(tmp_path, monkeypatch):
+    """Missing local = first run, writable: a normal save creates it."""
+    import main as main_mod
+    cfg_file = tmp_path / "config.json"
+    local_file = tmp_path / "config.local.json"
+    cfg_file.write_text(_VALID_STABLE, encoding="utf-8")
+    main_mod.CONFIG_FILE = str(cfg_file)
+    main_mod.CONFIG_LOCAL_FILE = str(local_file)
+    main_mod.config_write_blocked = None
+    main_mod.local_write_blocked = None
+    ok = main_mod.save_config({"mode": "ryze", "window": {"active_tab": 1}})
+    assert ok is True
+    assert local_file.exists()
+    data = json.loads(local_file.read_text(encoding="utf-8"))
+    assert data["window"]["active_tab"] == 1
+
+
+# --- T-170: save_config(False) must leave NO durable candidate half -----------
+
+def test_save_config_stable_failure_rolls_back_local(tmp_path, monkeypatch):
+    """Old stable A + old local A, candidate B: local write succeeds, stable
+    write fails -> save_config returns False AND restart must NOT observe the
+    hybrid (stable A + local B) - the local candidate half is rolled back
+    (T-170)."""
+    import main as main_mod
+    cfg_file = tmp_path / "config.json"
+    local_file = tmp_path / "config.local.json"
+    cfg_file.write_text('{"mode": "A"}', encoding="utf-8")
+    local_file.write_text('{"window": {"active_tab": 0}}', encoding="utf-8")
+    main_mod.CONFIG_FILE = str(cfg_file)
+    main_mod.CONFIG_LOCAL_FILE = str(local_file)
+    main_mod.config_write_blocked = None
+    main_mod.local_write_blocked = None
+
+    real_atomic = main_mod.config_store.atomic_write
+
+    def selective(path, data):
+        if os.path.normcase(str(path)) == os.path.normcase(str(cfg_file)):
+            raise OSError(13, "denied", path)  # stable write fails
+        return real_atomic(path, data)
+
+    monkeypatch.setattr(main_mod.config_store, "atomic_write", selective)
+    assert main_mod.save_config({"mode": "B",
+                                 "window": {"active_tab": 1}}) is False
+    # restart observes NO candidate half:
+    assert json.loads(cfg_file.read_text(encoding="utf-8")) == {"mode": "A"}
+    assert json.loads(local_file.read_text(encoding="utf-8")) == {
+        "window": {"active_tab": 0}}
+
+
+def test_save_config_stable_failure_removes_new_local(tmp_path, monkeypatch):
+    """Local did not exist before the failed save -> it must not be created
+    as a surviving candidate half (T-170)."""
+    import main as main_mod
+    cfg_file = tmp_path / "config.json"
+    local_file = tmp_path / "config.local.json"
+    cfg_file.write_text('{"mode": "A"}', encoding="utf-8")
+    main_mod.CONFIG_FILE = str(cfg_file)
+    main_mod.CONFIG_LOCAL_FILE = str(local_file)
+    main_mod.config_write_blocked = None
+    main_mod.local_write_blocked = None
+
+    real_atomic = main_mod.config_store.atomic_write
+
+    def selective(path, data):
+        if os.path.normcase(str(path)) == os.path.normcase(str(cfg_file)):
+            raise OSError(13, "denied", path)
+        return real_atomic(path, data)
+
+    monkeypatch.setattr(main_mod.config_store, "atomic_write", selective)
+    assert main_mod.save_config({"mode": "B",
+                                 "window": {"active_tab": 1}}) is False
+    assert not local_file.exists()  # no orphaned candidate local half
+
+
+def test_import_stable_failure_rolls_back_and_restores_guard(tmp_path, monkeypatch):
+    """Explicit import with the same failure order (local ok, stable fails):
+    no hybrid survives and the previous write guard is restored (T-170/T-156)."""
+    main_mod, w, cfg_file, import_file = _import_harness(tmp_path, monkeypatch)
+    local_file = tmp_path / "config.local.json"
+    real_atomic = main_mod.config_store.atomic_write
+
+    def selective(path, data):
+        if os.path.normcase(str(path)) == os.path.normcase(str(cfg_file)):
+            raise OSError(13, "denied", path)
+        return real_atomic(path, data)
+
+    monkeypatch.setattr(main_mod.config_store, "atomic_write", selective)
+    main_mod.config_write_blocked = "corrupt"
+    w._do_import_file(str(import_file))
+    assert main_mod.config_write_blocked == "corrupt"  # guard restored
+    assert not local_file.exists()  # no candidate local half survives
+    assert cfg_file.read_text(encoding="utf-8") == "{corrupt source"

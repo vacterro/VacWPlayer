@@ -408,6 +408,68 @@ def test_process_runner_start_is_noop_when_running():
         pr.stop()
 
 
+# --- T-171: failed spawn after a dead proc must leave proc = None -------------
+
+def test_process_runner_failed_spawn_after_dead_proc_clears_proc(monkeypatch):
+    """A dead old Popen + failed new Popen must leave self.proc = None (the
+    doc promise) - never a stale reference to the dead child (T-171)."""
+    stub = "tests/_stub_engine.py"
+    status, last, check = FakeVar(), FakeVar(), FakeVar()
+    pr = process_runner.ProcessRunner(stub, status, last, check)
+
+    class _DeadProc:
+        def poll(self):
+            return 0  # exited
+
+    pr.proc = _DeadProc()
+
+    def boom(*a, **k):
+        raise OSError(13, "no spawn")
+
+    monkeypatch.setattr(process_runner.subprocess, "Popen", boom)
+    assert pr.start([]) is False
+    assert pr.proc is None          # not a stale dead proc
+    assert check.value is False
+    assert status.value.startswith("Error")
+
+
+def test_process_runner_successful_spawn_replaces_dead_proc(monkeypatch):
+    """A dead old proc is transparently replaced by a live spawn."""
+    stub = "tests/_stub_engine.py"
+    status, last, check = FakeVar(), FakeVar(), FakeVar()
+    pr = process_runner.ProcessRunner(stub, status, last, check)
+
+    class _DeadProc:
+        def poll(self):
+            return 0
+
+    pr.proc = _DeadProc()
+
+    class _LiveProc:
+        def __init__(self, *a, **k):
+            self._alive = True
+
+        def poll(self):
+            return None if self._alive else 0
+
+        def terminate(self):
+            self._alive = False
+
+        def wait(self, timeout=None):
+            self._alive = False
+            return 0
+
+    monkeypatch.setattr(process_runner.subprocess, "Popen",
+                        lambda *a, **k: _LiveProc())
+    monkeypatch.setattr(process_runner.threading.Thread,
+                        "start", lambda self: None)
+    try:
+        assert pr.start([]) is True
+        assert pr.is_running()
+    finally:
+        pr.stop()
+
+
 def test_find_window_raises_when_missing(monkeypatch):
     monkeypatch.setattr(capture.win32gui, "FindWindow", lambda *a: 0)
     with pytest.raises(RuntimeError):

@@ -176,12 +176,29 @@ def _check_minimap(problems, minimap):
 
 def _check_afkfarm(problems, afk):
     """AFK farm fields feed booleans/strings/AHK generation directly (T-136);
-    slots are dicts of {enabled, move_when_pressed} or legacy list of names."""
+    slots are dicts of {enabled, move_when_pressed} or legacy list of names.
+    move_duration/combo_interval/follow_cursor are consumed by ahk_builder
+    with int()/bool() and must carry exact contracts (T-168); UI minimums are
+    the canonical bounds (afkfarm_tab: move_duration >= 500, combo >= 15)."""
     if "enabled" in afk and not isinstance(afk["enabled"], bool):
         problems.append("'afkfarm.enabled' must be a boolean, got %r" % afk["enabled"])
     for f in ("toggle_key", "combo_keys"):
         if f in afk and not isinstance(afk[f], str):
             problems.append("'afkfarm.%s' must be a string, got %r" % (f, afk[f]))
+    if "follow_cursor" in afk and not isinstance(afk["follow_cursor"], bool):
+        # A string "false" must NEVER become bool True via bool("false").
+        problems.append("'afkfarm.follow_cursor' must be a boolean, got %r"
+                        % afk["follow_cursor"])
+    for f, minimum in (("move_duration", 500), ("combo_interval", 15)):
+        v = afk.get(f)
+        if v is None:
+            continue
+        if not (isinstance(v, int) and not isinstance(v, bool)):
+            problems.append("'afkfarm.%s' must be a non-bool integer, got %r"
+                            % (f, v))
+        elif v < minimum:
+            problems.append("'afkfarm.%s' must be >= %d, got %r"
+                            % (f, minimum, v))
     slots = afk.get("slots")
     if slots is not None:
         if isinstance(slots, list):
@@ -260,6 +277,15 @@ def validate_config(data: dict) -> list[str]:
             problems.append("'%s' is not a string" % key)
     if "mode" in data and isinstance(data["mode"], str) and not data["mode"]:
         problems.append("'mode' is an empty string")
+    elif isinstance(data.get("mode"), str) and data["mode"] != "general":
+        # T-172: any mode other than "general" names a champion whose combo
+        # set the builder activates. An unknown mode passes structural checks
+        # but silently generates no combos - reject it up front.
+        champions = data.get("champions")
+        if not isinstance(champions, dict) or data["mode"] not in champions:
+            problems.append(
+                "'mode' %r is not 'general' and not a configured champion"
+                % data["mode"])
     if "window" in data:
         _check_window(problems, data["window"])
     return problems
