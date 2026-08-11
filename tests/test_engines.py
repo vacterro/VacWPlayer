@@ -1,8 +1,10 @@
 """Engine unit tests: config load, subprocess lifecycle, hwnd acquisition."""
 
+import os
 import sys
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 BASE = Path(__file__).resolve().parent.parent
@@ -78,14 +80,14 @@ def test_load_config_wrongtype_poll_interval_exits(engine, monkeypatch):
 
 @pytest.mark.parametrize("engine", ENGINES, ids=lambda m: m.__name__)
 def test_load_config_valid_types_pass(engine, monkeypatch):
-    good = {
+    good = dict(engine_config.canonical_default(
+        os.path.basename(engine.CONFIG_PATH)))
+    good.update({
         "monitor_enabled": False,
         "window_title": "BlueStacks App Player",
         "poll_interval_sec": 1.0,
         "click_cooldown_sec": 3.0,
-        "templates": [],
-        "buttons": [],
-    }
+    })
     monkeypatch.setattr("json.load", lambda *a, **k: good)
     cfg = engine.load_config()
     assert cfg["window_title"] == "BlueStacks App Player"
@@ -191,9 +193,33 @@ def test_deathwatch_invalid_quickbuy_key_rejected(monkeypatch):
 
 
 def test_deathwatch_quickbuy_key_vk_hex_accepted(monkeypatch):
-    cfg = {"window_title": "X", "quickbuy_key": "vk5A"}
+    cfg = dict(engine_config.canonical_default("deathwatch_config.json"))
+    cfg["quickbuy_key"] = "vk5A"
     out = _load_with(deathwatch, cfg, monkeypatch)
     assert out["quickbuy_key"] == "vk5A"
+
+
+# --- T-140: one canonical quickbuy parser, runtime consumes it ----------------
+
+def test_quickbuy_key_vk_parser():
+    assert engine_config.quickbuy_key_vk("a") == 0x41
+    assert engine_config.quickbuy_key_vk("Z") == 0x5A
+    assert engine_config.quickbuy_key_vk("5") == 0x35
+    assert engine_config.quickbuy_key_vk("vk5A") == 0x5A
+    assert engine_config.quickbuy_key_vk("Ж") is None  # ord() is not a real VK
+    assert engine_config.quickbuy_key_vk("Shift+") is None
+    assert engine_config.quickbuy_key_vk("vkGG") is None
+    assert engine_config.quickbuy_key_vk("vk") is None
+    assert engine_config.quickbuy_key_vk("") is None
+
+
+def test_deathwatch_non_ascii_quickbuy_key_rejected(monkeypatch):
+    """The validator must agree with the parser: a non-ASCII letter passes
+    ord()-as-VK today and would feed keybd_event a meaningless code."""
+    cfg = dict(engine_config.canonical_default("deathwatch_config.json"))
+    cfg["quickbuy_key"] = "Ж"
+    with pytest.raises(SystemExit):
+        _load_with(deathwatch, cfg, monkeypatch)
 
 
 def test_deathwatch_region_wrong_shape_rejected(monkeypatch):
@@ -237,6 +263,46 @@ def test_validate_engine_config_passes_real_deathwatch():
     with open(deathwatch.CONFIG_PATH, encoding="utf-8") as f:
         cfg = _json.load(f)
     assert engine_config.validate_engine_config(cfg, "deathwatch_config.json") is cfg
+
+
+# --- T-139: runtime-indexed keys are REQUIRED per engine ----------------------
+
+def test_validate_engine_config_requires_window_title():
+    for name in ("accept_config.json", "surrender_config.json",
+                 "autocontinue_config.json", "deathwatch_config.json"):
+        with pytest.raises(SystemExit) as ex:
+            engine_config.validate_engine_config({}, name)
+        assert ex.value.code == 1, name
+
+
+def test_validate_engine_config_requires_buttons_for_autocontinue():
+    cfg = {"window_title": "Game"}
+    with pytest.raises(SystemExit):
+        engine_config.validate_engine_config(cfg, "autocontinue_config.json")
+    cfg["buttons"] = []
+    assert engine_config.validate_engine_config(cfg, "autocontinue_config.json") is cfg
+
+
+def test_validate_engine_config_requires_deathwatch_core():
+    cfg = {"window_title": "Game"}
+    with pytest.raises(SystemExit):
+        engine_config.validate_engine_config(cfg, "deathwatch_config.json")
+
+
+def test_canonical_defaults_validate_clean():
+    """ENGINE_DEFAULTS must satisfy each engine's own REQUIRED contract - the
+    first-run files they produce are guaranteed valid."""
+    for name in ("accept_config.json", "surrender_config.json",
+                 "autocontinue_config.json", "deathwatch_config.json"):
+        cfg = engine_config.canonical_default(name)
+        assert engine_config.validate_engine_config(cfg, name) is cfg, name
+
+
+def test_optional_keys_may_be_absent():
+    """Required = what runtime indexes unconditionally; everything else stays
+    optional for backward compatibility with older configs."""
+    cfg = {"window_title": "Game", "buttons": []}
+    assert engine_config.validate_engine_config(cfg, "autocontinue_config.json") is cfg
 
 
 def test_process_runner_start_stop_restart():
@@ -286,6 +352,130 @@ def test_find_window_raises_when_missing(monkeypatch):
 def test_find_window_returns_hwnd(monkeypatch):
     monkeypatch.setattr(capture.win32gui, "FindWindow", lambda *a: 12345)
     assert capture.find_window("whatever") == 12345
+
+
+# --- T-146: is_foreground + occlusion-safe grab_client_region -----------------
+
+def test_is_foreground_uses_foreground_window(monkeypatch):
+    monkeypatch.setattr(capture.win32gui, "GetForegroundWindow", lambda: 999)
+    assert capture.is_foreground(999) is True
+    assert capture.is_foreground(1) is False
+
+
+def test_grab_client_region_crops_printwindow(monkeypatch):
+    calls = []
+    full = np.zeros((100, 200, 3), dtype=np.uint8)
+    full[50:60, 30:40] = 7
+    monkeypatch.setattr(capture, "grab", lambda h: calls.append(h) or full)
+    crop = capture.grab_client_region(123, [30, 50, 40, 60])
+    assert calls == [123]
+    assert crop.shape == (10, 10, 3)
+    assert (crop == 7).all()  # the marked pixels landed inside the crop
+
+
+def test_grab_client_region_passthrough_failure(monkeypatch):
+    def boom(hwnd):
+        raise RuntimeError("minimized")
+    monkeypatch.setattr(capture, "grab", boom)
+    try:
+        capture.grab_client_region(1, [0, 0, 1, 1])
+        raise AssertionError("should have raised")
+    except RuntimeError:
+        pass
+
+
+# --- T-147: GDI/DC cleanup on every capture path (incl. mid-acquisition throw)
+
+class _FakeDC:
+    def __init__(self, cleanup, name):
+        self.cleanup = cleanup
+        self.name = name
+
+    def CreateCompatibleDC(self):
+        self.cleanup.append("create_dc")
+        return _FakeDC(self.cleanup, "save")
+
+    def GetSafeHdc(self):
+        return 7
+
+    def SelectObject(self, bmp):
+        self.cleanup.append("select")
+
+    def DeleteDC(self):
+        self.cleanup.append("del_dc:" + self.name)
+
+
+class _FakeBitmap:
+    def __init__(self, cleanup):
+        self.cleanup = cleanup
+
+    def CreateCompatibleBitmap(self, dc, w, h):
+        self.cleanup.append("create_bmp")
+
+    def GetHandle(self):
+        return 9
+
+    def GetInfo(self):
+        return {"bmWidth": 10, "bmHeight": 10}
+
+    def GetBitmapBits(self, ordered):
+        return b"\x00\x00\x00\x00" * 100  # 10*10*4 bytes
+
+
+def _monkey_capture_ok(monkeypatch, cleanup):
+    monkeypatch.setattr(capture.win32gui, "GetWindowDC",
+                        lambda h: cleanup.append("get_dc") or 5)
+    monkeypatch.setattr(capture.win32ui, "CreateDCFromHandle",
+                        lambda h: cleanup.append("from_handle") or _FakeDC(cleanup, "mfc"))
+    monkeypatch.setattr(capture.win32ui, "CreateBitmap",
+                        lambda: _FakeBitmap(cleanup))
+    monkeypatch.setattr(capture.win32gui, "ReleaseDC", lambda h, d: cleanup.append("release"))
+    monkeypatch.setattr(capture.win32gui, "DeleteObject",
+                        lambda h: cleanup.append("del_obj"))
+    monkeypatch.setattr(capture.ctypes.windll.user32, "PrintWindow",
+                        lambda *a, **k: 1)
+
+
+def test_grab_cleans_all_on_success(monkeypatch):
+    cleanup = []
+    _monkey_capture_ok(monkeypatch, cleanup)
+    monkeypatch.setattr(capture, "get_client_size", lambda h: (10, 10))
+    img = capture.grab(123)
+    assert img.shape == (10, 10, 3)
+    assert cleanup == ["get_dc", "from_handle", "create_dc", "create_bmp",
+                       "select", "del_obj", "del_dc:save", "del_dc:mfc",
+                       "release"]
+
+
+def test_grab_releases_acquired_handles_on_mid_acquisition_throw(monkeypatch):
+    """A throw between GetWindowDC and SelectObject must still release
+    everything already acquired (T-147) - GetWindowDC succeeded and must not
+    leak."""
+    cleanup = []
+    monkeypatch.setattr(capture.win32gui, "GetWindowDC",
+                        lambda h: cleanup.append("get_dc") or 5)
+    monkeypatch.setattr(capture.win32ui, "CreateDCFromHandle",
+                        lambda h: (_ for _ in ()).throw(RuntimeError("boom")))
+    monkeypatch.setattr(capture.win32gui, "ReleaseDC",
+                        lambda h, d: cleanup.append("release"))
+    monkeypatch.setattr(capture, "get_client_size", lambda h: (10, 10))
+    try:
+        capture.grab(123)
+        raise AssertionError("should have raised")
+    except RuntimeError:
+        pass
+    assert "release" in cleanup  # hwnd DC never leaks
+
+
+def test_grab_rejects_zero_size_client(monkeypatch):
+    monkeypatch.setattr(capture, "get_client_size", lambda h: (0, 0))
+    monkeypatch.setattr(capture.win32gui, "GetWindowDC",
+                        lambda h: (_ for _ in ()).throw(AssertionError("must not acquire")))
+    try:
+        capture.grab(123)
+        raise AssertionError("should have raised")
+    except RuntimeError as e:
+        assert "zero" in str(e).lower()
 
 
 def test_autocontinue_group_by_region():

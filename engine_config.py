@@ -48,6 +48,103 @@ def mtime_changed(path: str, last_mtime: float) -> tuple[float, bool]:
 _BLOCKED_KEY_NAMES = frozenset("F%d" % n for n in range(13, 25))
 _QUICKBUY_KEY_RE = re.compile(r"^vk[0-9a-fA-F]{1,2}$")
 
+# Canonical defaults per engine config (T-137/T-141): the ONE source used by
+# first-run config creation, GUI initial fallbacks, Reset and tests. Values
+# are the engine-required contract plus the env-neutral shipped file values;
+# machine-specific fields (window_title) start empty.
+ENGINE_DEFAULTS = {
+    "accept_config.json": {
+        "monitor_enabled": False,
+        "window_title": "",
+        "poll_interval_sec": 1.0,
+        "click_cooldown_sec": 3.0,
+        "templates": [],
+    },
+    "surrender_config.json": {
+        "monitor_enabled": False,
+        "window_title": "",
+        "poll_interval_sec": 5.0,
+        "click_cooldown_sec": 3.0,
+        "auto_accept": True,
+        "templates": [
+            {"name": "Accept", "file": "templates/sur_accept.png",
+             "threshold": 0.75},
+            {"name": "Decline", "file": "templates/sur_decline.png",
+             "threshold": 0.75},
+        ],
+    },
+    "autocontinue_config.json": {
+        "monitor_enabled": False,
+        "window_title": "",
+        "poll_interval_sec": 0.6,
+        "click_cooldown_sec": 2.5,
+        "buttons": [
+            {"name": "continue_victory",
+             "region": [800, 690, 1140, 765],
+             "template": "templates/buttons/continue_victory.png",
+             "threshold": 0.85},
+            {"name": "continue_shared",
+             "region": [1590, 875, 1900, 940],
+             "template": "templates/buttons/continue_shared.png",
+             "threshold": 0.85},
+            {"name": "continue_awards",
+             "region": [1590, 875, 1900, 940],
+             "template": "templates/buttons/continue_awards.png",
+             "threshold": 0.85},
+        ],
+    },
+    "deathwatch_config.json": {
+        "monitor_enabled": True,
+        "window_title": "",
+        "poll_interval_sec": 0.4,
+        "shop_buffer_sec": 0.0,
+        "restore_buffer_sec": 0.0,
+        "match_threshold": 0.75,
+        "death_label_region": [900, 118, 1165, 145],
+        "timer_digits_region": [955, 143, 1035, 170],
+        "death_label_template": "templates/death_label.png",
+        "digit_templates_dir": "templates/digits",
+        "max_death_wait_sec": 90.0,
+        "quickbuy_key": "Z",
+        "quickbuy_presses": 5,
+        "quickbuy_window_ms": 10.0,
+        "blocked_keys": ["F13", "F14", "F15"],
+        "pedal_block_sec": 5.0,
+        "switch_to_work_window": False,
+        "work_window_title": "",
+        "click_mid_on_resurrect": False,
+        "lock_window_resurrect": False,
+        "autobuy_after_b": False,
+        "buy_after_b_delay_sec": 6.5,
+        "autobuy_then_mid": False,
+        "autobuy_then_mid_delay_sec": 0.5,
+        "controlsend_z": False,
+    },
+}
+
+
+def canonical_default(config_name: str) -> dict:
+    """Complete canonical config for an engine, copied so callers may mutate."""
+    return dict(ENGINE_DEFAULTS.get(config_name, {}))
+
+
+# Per-engine REQUIRED contracts (T-139): the keys each engine's runtime indexes
+# WITHOUT .get(). A config missing one of these would crash mid-loop, so it is
+# a FATAL validation error - not an "only validate when present" case. Keys
+# beyond this list stay optional for backward compatibility.
+ENGINE_REQUIRED_KEYS = {
+    "accept_config.json": ("window_title",),
+    "surrender_config.json": ("window_title",),
+    "autocontinue_config.json": ("window_title", "buttons"),
+    "deathwatch_config.json": (
+        "window_title", "poll_interval_sec", "quickbuy_key",
+        "quickbuy_presses", "quickbuy_window_ms", "shop_buffer_sec",
+        "timer_digits_region", "restore_buffer_sec", "max_death_wait_sec",
+        "digit_templates_dir", "death_label_template", "death_label_region",
+        "match_threshold",
+    ),
+}
+
 
 def _is_number(v):
     return isinstance(v, (int, float)) and not isinstance(v, bool)
@@ -57,12 +154,26 @@ def _is_finite(v):
     return _is_number(v) and math.isfinite(v)
 
 
+def quickbuy_key_vk(key) -> int | None:
+    """Canonical quickbuy-key parser (T-140): one source for both the validator
+    and the runtime.
+
+    Accepts exactly what keybd_event can use - a single ASCII letter/digit
+    (VK = its uppercase code point) or a vkNN hex code. Returns None for
+    anything else, including non-ASCII letters like 'Ж' whose ord() is not a
+    real virtual-key code and would be garbage in keybd_event.
+    """
+    if not isinstance(key, str) or not key:
+        return None
+    if len(key) == 1 and key.isascii() and key.isalnum():
+        return ord(key.upper())
+    if _QUICKBUY_KEY_RE.fullmatch(key):
+        return int(key[2:], 16)
+    return None
+
+
 def _valid_quickbuy_key(k):
-    if not isinstance(k, str) or not k:
-        return False
-    if len(k) == 1 and k.isalnum():
-        return True
-    return bool(_QUICKBUY_KEY_RE.fullmatch(k))
+    return quickbuy_key_vk(k) is not None
 
 
 def _collect_problems(cfg, name):
@@ -74,6 +185,11 @@ def _collect_problems(cfg, name):
 
     def _p(fmt, *args):
         problems.append(("%s: " + fmt) % ((name,) + args))
+
+    for key in ENGINE_REQUIRED_KEYS.get(name, ()):
+        if key not in cfg:
+            _p("missing required key %r (runtime indexes it without a default)",
+               key)
 
     def _check_bool(key):
         if key in cfg and not isinstance(cfg[key], bool):

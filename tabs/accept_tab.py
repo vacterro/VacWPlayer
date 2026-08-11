@@ -5,7 +5,8 @@ from theme import VintageSunken, VintageButton, VintageLabel, VintageEntry, TOKE
 from vintage_widgets import VintageWindowPicker
 from process_runner import ProcessRunner
 from locales import Locale
-from tabs.tab_config import load_json, save_json
+from tabs.tab_config import load_json, update_json
+from engine_config import canonical_default
 
 BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -162,13 +163,11 @@ class AcceptTab(tk.Frame):
                                       initialvalue=os.path.splitext(os.path.basename(path))[0])
         if not name:
             return
-        cfg = load_json(self.cfg_path)
-        cfg.setdefault("templates", []).append({
+        update_json(self.cfg_path, lambda c: c["templates"].append({
             "name": name,
             "file": rel,
             "threshold": 0.8,
-        })
-        save_json(self.cfg_path, cfg)
+        }), canonical_default(self.CONFIG_NAME))
         self._refresh_tree()
 
     def remove_template(self):
@@ -177,26 +176,27 @@ class AcceptTab(tk.Frame):
             messagebox.showinfo(Locale.tr("remove_lbl"), Locale.tr("remove_need_tpl"))
             return
         idx = int(sel[0])
-        cfg = load_json(self.cfg_path)
-        templates = cfg.get("templates", [])
-        if 0 <= idx < len(templates):
-            del templates[idx]
-            cfg["templates"] = templates
-            save_json(self.cfg_path, cfg)
-            self._refresh_tree()
+        update_json(self.cfg_path,
+                    lambda c: c["templates"].__delitem__(idx)
+                    if 0 <= idx < len(c["templates"]) else None,
+                    canonical_default(self.CONFIG_NAME))
+        self._refresh_tree()
 
     def toggle_monitor(self):
         if self.monitor_var.get():
-            self.save()
+            if not self.save():
+                self.monitor_var.set(False)  # persistence failed - don't start
+                return
             self.runner.start(["--replace"])
         else:
             self.runner.stop()
-            self.save_monitor_state()
+            if not self.save_monitor_state():
+                self.monitor_var.set(True)  # disk still says enabled - restore
 
     def save_monitor_state(self):
-        cfg = load_json(self.cfg_path)
-        cfg["monitor_enabled"] = self.monitor_var.get()
-        save_json(self.cfg_path, cfg)
+        update_json(self.cfg_path,
+                    lambda c: c.__setitem__("monitor_enabled", self.monitor_var.get()),
+                    canonical_default(self.CONFIG_NAME))
 
     def stop_all(self):
         self.runner.stop()
@@ -206,7 +206,8 @@ class AcceptTab(tk.Frame):
             print("accept_tab: reset monitor toggle failed: %s" % e, file=sys.stderr)
 
     def _trigger_apply(self):
-        self.save()
+        if not self.save():
+            return  # nothing was persisted - don't touch the engine (T-142)
         if self.monitor_var.get():
             self.runner.start(["--replace"])
         try:
@@ -224,16 +225,18 @@ class AcceptTab(tk.Frame):
         self._tick_id = self.after(1000, self._tick)
 
     def save(self, silent=False):
-        try:
-            cfg = load_json(self.cfg_path)
+        def mutate(cfg):
             cfg["monitor_enabled"] = self.monitor_var.get()
             cfg["window_title"] = self.window_picker.get()
             cfg["poll_interval_sec"] = float(self.poll_interval.get())
             cfg["click_cooldown_sec"] = float(self.click_cooldown.get())
+        try:
+            ok = update_json(self.cfg_path, mutate,
+                             canonical_default(self.CONFIG_NAME))
         except ValueError as e:
             if silent:
                 print(f"Accept save skipped (invalid input): {e}", file=sys.stderr)
             else:
                 messagebox.showerror(Locale.tr("invalid_value"), str(e))
             return
-        save_json(self.cfg_path, cfg)
+        return ok

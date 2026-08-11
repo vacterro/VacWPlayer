@@ -177,6 +177,12 @@ def test_key_vk(letter, expected):
     assert window_ctl.key_vk(letter) == expected
 
 
+def test_key_vk_consumes_canonical_parser():
+    """Runtime must consume the same parser the validator uses (T-140)."""
+    assert window_ctl.key_vk("vk5A") == 0x5A
+    assert window_ctl.key_vk("Ж") is None
+
+
 # --- press_key_burst -------------------------------------------------------
 
 def test_press_key_burst_refuses_when_not_foreground(monkeypatch):

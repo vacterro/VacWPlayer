@@ -12,8 +12,6 @@ from datetime import datetime
 from tkinterdnd2 import TkinterDnD
 import config_store
 
-VERSION = '0.3.20'
-
 BASE = os.path.dirname(os.path.abspath(__file__))
 PARENT = os.path.dirname(BASE)
 
@@ -66,6 +64,11 @@ CONFIG_LOCAL_FILE = os.path.join(BASE, "config.local.json")
 GENERAL = "General"
 
 config_warning = None
+# Write guard (T-135): while the source config could not be read safely, the
+# app runs on in-memory defaults but MUST NOT overwrite the source. None =
+# writable; otherwise the reason the guard is armed. Cleared only by an
+# explicit successful recovery/import/reset.
+config_write_blocked = None
 
 
 def default_config():
@@ -87,42 +90,47 @@ def default_config():
     }
 
 
+def _load_validated_on_disk(data):
+    """Merge an already-validated config.json into defaults."""
+    return load_config_merge(data, default_config())
+
+
 def load_config():
-    global config_warning
+    global config_warning, config_write_blocked
+    config_write_blocked = None
     cfg = default_config()
     data, err = config_store.read_raw(CONFIG_FILE)
-    if err == "missing":
-        config_warning = None
-    elif err == "corrupt":
-        if config_store.restore_backup(CONFIG_FILE):
-            data, err = config_store.read_raw(CONFIG_FILE)
-            if err is None:
-                print("config_store: config.json corrupt, restored from .bak")
-                config_warning = "restored"
-                cfg = load_config_merge(data, cfg)
-            else:
-                print("config_store: config.json corrupt, no usable .bak, using defaults")
-                config_warning = "corrupt"
-        else:
-            print("config_store: config.json corrupt, no usable .bak, using defaults")
-            config_warning = "corrupt"
-    else:
-        config_warning = None
+    if err is None:
         problems = config_store.validate_config(data)
         if problems:
             # Malformed-but-valid JSON is rejected BEFORE any migration or
             # merge (T-086): the file is left untouched for review, the app
             # runs on defaults, and no malformed section ever reaches the
-            # live config.
+            # live config. The write guard keeps a later auto-save from
+            # overwriting the rejected source (T-135).
             for problem in problems:
                 print("config_store: config.json rejected: %s" % problem, file=sys.stderr)
             config_warning = "corrupt"
+            config_write_blocked = "invalid"
         else:
-            cfg = load_config_merge(data, cfg)
+            cfg = _load_validated_on_disk(data)
+    elif err == "missing":
+        config_warning = None
+    elif err == "corrupt":
+        cfg = _recover_corrupt_config()
+    else:  # io_error
+        print("config_store: config.json unreadable (I/O error); running on "
+              "defaults in memory, saving disabled until recovery/import",
+              file=sys.stderr)
+        config_warning = "io_error"
+        config_write_blocked = "io_error"
 
     local_data, local_err = config_store.read_raw(CONFIG_LOCAL_FILE)
     if local_err == "corrupt":
         print("config_store: config.local.json corrupt, ignoring runtime state",
+              file=sys.stderr)
+    elif local_err == "io_error":
+        print("config_store: config.local.json unreadable, ignoring runtime state",
               file=sys.stderr)
     elif local_err is None:
         local_problems = config_store.validate_local_config(local_data)
@@ -132,6 +140,32 @@ def load_config():
         else:
             cfg = config_store.merge_volatile(cfg, local_data)
     return cfg
+
+
+def _recover_corrupt_config():
+    """Try to rebuild a corrupt config.json from a VALIDATED .bak.
+
+    The .bak is read and structurally validated BEFORE it is copied over the
+    live file (T-135): an invalid backup is never restored or merged. Returns
+    the merged config; arms the write guard when recovery was impossible.
+    """
+    global config_warning, config_write_blocked
+    bak_path = CONFIG_FILE + config_store.BAK_SUFFIX
+    data, err = config_store.read_raw(bak_path)
+    if err is None:
+        problems = config_store.validate_config(data)
+        if not problems:
+            if config_store.restore_backup(CONFIG_FILE):
+                print("config_store: config.json corrupt, restored from .bak")
+                config_warning = "restored"
+                # Explicit successful recovery: writable again.
+                config_write_blocked = None
+                return _load_validated_on_disk(data)
+    print("config_store: config.json corrupt, no usable .bak, using defaults; "
+          "saving disabled until recovery/import", file=sys.stderr)
+    config_warning = "corrupt"
+    config_write_blocked = "corrupt"
+    return default_config()
 
 
 def load_config_merge(on_disk, cfg):
@@ -178,9 +212,23 @@ def load_config_merge(on_disk, cfg):
 
 
 def save_config(config):
+    """Persist the stable+local halves. Returns True only on a successful write.
+
+    While the write guard is armed (degraded startup: corrupt/rejected/
+    unreadable source) NOTHING is written - defaults may run in memory, but
+    automatic saves must never overwrite the source (T-135)."""
+    if config_write_blocked:
+        print("config_store: save skipped (%s); recover config or import a "
+              "backup to re-enable saving" % config_write_blocked, file=sys.stderr)
+        return False
     stable, local = config_store.split_volatile(config)
-    config_store.atomic_write(CONFIG_FILE, stable)
-    config_store.atomic_write(CONFIG_LOCAL_FILE, local)
+    try:
+        config_store.atomic_write(CONFIG_FILE, stable)
+        config_store.atomic_write(CONFIG_LOCAL_FILE, local)
+    except OSError as e:
+        print("config_store: save failed: %s" % e, file=sys.stderr)
+        return False
+    return True
 
 
 def display_name(key, entry):
@@ -190,6 +238,29 @@ def display_name(key, entry):
         if champions.slug(n) == key:
             return n
     return key.replace("_", " ").title()
+
+
+def _first_drop_path(splitlist, raw):
+    """Parse a TkinterDnD <<Drop>> payload (a Tcl list) into the first usable
+    local .json file path, or None (T-145).
+
+    Tcl's splitlist handles the quoting itself: {braced} paths, Windows paths
+    with spaces, multiple files and file:/// URIs all parse correctly - no
+    manual whitespace tokenization (raw.split()[0] used to truncate
+    "C:\\Users\\A\\My Config.json" to "C:\\Users\\A\\My")."""
+    if not raw or not raw.strip():
+        return None
+    try:
+        items = splitlist(raw.strip())
+    except tk.TclError:
+        return None
+    for item in items:
+        path = item.strip()
+        if path.startswith("file:///"):
+            path = path[8:]
+        if os.path.isfile(path) and path.lower().endswith(".json"):
+            return path
+    return None
 
 
 class VacWPlayer:
@@ -445,16 +516,13 @@ class VacWPlayer:
             messagebox.showerror(Locale.tr("export_failed"), str(e))
 
     def _on_file_drop(self, event):
-        raw = event.data.strip().strip("{}")
-        if raw.startswith("file:///"):
-            raw = raw[8:]
-        path = raw.split()[0] if raw else ""
-        if not path or not os.path.isfile(path):
+        path = _first_drop_path(self.tk.splitlist, getattr(event, "data", ""))
+        if path:
+            self.root.after(50, lambda: self._do_import_file(path))
             return
-        if not path.lower().endswith(".json"):
-            messagebox.showwarning(Locale.tr("import"), Locale.tr("import_only_json"))
-            return
-        self.root.after(50, lambda: self._do_import_file(path))
+        if getattr(event, "data", "") and str(event.data).strip():
+            messagebox.showwarning(Locale.tr("import"),
+                                   Locale.tr("import_only_json"))
 
     def _do_import_file(self, path):
         try:
@@ -473,7 +541,13 @@ class VacWPlayer:
         if not messagebox.askyesno(Locale.tr("import_config_title"),
                                    Locale.tr("import_config_confirm") + "\n%s?" % os.path.basename(path)):
             return
-        save_config(imported)
+        # Explicit import is a sanctioned recovery: it clears the write guard.
+        global config_write_blocked
+        config_write_blocked = None
+        if not save_config(imported):
+            messagebox.showerror(Locale.tr("import_failed"),
+                                 Locale.tr("import_write_failed", fallback="Import was not saved: config file write failed."))
+            return
         self.config = load_config()
         self._rebuild_ui()
         self.status_lbl.config(text=Locale.tr("import_ok"), fg=TOKENS["success"])
@@ -517,6 +591,13 @@ class VacWPlayer:
                 Locale.tr("config_restored",
                           fallback="config.json was unreadable; restored from "
                                    "the last good backup (.bak)."))
+        elif config_warning == "io_error":
+            messagebox.showwarning(
+                Locale.tr("config_error_title", fallback="Config Error"),
+                Locale.tr("config_io_error",
+                          fallback="config.json could not be read (I/O/permission error). "
+                                   "Settings are shown from defaults and saving is disabled "
+                                   "until the file is fixed or a backup is imported."))
 
     def _rebuild_ui(self):
         if self.tab_death:
@@ -544,7 +625,16 @@ class VacWPlayer:
             return
         self._applying = True
         self.collect_config()
-        save_config(self.config)
+        if not save_config(self.config):
+            # Degraded state (corrupt/unreadable config, guard armed): the
+            # candidate must not overwrite the source, and automation must not
+            # run on unvalidated defaults (T-135).
+            self._applying = False
+            self.status_lbl.config(
+                text=Locale.tr("config_locked",
+                               fallback="Config locked (corrupt/unreadable); fix config or import a backup"),
+                fg=TOKENS["danger"])
+            return
         self._engine_should_run = True
         self.status_lbl.config(text=Locale.tr("generating"), fg=TOKENS["warning"])
         threading.Thread(target=self._apply_worker, daemon=True).start()
@@ -721,11 +811,16 @@ class VacWPlayer:
             pystray.MenuItem(Locale.tr("tray_show"), self.show_window, default=True),
             pystray.MenuItem(Locale.tr("tray_apply_start"), lambda: self.root.after(0, self.apply_and_start)),
             pystray.MenuItem(Locale.tr("tray_stop"), lambda: self.root.after(0, self.stop_engine)),
-            pystray.MenuItem(Locale.tr("tray_quit"), self.quit_app),
+            pystray.MenuItem(Locale.tr("tray_quit"), self._tray_quit),
         )
         self.tray_icon = pystray.Icon("VacWPlayer", self._tray_image(),
                                       "VacWPlayer", menu)
         threading.Thread(target=self.tray_icon.run, daemon=True).start()
+
+    def _tray_quit(self, icon=None, item=None):
+        # Marshal to the Tk thread: quit_app touches Tk widgets and must never
+        # run on pystray's callback thread (T-149-F).
+        self.root.after(0, self.quit_app)
 
     def show_window(self, icon=None, item=None):
         self.root.after(0, self.root.deiconify)

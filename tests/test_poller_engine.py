@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 BASE = Path(__file__).resolve().parent.parent
 if str(BASE) not in sys.path:
@@ -196,6 +197,36 @@ def test_lost_window_resets_and_reacquires(monkeypatch):
     assert len(find_calls) == 3
 
 
+# --- T-149-B: only window/capture errors are 'lost window', never bugs --------
+
+def test_poll_loop_reraises_non_window_error(monkeypatch):
+    """A ValueError from scan (a config/programming bug) must propagate as
+    FATAL - swallowing it would loop forever pretending to be a lost window
+    (T-149-B)."""
+    def _scan(hwnd, c, targets):
+        raise ValueError("config bug")
+
+    monkeypatch.setattr(poller_engine.time, "sleep", SleepSentinel(999))
+    monkeypatch.setattr(poller_engine.single_instance, "ensure_single_instance",
+                        lambda *a, **k: None)
+    monkeypatch.setattr(poller_engine.single_instance, "start_parent_watchdog",
+                        lambda: None)
+    monkeypatch.setattr(poller_engine.window_ctl, "set_dpi_aware", lambda: None)
+    monkeypatch.setattr(poller_engine, "load_config", lambda p, n: _cfg())
+    monkeypatch.setattr(poller_engine.os.path, "getmtime", lambda p: 1.0)
+    monkeypatch.setattr(poller_engine.engine_config, "mtime_changed",
+                        lambda p, m: (1.0, False))
+    monkeypatch.setattr(poller_engine.capture, "find_window", lambda t: 12345)
+    monkeypatch.setattr(poller_engine.win32gui, "IsWindow", lambda h: True)
+    monkeypatch.setattr(poller_engine.capture, "is_minimized", lambda h: False)
+
+    with pytest.raises(ValueError):
+        poller_engine.run_poller(
+            "test", "cfg.json", "cfg.json",
+            build_targets=lambda c: ["t1"], scan_targets=_scan,
+            startup=lambda c, t: "started", reload_msg=lambda c, t: None)
+
+
 # --- T-083: (0,0) is a valid match location ---------------------------------
 
 def test_click_template_match_clicks_at_top_left(monkeypatch):
@@ -246,6 +277,7 @@ def test_scan_by_region_grabs_union_once_and_offsets(monkeypatch):
     """One grab_region of the union box; each entry matches on its own crop
     with an origin offset back into window space."""
     grabs = []
+    monkeypatch.setattr(poller_engine.capture, "is_foreground", lambda h: True)
     monkeypatch.setattr(poller_engine.capture, "grab_region",
                         lambda h, r: grabs.append(r) or np.zeros((30, 30, 3), dtype=np.uint8))
     seen = []
@@ -269,9 +301,79 @@ def test_scan_by_region_capture_failure_returns_none(monkeypatch):
     """A transient grab_region failure is None, matching scan_targets' contract."""
     def boom(hwnd, region):
         raise RuntimeError("window gone")
+    monkeypatch.setattr(poller_engine.capture, "is_foreground", lambda h: True)
     monkeypatch.setattr(poller_engine.capture, "grab_region", boom)
     entries = [{"name": "a", "threshold": 0.75, "region": [0, 0, 10, 10]}]
     assert poller_engine.scan_by_region(123, entries) is None
+
+
+# --- T-146: occlusion-safe region capture policy -----------------------------
+
+def test_scan_by_region_foreground_uses_fast_path(monkeypatch):
+    grabbed, safe = [], []
+    monkeypatch.setattr(poller_engine.capture, "is_foreground", lambda h: True)
+    monkeypatch.setattr(poller_engine.capture, "grab_region",
+                        lambda h, r: grabbed.append(r) or np.zeros((10, 10, 3), dtype=np.uint8))
+    monkeypatch.setattr(poller_engine.capture, "grab_client_region",
+                        lambda h, r: safe.append(r) or np.zeros((10, 10, 3), dtype=np.uint8))
+    entries = [{"name": "a", "threshold": 0.75, "region": [0, 0, 10, 10]}]
+    assert poller_engine.scan_by_region(123, entries, match=lambda *a, **k: False) is False
+    assert grabbed and not safe
+
+
+def test_scan_by_region_occluded_uses_printwindow_path(monkeypatch):
+    grabbed, safe = [], []
+    monkeypatch.setattr(poller_engine.capture, "is_foreground", lambda h: False)
+    monkeypatch.setattr(poller_engine.capture, "grab_region",
+                        lambda h, r: grabbed.append(r) or np.zeros((10, 10, 3), dtype=np.uint8))
+    monkeypatch.setattr(poller_engine.capture, "grab_client_region",
+                        lambda h, r: safe.append(r) or np.zeros((10, 10, 3), dtype=np.uint8))
+    entries = [{"name": "a", "threshold": 0.75, "region": [0, 0, 10, 10]}]
+    assert poller_engine.scan_by_region(123, entries, match=lambda *a, **k: False) is False
+    assert safe and not grabbed
+
+
+def test_scan_by_region_occluded_capture_failure_returns_none(monkeypatch):
+    def boom(hwnd, region):
+        raise RuntimeError("window gone")
+    monkeypatch.setattr(poller_engine.capture, "is_foreground", lambda h: False)
+    monkeypatch.setattr(poller_engine.capture, "grab_client_region", boom)
+    entries = [{"name": "a", "threshold": 0.75, "region": [0, 0, 10, 10]}]
+    assert poller_engine.scan_by_region(123, entries) is None
+
+
+def test_autocontinue_scan_occluded_uses_printwindow(monkeypatch):
+    import autocontinue
+    grabbed, safe = [], []
+    monkeypatch.setattr(autocontinue.capture, "is_foreground", lambda h: False)
+    monkeypatch.setattr(autocontinue.capture, "grab_region",
+                        lambda h, r: grabbed.append(r) or np.zeros((10, 10, 3), dtype=np.uint8))
+    monkeypatch.setattr(autocontinue.capture, "grab_client_region",
+                        lambda h, r: safe.append(r) or np.zeros((10, 10, 3), dtype=np.uint8))
+    monkeypatch.setattr(autocontinue, "match_score", lambda crop, tmpl: 0.0)
+    targets = ([{"name": "b", "template": "t.png", "threshold": 0.9,
+                 "region": [0, 0, 10, 10], "tmpl": object()}],
+               {(0, 0, 10, 10): [{"name": "b", "template": "t.png",
+                                   "threshold": 0.9, "region": [0, 0, 10, 10],
+                                   "tmpl": object()}]})
+    assert autocontinue._scan(123, {}, targets) is False
+    assert safe and not grabbed
+
+
+def test_autocontinue_scan_foreground_uses_fast_path(monkeypatch):
+    import autocontinue
+    grabbed, safe = [], []
+    monkeypatch.setattr(autocontinue.capture, "is_foreground", lambda h: True)
+    monkeypatch.setattr(autocontinue.capture, "grab_region",
+                        lambda h, r: grabbed.append(r) or np.zeros((10, 10, 3), dtype=np.uint8))
+    monkeypatch.setattr(autocontinue.capture, "grab_client_region",
+                        lambda h, r: safe.append(r) or np.zeros((10, 10, 3), dtype=np.uint8))
+    monkeypatch.setattr(autocontinue, "match_score", lambda crop, tmpl: 0.0)
+    b = {"name": "b", "template": "t.png", "threshold": 0.9,
+         "region": [0, 0, 10, 10], "tmpl": object()}
+    targets = ([b], {(0, 0, 10, 10): [b]})
+    assert autocontinue._scan(123, {}, targets) is False
+    assert grabbed and not safe
 
 
 def test_build_scaled_templates_carries_region(monkeypatch):
@@ -283,3 +385,79 @@ def test_build_scaled_templates_carries_region(monkeypatch):
     assert loaded[0].get("region") == [1, 2, 30, 40]
     assert "region" not in poller_engine.build_scaled_templates(
         {"templates": [{"name": "b", "file": "x.png", "threshold": 0.8}]}, ".")[0]
+
+
+# --- T-138: no blind clicks; zero usable targets is a deterministic error ----
+
+
+def test_build_buttons_skips_unreadable_template(monkeypatch):
+    """A template that cannot be read disables that button - it must NEVER
+    become a tmpl=None blind-click candidate."""
+    import autocontinue
+
+    def fake_imread(path, flags):
+        return None if path.endswith("missing.png") else np.zeros((10, 10), dtype=np.uint8)
+
+    monkeypatch.setattr(autocontinue.cv2, "imread", fake_imread)
+    buttons = autocontinue.build_buttons({"buttons": [
+        {"name": "ok", "template": "ok.png"},
+        {"name": "gone", "template": "missing.png"},
+    ]})
+    assert len(buttons) == 1
+    assert buttons[0]["name"] == "ok"
+    assert all(b["tmpl"] is not None for b in buttons)
+
+
+def _run_poller_min(monkeypatch, cfg=None):
+    cfg = cfg or _cfg()
+    monkeypatch.setattr(poller_engine.time, "sleep", SleepSentinel(999))
+    monkeypatch.setattr(poller_engine.single_instance, "ensure_single_instance",
+                        lambda *a, **k: None)
+    monkeypatch.setattr(poller_engine.single_instance, "start_parent_watchdog",
+                        lambda: None)
+    monkeypatch.setattr(poller_engine.window_ctl, "set_dpi_aware", lambda: None)
+    monkeypatch.setattr(poller_engine, "load_config", lambda p, n: cfg)
+    monkeypatch.setattr(poller_engine.os.path, "getmtime", lambda p: 1.0)
+    monkeypatch.setattr(poller_engine.engine_config, "mtime_changed",
+                        lambda p, m: (1.0, False))
+    monkeypatch.setattr(poller_engine.capture, "find_window", lambda t: 12345)
+    monkeypatch.setattr(poller_engine.win32gui, "IsWindow", lambda h: True)
+    monkeypatch.setattr(poller_engine.capture, "is_minimized", lambda h: False)
+
+
+def test_startup_zero_usable_targets_fatal(monkeypatch):
+    _run_poller_min(monkeypatch)
+    with pytest.raises(SystemExit) as ex:
+        poller_engine.run_poller(
+            "test", "cfg.json", "cfg.json",
+            build_targets=lambda c: [], scan_targets=lambda h, c, t: False,
+            startup=lambda c, t: "started", reload_msg=lambda c, t: None,
+            usable=lambda t: bool(t))
+    assert ex.value.code == 1
+
+
+def test_reload_unusable_targets_keeps_last_good(monkeypatch):
+    _run_poller_min(monkeypatch)
+    serves = {"n": 0}
+    state = {"calls": 0}
+    seen = []
+
+    def _build(c):
+        serves["n"] += 1
+        return ["t1"] if serves["n"] == 1 else []
+
+    def _scan(h, c, t):
+        seen.append(t)
+        if len(seen) >= 3:
+            raise KeyboardInterrupt
+        return False
+
+    monkeypatch.setattr(poller_engine.engine_config, "mtime_changed",
+                        lambda p, m: (2.0, state.__setitem__("calls", state["calls"] + 1) or state["calls"] == 1))
+    poller_engine.run_poller(
+        "test", "cfg.json", "cfg.json",
+        build_targets=_build, scan_targets=_scan,
+        startup=lambda c, t: "started", reload_msg=lambda c, t: None,
+        usable=lambda t: bool(t))
+    assert serves["n"] >= 2  # reload was attempted and targets were rebuilt
+    assert all(t == ["t1"] for t in seen)  # scans never saw the unusable []

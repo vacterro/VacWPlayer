@@ -36,12 +36,14 @@ def group_by_region(buttons):
 
 
 def build_buttons(cfg):
+    """Load every configured button template. A template that cannot be read
+    DISABLES that button - it is never turned into a blind-click candidate
+    (T-138): a click without visual evidence is worse than no click."""
     buttons = []
     for b in cfg["buttons"]:
         tmpl = cv2.imread(os.path.join(BASE, b["template"]), cv2.IMREAD_GRAYSCALE)
         if tmpl is None:
-            print("WARN: template not found, '%s' - blind click mode: %s" % (b.get("name"), b["template"]))
-            buttons.append({**b, "tmpl": None})
+            print("WARN: template not found, disabling '%s': %s" % (b.get("name"), b["template"]))
             continue
         buttons.append({**b, "tmpl": tmpl})
     return buttons
@@ -50,6 +52,14 @@ def build_buttons(cfg):
 def _build_targets(cfg):
     buttons = build_buttons(cfg)
     return buttons, group_by_region(buttons)
+
+
+def targets_usable(targets):
+    """True when the rebuilt target set carries at least one usable button
+    (template loaded). Driven by run_poller's `usable` hook (T-138):
+    startup with zero usable targets is a deterministic FATAL, and a hot
+    reload producing zero usable targets keeps the last-good set."""
+    return bool(targets[0])
 
 
 def _startup(cfg, targets):
@@ -63,16 +73,17 @@ def _reload(cfg, targets):
 
 def _scan(hwnd, cfg, targets):
     buttons, region_groups = targets
+    foreground = capture.is_foreground(hwnd)
     for region, group in region_groups.items():
-        needs_scan = any(b["tmpl"] is not None for b in group)
-        crop = capture.grab_region(hwnd, region) if needs_scan else None
+        x0, y0, x1, y1 = region
+        if foreground:
+            crop = capture.grab_region(hwnd, region)
+        else:
+            # occlusion-safe (T-146): never match foreign pixels when the
+            # window is behind another one
+            crop = capture.grab_client_region(hwnd, region)
         for b in group:
-            x0, y0, x1, y1 = region
             cx, cy = (x0 + x1) // 2, (y0 + y1) // 2
-            if b["tmpl"] is None:
-                print("blind-click '%s' at (%d,%d)" % (b["name"], cx, cy))
-                window_ctl.click_at(hwnd, cx, cy, button="left")
-                return True
             score = match_score(crop, b["tmpl"])
             if score >= b["threshold"]:
                 print("matched '%s' (score=%.2f), clicking (%d,%d)" % (b["name"], score, cx, cy))
@@ -88,6 +99,7 @@ def main(replace=False):
         scan_targets=_scan,
         startup=_startup,
         reload_msg=_reload,
+        usable=targets_usable,
         poll_default=0.6,
         replace=replace,
     )

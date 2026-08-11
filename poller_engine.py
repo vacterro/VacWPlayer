@@ -97,22 +97,30 @@ def has_regions(entries):
 
 
 def scan_by_region(hwnd, entries, match=click_template_match):
-    """Region-only scan: one grab_region for the union box, per-entry crop.
+    """Region-only scan: one grab for the union box, per-entry crop.
 
     Far lighter than the full-window grab: grab_region BitBlt's only the
     pixels the buttons actually occupy, instead of PrintWindow's entire-surface
     re-render, so a fast poll interval stops showing up on a CPU graph and in
     the emulator's frame pacing. Returns True (clicked), False (no match) or
-    None (transient capture failure), matching scan_targets' contract. Reads
-    from the screen, so an occluding window corrupts the read - fine for an
-    accept/surrender button that is foreground by construction.
+    None (transient capture failure), matching scan_targets' contract.
+
+    Occlusion policy (T-146): the cheap BitBlt path only runs while the
+    window is foreground - the only state where the screen pixels provably
+    belong to it. With the window occluded or in the background (the
+    accept/surrender contract), it falls back to PrintWindow + crop
+    (grab_client_region) so the engine never matches - let alone clicks -
+    foreign pixels.
     """
     x0 = min(e["region"][0] for e in entries)
     y0 = min(e["region"][1] for e in entries)
     x1 = max(e["region"][2] for e in entries)
     y1 = max(e["region"][3] for e in entries)
     try:
-        img = capture.grab_region(hwnd, (x0, y0, x1, y1))
+        if capture.is_foreground(hwnd):
+            img = capture.grab_region(hwnd, (x0, y0, x1, y1))
+        else:
+            img = capture.grab_client_region(hwnd, (x0, y0, x1, y1))
     except RuntimeError:
         return None
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
@@ -128,9 +136,16 @@ def scan_by_region(hwnd, entries, match=click_template_match):
 
 def run_poller(name, config_path, config_name, build_targets, scan_targets,
                startup, reload_msg, poll_default=1.0, cooldown_default=3.0,
-               replace=False):
+               replace=False, usable=None):
     """Run the shared poll loop. scan_targets returns True (clicked), False (no
-    match) or None (transient capture failure - retry after the poll interval)."""
+    match) or None (transient capture failure - retry after the poll interval).
+
+    `usable(targets)` is an optional safety gate (T-138): when provided, a
+    target set it rejects is never committed. At startup a rejected set is a
+    deterministic FATAL (SystemExit 1) - an engine with zero usable targets
+    must not idle forever. On hot reload a rejected set keeps the last-good
+    config and targets transactionally, warning once instead of losing work.
+    """
     engine_config.setup_logging()
     single_instance.ensure_single_instance(name, replace=replace)
     single_instance.start_parent_watchdog()
@@ -144,21 +159,32 @@ def run_poller(name, config_path, config_name, build_targets, scan_targets,
     hwnd = None
     loaded_window_title = cfg["window_title"]
     targets = build_targets(cfg)
+    if usable is not None and not usable(targets):
+        print("FATAL: no usable targets in %s - not starting" % config_name)
+        raise SystemExit(1)
     print(startup(cfg, targets))
 
     while True:
         try:
             cfg_last_mtime, changed = engine_config.mtime_changed(config_path, cfg_last_mtime)
             if changed:
-                cfg = load_config(config_path, config_name)
-                if cfg["window_title"] != loaded_window_title:
-                    loaded_window_title = cfg["window_title"]
-                    hwnd = None
-                    print("window title changed, now watching '%s'" % loaded_window_title)
-                targets = build_targets(cfg)
-                msg = reload_msg(cfg, targets)
-                if msg:
-                    print(msg)
+                new_cfg = load_config(config_path, config_name)
+                new_targets = build_targets(new_cfg)
+                if usable is not None and not usable(new_targets):
+                    # transactional hot reload (T-138): an unusable rebuild is
+                    # dropped whole; the engine keeps running the last-good set.
+                    print("config change ignored: no usable targets in %s; "
+                          "keeping last-good config" % config_name)
+                else:
+                    cfg = new_cfg
+                    targets = new_targets
+                    if cfg["window_title"] != loaded_window_title:
+                        loaded_window_title = cfg["window_title"]
+                        hwnd = None
+                        print("window title changed, now watching '%s'" % loaded_window_title)
+                    msg = reload_msg(cfg, targets)
+                    if msg:
+                        print(msg)
 
             if not hwnd or not win32gui.IsWindow(hwnd):
                 try:
@@ -181,8 +207,16 @@ def run_poller(name, config_path, config_name, build_targets, scan_targets,
         except KeyboardInterrupt:
             print("stopped")
             break
-        except Exception as e:
+        except RuntimeError as e:
             print("lost window (%s); will try to re-acquire..." % e)
             hwnd = None
             time.sleep(1.0)
+        except Exception as e:
+            # (T-149-B) Only window/capture failures are 'lost window' and are
+            # retryable. Anything else - a config bug, a bad template, a
+            # programming error - is FATAL: swallowing it here would loop
+            # forever while pretending to be a transient window loss.
+            print("FATAL: unhandled poll error (%s: %s); re-raising"
+                  % (type(e).__name__, e))
+            raise
 

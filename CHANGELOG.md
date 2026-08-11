@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.3.28 (2026-08-11)
+- Safety audit pass, 15 tickets (T-135..T-149). Config: fail-closed read/write with a write-guard that blocks saving over a corrupt/unreadable config, validated `.bak` restore, and deep semantic validation of combos/champions/minimap/afkfarm/toggles (T-135, T-136). Engine-tab JSON I/O: guarded read-modify-write that never overwrites an unsafe source, complete canonical defaults on first run, atomic saves with `.bak`, one canonical defaults source per engine (T-137, T-141).
+- Engines: autocontinue never blind-clicks on a missing template and refuses to start with zero usable targets; per-engine REQUIRED config contracts (runtime-indexed keys); one canonical quickbuy-key parser shared by validator and runtime; save failure aborts apply/monitor start; only real window/capture errors are treated as "lost window", other failures are fatal instead of looping (T-138, T-139, T-140, T-142, T-149-B).
+- Windows/integration: watchdog gives the GUI a bounded cleanup window instead of killing it mid-shutdown; single-instance identity is exact-token, not substring; file-drop parsing survives spaces/braces/URIs; region capture is occlusion-safe (PrintWindow fallback); PrintWindow GDI/DC handles can no longer leak (T-143, T-144, T-145, T-146, T-147).
+- Hygiene: dead `VERSION` constant removed, CHANGELOG is the single version source; tray Quit marshals to the Tk thread (T-148, T-149-F).
+- Tests: suite 341 -> 449 PASS, pyflakes 0.
+
 ## v0.3.27 (2026-08-10)
 - Champions: roster sync (T-134). Verified the roster against the live official champion list — all 140 champions current, only Cho'Gath was missing; added with a placeholder combo.
 - Tests: suite 341/341 PASS, pyflakes 0.

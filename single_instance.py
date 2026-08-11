@@ -116,45 +116,79 @@ def start_parent_watchdog(interval_sec=2.0):
     return t
 
 
-def start_target_watchdog(exe_names, on_gone, interval_sec=3.0, grace_ticks=2, min_uptime_sec=15.0):
+def _watchdog_state(grace_ticks=2, min_uptime_sec=15.0):
+    return {
+        "seen_alive": False,
+        "pending_ticks": 0,
+        "grace_ticks": grace_ticks,
+        "min_uptime_sec": min_uptime_sec,
+        "fired": False,
+    }
+
+
+def _watchdog_tick(state, tick, alive):
+    """One watchdog transition; pure so the trigger logic is testable.
+
+    Returns "alive" | "wait" | "fire". Semantics (T-143):
+    - any alive observation establishes seen_alive immediately - a target that
+      ran for 5s then died still shuts the assistant down;
+    - min_uptime_sec is absence-grace ONLY: after the target was seen, absence
+      is ignored until `tick` has reached min_uptime_sec (emulator may be
+      restarting), then pending_ticks accumulate and "fire" lands after
+      grace_ticks consecutive gone checks.
+    """
+    if alive:
+        state["seen_alive"] = True
+        state["pending_ticks"] = 0
+        return "alive"
+    if not state["seen_alive"]:
+        return "wait"  # never saw the target - absence is not "disappeared"
+    if tick < state["min_uptime_sec"]:
+        return "wait"  # absence-grace window
+    state["pending_ticks"] += 1
+    if state["pending_ticks"] >= state["grace_ticks"]:
+        return "fire"
+    return "wait"
+
+
+def start_target_watchdog(exe_names, on_gone, interval_sec=3.0, grace_ticks=2,
+                          min_uptime_sec=15.0, hard_exit_timeout_sec=5.0):
     """Exit the assistant once the target emulator was seen running and then died.
 
     `exe_names` - iterable of emulator executable names (e.g. HD-Player.exe).
     `on_gone`   - callback invoked (from a daemon thread) when the target goes away.
     `grace_ticks` - consecutive gone-checks required before firing (jitter guard).
-    `min_uptime_sec` - ignore the very first seconds: the GUI may start before
-    BlueStacks, and a not-yet-started emulator must not count as "disappeared".
+    `min_uptime_sec` - absence-grace window: a target that never ran is ignored,
+    and a target that just went away is given this long before absence counts.
+    `hard_exit_timeout_sec` - how long the watchdog waits for `on_gone` (and the
+    GUI cleanup it schedules) before forcing os._exit as a fallback.
 
-    Only a target that WAS running triggers shutdown on disappearance - a
-    session that never saw BlueStacks (user launched the assistant alone) is
-    left alone.
+    The callback OWNS shutdown (T-143): the watchdog invokes it once, then waits
+    a bounded cleanup window. The GUI's on_gone schedules quit_app on the Tk
+    mainloop and normal exit finishes the job; os._exit only fires if the
+    cleanup never ran in time. Only a target that WAS running triggers shutdown
+    on disappearance - a session that never saw the emulator is left alone.
     """
-    seen_alive = False
-    pending_ticks = 0
-    state = {}
+    state = _watchdog_state(grace_ticks, min_uptime_sec)
 
     def _watch():
-        nonlocal seen_alive, pending_ticks
         tick = 0.0
         while True:
             time.sleep(interval_sec)
             tick += interval_sec
-            alive = _target_any_alive(exe_names)
-            if alive:
-                seen_alive = tick >= min_uptime_sec or seen_alive
-                pending_ticks = 0
-                state["alive"] = True
+            action = _watchdog_tick(state, tick, _target_any_alive(exe_names))
+            if action != "fire":
                 continue
-            if not seen_alive:
-                continue
-            pending_ticks += 1
-            state["gone"] = pending_ticks
-            if pending_ticks >= grace_ticks:
+            if not state["fired"]:
+                state["fired"] = True
                 print(f"target {exe_names} gone - shutting down assistant")
                 try:
                     on_gone()
-                finally:
-                    os._exit(0)
+                except Exception as e:
+                    logger.warning("on_gone failed: %s", e)
+            # bounded cleanup opportunity, then hard exit fallback (T-143)
+            time.sleep(hard_exit_timeout_sec)
+            os._exit(0)
 
     t = threading.Thread(target=_watch, daemon=True)
     t.start()
@@ -182,11 +216,63 @@ _NAME_TO_SCRIPT = {
 }
 
 
+def _split_command_line(cmd):
+    """Split a Windows command line into tokens, honoring double-quote quoting
+    (cmd.exe-style). `"C:\\Program Files\\app\\accept.py"` is ONE token, and a
+    path containing spaces never splits mid-way. `""` inside quotes is a
+    literal quote."""
+    tokens = []
+    cur = []
+    in_quotes = False
+    i = 0
+    while i < len(cmd):
+        ch = cmd[i]
+        if ch == '"':
+            if in_quotes and i + 1 < len(cmd) and cmd[i + 1] == '"':
+                cur.append('"')
+                i += 2
+                continue
+            in_quotes = not in_quotes
+        elif ch in " \t" and not in_quotes:
+            if cur:
+                tokens.append("".join(cur))
+                cur = []
+        else:
+            cur.append(ch)
+        i += 1
+    if cur:
+        tokens.append("".join(cur))
+    return tokens
+
+
+def _script_matches(token, script):
+    """Exact-token identity for a script path token (T-144): the token's file
+    basename must EQUAL the expected script's basename (case-insensitive).
+    Substring agreement - 'not_accept.py', 'accept.py.bak', '--accept.py' -
+    never counts as identity."""
+    if not isinstance(token, str):
+        return False
+    norm = token.strip()
+    if len(norm) >= 2 and norm.startswith('"') and norm.endswith('"'):
+        norm = norm[1:-1]
+    norm = norm.strip()
+    if not norm:
+        return False
+    if norm.lower() in ("-m", "--module"):
+        return False  # a python -m <name> arg is not a script path
+    base = os.path.basename(norm.replace("/", "\\")).lower()
+    if not base:
+        return False
+    return base == script.lower()
+
+
 def _pid_runs_our_script(pid, name):
     """Command-line identity probe: True only when `pid`'s process command
-    line carries the script this single-instance name launches. Windows PIDs
-    get reused, so an alive PID behind a stale pid file is never proof of
-    identity - this probe is what distinguishes ours from theirs."""
+    line carries the script this single-instance name launches, matched as an
+    EXACT command-line token (T-144) - substring agreement is not identity.
+    Windows PIDs get reused, so an alive PID behind a stale pid file is never
+    proof of identity by itself; this probe is what distinguishes ours from
+    theirs, and a pid we cannot prove is never killed."""
     script = _NAME_TO_SCRIPT.get(name)
     if script is None:
         return False
@@ -199,7 +285,8 @@ def _pid_runs_our_script(pid, name):
             creationflags=0x08000000).stdout.decode("utf-8", errors="replace")
     except Exception:
         return False
-    return script.lower() in out.lower()
+    return any(_script_matches(t, script)
+               for t in _split_command_line(out))
 
 
 def _write_pid(name):

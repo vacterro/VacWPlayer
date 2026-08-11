@@ -4,7 +4,8 @@ from tkinter import messagebox
 from theme import VintageButton, VintageLabel, VintageEntry, TOKENS, FONT_SM
 from tabs.death_tab import ToolTip
 from locales import Locale
-from tabs.tab_config import load_json, save_json
+from tabs.tab_config import load_json, update_json
+from engine_config import canonical_default
 
 BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -78,7 +79,7 @@ class BuyTab(tk.Frame):
         self._lbl_delay = VintageLabel(form, text=Locale.tr("delay_s_lbl"), font=FONT_SM)
         self._lbl_delay.grid(row=r, column=2, sticky="w", padx=(6, 1))
         self._locale_widgets.append(("lbl", self._lbl_delay, "delay_s_lbl"))
-        self.buy_delay_sec = tk.StringVar(value=cfg.get("buy_after_b_delay_sec", 5.5))
+        self.buy_delay_sec = tk.StringVar(value=cfg.get("buy_after_b_delay_sec", 6.5))
         self.buy_delay_sec.trace_add("write", self._auto_save)
         bd_entry = VintageEntry(form, textvariable=self.buy_delay_sec, width=5)
         bd_entry.grid(row=r, column=3, sticky="w")
@@ -129,19 +130,18 @@ class BuyTab(tk.Frame):
                 widget.config(text=Locale.tr(key))
 
     def reset_defaults(self):
-        cfg = load_json(self.cfg_path)
-        self.quickbuy_key.set(cfg.get("quickbuy_key", "Z"))
-        self.quickbuy_presses.set(str(cfg.get("quickbuy_presses", 5)))
-        self.quickbuy_window_ms.set(str(cfg.get("quickbuy_window_ms", 150.0)))
-        self.autobuy_b.set(cfg.get("autobuy_after_b", False))
-        self.buy_delay_sec.set(str(cfg.get("buy_after_b_delay_sec", 5.5)))
-        self.buy_then_mid.set(cfg.get("autobuy_then_mid", False))
-        self.buy_then_mid_delay.set(str(cfg.get("autobuy_then_mid_delay_sec", 0.5)))
-        self.controlsend_z.set(cfg.get("controlsend_z", False))
+        d = canonical_default(self.CONFIG_NAME)
+        self.quickbuy_key.set(d["quickbuy_key"])
+        self.quickbuy_presses.set(str(d["quickbuy_presses"]))
+        self.quickbuy_window_ms.set(str(d["quickbuy_window_ms"]))
+        self.autobuy_b.set(d["autobuy_after_b"])
+        self.buy_delay_sec.set(str(d["buy_after_b_delay_sec"]))
+        self.buy_then_mid.set(d["autobuy_then_mid"])
+        self.buy_then_mid_delay.set(str(d["autobuy_then_mid_delay_sec"]))
+        self.controlsend_z.set(d["controlsend_z"])
 
     def save(self, silent=False):
-        try:
-            cfg = load_json(self.cfg_path)
+        def mutate(cfg):
             cfg["quickbuy_key"] = self.quickbuy_key.get()
             cfg["quickbuy_presses"] = int(self.quickbuy_presses.get())
             cfg["quickbuy_window_ms"] = float(self.quickbuy_window_ms.get())
@@ -150,10 +150,13 @@ class BuyTab(tk.Frame):
             cfg["autobuy_then_mid"] = self.buy_then_mid.get()
             cfg["autobuy_then_mid_delay_sec"] = float(self.buy_then_mid_delay.get())
             cfg["controlsend_z"] = self.controlsend_z.get()
+        try:
+            ok = update_json(self.cfg_path, mutate,
+                             canonical_default(self.CONFIG_NAME))
         except ValueError as e:
             if silent:
                 print(f"BuyTab save skipped: {e}", file=sys.stderr)
             else:
                 messagebox.showerror(Locale.tr("invalid_value"), str(e))
             return
-        save_json(self.cfg_path, cfg)
+        return ok

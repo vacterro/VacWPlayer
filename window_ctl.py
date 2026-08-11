@@ -7,6 +7,8 @@ import win32con
 import win32api
 import win32process
 
+from engine_config import quickbuy_key_vk
+
 
 
 def set_dpi_aware():
@@ -109,9 +111,14 @@ def release_mouse_buttons(hwnd):
 
 
 def key_vk(letter):
-    """Windows virtual-key code for a single letter key (A-Z map directly to
-    their uppercase ASCII value)."""
-    return ord(letter.upper())
+    """Windows virtual-key code for a quickbuy key.
+
+    Consumes the canonical parser (engine_config.quickbuy_key_vk, T-140): a
+    single ASCII letter/digit -> its uppercase code point, vkNN hex -> the
+    code, anything else -> None. None must never reach keybd_event - configs
+    are validated against the same parser before the engine runs.
+    """
+    return quickbuy_key_vk(letter)
 
 
 def press_key_burst(hwnd, vk_code, times=5, window_ms=150):

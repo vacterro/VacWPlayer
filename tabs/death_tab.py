@@ -5,7 +5,8 @@ from theme import VintageButton, TOKENS, FONT_MAIN
 from vintage_widgets import VintageWindowPicker, grid_row
 from process_runner import ProcessRunner
 from locales import Locale
-from tabs.tab_config import load_json, save_json
+from tabs.tab_config import load_json, update_json
+from engine_config import canonical_default
 
 
 class ToolTip:
@@ -167,7 +168,7 @@ class DeathWatchTab(tk.Frame):
         self.poll_interval.trace_add("write", self._auto_save)
         self.shop_buffer = tk.StringVar(value=cfg.get("shop_buffer_sec", 0.0))
         self.shop_buffer.trace_add("write", self._auto_save)
-        self.restore_buffer = tk.StringVar(value=cfg.get("restore_buffer_sec", 2.0))
+        self.restore_buffer = tk.StringVar(value=cfg.get("restore_buffer_sec", 0.0))
         self.restore_buffer.trace_add("write", self._auto_save)
         self.match_threshold = tk.StringVar(value=cfg.get("match_threshold", 0.75))
         self.match_threshold.trace_add("write", self._auto_save)
@@ -253,22 +254,23 @@ class DeathWatchTab(tk.Frame):
                 widget.apply_locale()
 
     def reset_defaults(self):
-        cfg = load_json(self.cfg_path)
-        self.poll_interval.set(str(cfg.get("poll_interval_sec", 0.4)))
-        self.shop_buffer.set(str(cfg.get("shop_buffer_sec", 0.0)))
-        self.restore_buffer.set(str(cfg.get("restore_buffer_sec", 2.0)))
-        self.max_wait.set(str(cfg.get("max_death_wait_sec", 90.0)))
-        self.pedal_block_sec.set(str(cfg.get("pedal_block_sec", 0)))
-        self.blocked_keys.set(",".join(cfg.get("blocked_keys", ["F13","F14","F15"])))
-        self.match_threshold.set(str(cfg.get("match_threshold", 0.75)))
-        self.switch_to_work.set(cfg.get("switch_to_work_window", False))
-        self.click_mid.set(cfg.get("click_mid_on_resurrect", False))
-        self.lock_window.set(cfg.get("lock_window_resurrect", False))
-        self.window_picker.title_var.set(cfg.get("window_title", ""))
-        self.work_window.title_var.set(cfg.get("work_window_title", ""))
+        d = canonical_default(self.CONFIG_NAME)
+        self.poll_interval.set(str(d["poll_interval_sec"]))
+        self.shop_buffer.set(str(d["shop_buffer_sec"]))
+        self.restore_buffer.set(str(d["restore_buffer_sec"]))
+        self.max_wait.set(str(d["max_death_wait_sec"]))
+        self.pedal_block_sec.set(str(d["pedal_block_sec"]))
+        self.blocked_keys.set(",".join(d["blocked_keys"]))
+        self.match_threshold.set(str(d["match_threshold"]))
+        self.switch_to_work.set(d["switch_to_work_window"])
+        self.click_mid.set(d["click_mid_on_resurrect"])
+        self.lock_window.set(d["lock_window_resurrect"])
+        self.window_picker.title_var.set(d["window_title"])
+        self.work_window.title_var.set(d["work_window_title"])
 
     def _trigger_apply(self):
-        self.save()
+        if not self.save():
+            return  # nothing was persisted - don't touch the engine (T-142)
         if self.monitor_var.get():
             self.runner.start(["--replace"])
         try:
@@ -278,16 +280,19 @@ class DeathWatchTab(tk.Frame):
 
     def toggle_monitor(self):
         if self.monitor_var.get():
-            self.save()
+            if not self.save():
+                self.monitor_var.set(False)  # persistence failed - don't start
+                return
             self.runner.start(["--replace"])
         else:
             self.runner.stop()
-            self.save_monitor_state()
+            if not self.save_monitor_state():
+                self.monitor_var.set(True)  # disk still says enabled - restore
 
     def save_monitor_state(self):
-        cfg = load_json(self.cfg_path)
-        cfg["monitor_enabled"] = self.monitor_var.get()
-        save_json(self.cfg_path, cfg)
+        update_json(self.cfg_path,
+                    lambda c: c.__setitem__("monitor_enabled", self.monitor_var.get()),
+                    canonical_default(self.CONFIG_NAME))
 
     def stop_all(self):
         self.runner.stop()
@@ -306,8 +311,7 @@ class DeathWatchTab(tk.Frame):
         self._tick_id = self.after(1000, self._tick)
 
     def save(self, silent=False):
-        try:
-            cfg = load_json(self.cfg_path)
+        def mutate(cfg):
             cfg["monitor_enabled"] = self.monitor_var.get()
             cfg["window_title"] = self.window_picker.get()
             cfg["poll_interval_sec"] = float(self.poll_interval.get())
@@ -326,10 +330,13 @@ class DeathWatchTab(tk.Frame):
             cfg["work_window_title"] = self.work_window.get()
             cfg["click_mid_on_resurrect"] = self.click_mid.get()
             cfg["lock_window_resurrect"] = self.lock_window.get()
+        try:
+            ok = update_json(self.cfg_path, mutate,
+                             canonical_default(self.CONFIG_NAME))
         except ValueError as e:
             if silent:
                 print(f"DeathWatch save skipped (invalid input): {e}", file=sys.stderr)
             else:
                 messagebox.showerror(Locale.tr("invalid_value"), str(e))
             return
-        save_json(self.cfg_path, cfg)
+        return ok

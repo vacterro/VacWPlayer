@@ -1,6 +1,7 @@
 """config_store unit tests: atomic write, .bak backup, restore, corrupt config."""
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -140,7 +141,131 @@ def test_validate_config_never_raises_on_hostile_nesting():
         "minimap": {"top": "junk"},
         "afkfarm": {"slots": {1: 2}},
     }
-    assert config_store.validate_config(hostile) == []
+    problems = config_store.validate_config(hostile)
+    assert problems
+
+
+# --- T-136: deep validation - structures the runtime actually dereferences ----
+
+def test_validate_config_combos_must_be_objects():
+    """combos=[1] crashes ComboTab's dict(c) update-sequence - reject."""
+    problems = config_store.validate_config({"combos": [1, "x", None]})
+    assert any("combos" in p for p in problems)
+
+
+def test_validate_config_combo_required_fields():
+    """ComboTab._refresh_tree indexes c['trigger'], c['keys'], c['interval']
+    directly - missing them crashes the tab."""
+    for bad in ({}, {"trigger": "F13"}, {"trigger": "F13", "keys": "q,w"},
+                {"trigger": 5, "keys": "q", "interval": 50},
+                {"trigger": "F13", "keys": [1], "interval": 50},
+                {"trigger": "F13", "keys": "q", "interval": "no"},
+                {"trigger": "F13", "keys": "q", "interval": 1.5}):
+        problems = config_store.validate_config({"combos": [bad]})
+        assert problems, "combos=%r must be rejected" % bad
+    assert config_store.validate_config(
+        {"combos": [{"trigger": "F13", "keys": "q,w", "interval": 50,
+                     "shift": False, "move_when_pressed": True}]}) == []
+
+
+def test_validate_config_champions_entries_must_be_objects():
+    problems = config_store.validate_config({"champions": {"ryze": [], "xin": 5}})
+    assert any("champions" in p for p in problems)
+
+
+def test_validate_config_champion_field_types():
+    problems = config_store.validate_config({
+        "champions": {"ryze": {"trigger_wave": [], "keys_jungle": 5,
+                               "enabled_pvp": "yes", "toggle_wave": "no",
+                               "move_when_pressed_pvp": "maybe",
+                               "display_name": [1], "interval": "abc"}}})
+    assert problems
+
+
+def test_validate_config_champion_valid_field_types_pass():
+    assert config_store.validate_config({
+        "champions": {"ryze": {"trigger_wave": "F13", "keys_jungle": "q,w",
+                               "enabled_pvp": True, "toggle_wave": False,
+                               "display_name": "Ryze", "interval": 50,
+                               "future_key": "data"}}}) == []
+
+
+def test_validate_config_minimap_entries_must_be_objects():
+    problems = config_store.validate_config({"minimap": {"mid": []}})
+    assert any("minimap" in p for p in problems)
+
+
+def test_validate_config_minimap_field_types():
+    """x/y back _show_hotkeys' %d formatting - floats/strings crash it."""
+    problems = config_store.validate_config(
+        {"minimap": {"mid": {"trigger": 5, "x": "junk", "y": None}}})
+    assert problems
+    bad = config_store.validate_config(
+        {"minimap": {"mid": {"trigger": "O", "x": 1.5, "y": 2}}})
+    assert bad
+
+
+def test_validate_config_minimap_valid_pass():
+    assert config_store.validate_config(
+        {"minimap": {"mid": {"trigger": "O", "x": 1, "y": 2},
+                     "custom_1": {"trigger": "", "x": 0, "y": 0}}}) == []
+    assert config_store.validate_config(
+        {"minimap": {"mid": {"trigger": "O", "x": 1, "y": 2},
+                     "_order": ["top", "mid"]}}) == []
+
+
+def test_validate_config_minimap_order_is_string_list():
+    problems = config_store.validate_config({"minimap": {"_order": [1, 2]}})
+    assert problems
+
+
+def test_validate_config_afkfarm_shapes():
+    assert config_store.validate_config({"afkfarm": {"slots": 5}})
+    assert config_store.validate_config({"afkfarm": {"slots": {"top": "junk"}}})
+    assert config_store.validate_config(
+        {"afkfarm": {"slots": {"top": {"enabled": "yes"}}}})
+    assert config_store.validate_config({"afkfarm": {"enabled": "yes"}})
+    assert config_store.validate_config({"afkfarm": {"toggle_key": [1]}})
+
+
+def test_validate_config_afkfarm_valid_pass():
+    assert config_store.validate_config({
+        "afkfarm": {"enabled": True, "toggle_key": "F5",
+                    "slots": {"top": {"enabled": True,
+                                      "move_when_pressed": False}}},
+        "afkfarm_extra": 5}) == []
+
+
+def test_validate_config_toggles_hostile_values():
+    assert config_store.validate_config({"toggles": {"space_interval": "abc"}})
+    assert config_store.validate_config({"toggles": {"space_interval": True}})
+    assert config_store.validate_config({"toggles": {"mouse_remap": "yes"}})
+    assert config_store.validate_config({"toggles": {"untoggle_keys": [1]}})
+    assert config_store.validate_config({"toggles": {"anti_afk_interval": None}})
+
+
+def test_validate_config_toggles_unknown_keys_forward_compat():
+    """Unknown toggle keys are NOT validated - they may be forward-compatible
+    config the runtime does not consume."""
+    assert config_store.validate_config(
+        {"toggles": {"some_future_toggle": "anything", "x": [1, 2]}}) == []
+
+
+def test_validate_config_window_shape():
+    assert config_store.validate_config({"window": [1, 2]})
+    assert config_store.validate_config({"window": {"active_tab": "x"}})
+    assert config_store.validate_config({"window": {"active_tab": True}})
+    assert config_store.validate_config({"window": {"position": 5}})
+
+
+def test_validate_config_mode_semantics():
+    assert config_store.validate_config({"mode": ""})
+    assert config_store.validate_config({"mode": []})
+
+
+def test_validate_config_default_config_passes():
+    import main as main_mod
+    assert config_store.validate_config(main_mod.default_config()) == []
 
 
 def test_validate_config_wrong_types_flagged():
@@ -507,13 +632,169 @@ def test_import_garbage_config_never_saved(monkeypatch, tmp_path):
     assert errors               # a clear diagnostic was shown
 
 
+# --- T-135 fail-closed: io_error, write guard, validated backup restore ------
+
+def test_read_raw_permission_error_is_io_error(monkeypatch, tmp_path):
+    p = tmp_path / "cfg.json"
+    p.write_text('{"a": 1}', encoding="utf-8")
+
+    def denied(path, *a, **k):
+        raise PermissionError(13, "Permission denied", path)
+
+    monkeypatch.setattr("builtins.open", denied)
+    data, err = config_store.read_raw(str(p))
+    assert data is None
+    assert err == "io_error"
+
+
+def test_read_raw_other_oserror_is_io_error(monkeypatch, tmp_path):
+    p = tmp_path / "cfg.json"
+    p.write_text('{"a": 1}', encoding="utf-8")
+
+    def broken(path, *a, **k):
+        raise OSError(22, "Invalid argument", path)
+
+    monkeypatch.setattr("builtins.open", broken)
+    data, err = config_store.read_raw(str(p))
+    assert data is None
+    assert err == "io_error"
+
+
+def test_read_raw_missing_file_still_missing(tmp_path):
+    data, err = config_store.read_raw(str(tmp_path / "nope.json"))
+    assert err == "missing"
+
+
+def _reset_guard(main_mod):
+    main_mod.config_write_blocked = None
+    main_mod.config_warning = None
+
+
+def test_load_config_io_error_blocks_write(monkeypatch, tmp_path):
+    import main as main_mod
+    cfg_file = tmp_path / "config.json"
+    main_mod.CONFIG_FILE = str(cfg_file)
+    main_mod.CONFIG_LOCAL_FILE = str(tmp_path / "config.local.json")
+    cfg_file.write_text('{"mode": "ryze", "toggles": {}, "combos": [], '
+                        '"champions": {}, "minimap": {}, "afkfarm": {}}',
+                        encoding="utf-8")
+    orig = cfg_file.read_bytes()
+
+    def denied(path, *a, **k):
+        raise PermissionError(13, "Permission denied", path)
+
+    monkeypatch.setattr("builtins.open", denied)
+    _reset_guard(main_mod)
+    cfg = main_mod.load_config()
+    assert main_mod.config_write_blocked == "io_error"
+    assert cfg["mode"] == main_mod.default_config()["mode"]
+
+    monkeypatch.setattr("builtins.open", __builtins__["open"])
+    main_mod.save_config(cfg)
+    assert cfg_file.read_bytes() == orig  # byte-identical: nothing overwritten
+
+
+def test_load_config_structural_reject_blocks_write(monkeypatch, tmp_path):
+    import main as main_mod
+    cfg_file = tmp_path / "config.json"
+    local_file = tmp_path / "config.local.json"
+    main_mod.CONFIG_FILE = str(cfg_file)
+    main_mod.CONFIG_LOCAL_FILE = str(local_file)
+    bad = '{"toggles": [], "combos": {}, "champions": 5}'
+    cfg_file.write_text(bad, encoding="utf-8")
+
+    _reset_guard(main_mod)
+    cfg = main_mod.load_config()
+    assert main_mod.config_warning == "corrupt"
+    assert main_mod.config_write_blocked == "invalid"
+
+    main_mod.save_config(cfg)
+    assert cfg_file.read_text(encoding="utf-8") == bad
+    assert not local_file.exists()  # nothing written to the local half either
+
+
+def test_load_config_corrupt_never_restores_invalid_bak(monkeypatch, tmp_path):
+    import main as main_mod
+    cfg_file = tmp_path / "config.json"
+    main_mod.CONFIG_FILE = str(cfg_file)
+    main_mod.CONFIG_LOCAL_FILE = str(tmp_path / "config.local.json")
+    cfg_file.write_text("{corrupt", encoding="utf-8")
+    bak = tmp_path / "config.json.bak"
+    bad_bak = '{"toggles": [], "combos": {}}'
+    bak.write_text(bad_bak, encoding="utf-8")
+
+    _reset_guard(main_mod)
+    cfg = main_mod.load_config()
+    assert main_mod.config_warning == "corrupt"
+    assert main_mod.config_write_blocked == "corrupt"
+    assert cfg_file.read_text(encoding="utf-8") == "{corrupt"  # not overwritten
+    assert bak.read_text(encoding="utf-8") == bad_bak
+    assert cfg["mode"] == main_mod.default_config()["mode"]
+    assert isinstance(cfg["toggles"], dict)
+
+
+def test_load_config_corrupt_valid_bak_restores_and_unblocks(monkeypatch, tmp_path):
+    import main as main_mod
+    cfg_file = tmp_path / "config.json"
+    main_mod.CONFIG_FILE = str(cfg_file)
+    main_mod.CONFIG_LOCAL_FILE = str(tmp_path / "config.local.json")
+    cfg_file.write_text("{corrupt", encoding="utf-8")
+    good = '{"mode": "ryze", "toggles": {"stop_key": "k"}, "combos": [], ' \
+           '"champions": {}, "minimap": {}, "afkfarm": {}}'
+    bak = tmp_path / "config.json.bak"
+    bak.write_text(good, encoding="utf-8")
+
+    _reset_guard(main_mod)
+    cfg = main_mod.load_config()
+    assert main_mod.config_warning == "restored"
+    assert main_mod.config_write_blocked is None  # explicit recovery unblocks
+    assert cfg["toggles"]["stop_key"] == "k"
+    assert json.loads(cfg_file.read_text(encoding="utf-8"))["toggles"]["stop_key"] == "k"
+
+
+def test_import_clears_write_guard(monkeypatch, tmp_path):
+    import main as main_mod
+    w = object.__new__(main_mod.VacWPlayer)
+    w.config = {}
+    w.status_lbl = type("S", (), {"config": lambda *a, **k: None})()
+    saved = []
+    monkeypatch.setattr(main_mod, "save_config", lambda cfg: saved.append(cfg) or True)
+    monkeypatch.setattr(main_mod, "load_config",
+                        lambda: {"mode": "ryze", "toggles": {}, "combos": [],
+                                 "champions": {}, "minimap": {}, "afkfarm": {}})
+    monkeypatch.setattr(main_mod.messagebox, "askyesno", lambda *a, **k: True)
+    monkeypatch.setattr(main_mod.messagebox, "showerror", lambda *a, **k: None)
+    monkeypatch.setattr(w, "_rebuild_ui", lambda: None)
+    main_mod.config_write_blocked = "io_error"
+
+    good = tmp_path / "good.json"
+    good.write_text('{"mode": "ryze", "toggles": {}, "combos": [], '
+                    '"champions": {}, "minimap": {}, "afkfarm": {}, "lang": "en"}',
+                    encoding="utf-8")
+    w._do_import_file(str(good))
+    assert len(saved) == 1
+    assert main_mod.config_write_blocked is None  # explicit import clears guard
+
+
+def test_save_config_guarded_writes_nothing(monkeypatch, tmp_path):
+    import main as main_mod
+    cfg_file = tmp_path / "config.json"
+    main_mod.CONFIG_FILE = str(cfg_file)
+    main_mod.CONFIG_LOCAL_FILE = str(tmp_path / "config.local.json")
+    cfg_file.write_text("{}", encoding="utf-8")
+    main_mod.config_write_blocked = "corrupt"
+    assert main_mod.save_config({"mode": "ryze"}) is False
+    assert cfg_file.read_text(encoding="utf-8") == "{}"
+    main_mod.config_write_blocked = None
+
+
 def test_import_valid_config_saved(monkeypatch, tmp_path):
     import main as main_mod
     w = object.__new__(main_mod.VacWPlayer)
     w.config = {}
     w.status_lbl = type("S", (), {"config": lambda *a, **k: None})()
     saved = []
-    monkeypatch.setattr(main_mod, "save_config", lambda cfg: saved.append(cfg))
+    monkeypatch.setattr(main_mod, "save_config", lambda cfg: saved.append(cfg) or True)
     monkeypatch.setattr(main_mod, "load_config",
                         lambda: {"mode": "ryze", "toggles": {}, "combos": [],
                                  "champions": {}, "minimap": {}, "afkfarm": {}})
@@ -527,3 +808,116 @@ def test_import_valid_config_saved(monkeypatch, tmp_path):
                     encoding="utf-8")
     w._do_import_file(str(good))
     assert len(saved) == 1      # valid import proceeds
+
+# --- T-145: file-drop parsing must survive spaces / braces / URIs -------------
+
+import tkinter as _tk
+_TCL = _tk.Tcl()
+
+
+def _drop_path(raw):
+    import main as main_mod
+    return main_mod._first_drop_path(_TCL.splitlist, raw)
+
+
+def test_first_drop_path_braced_path_with_spaces(tmp_path):
+    p = tmp_path / "My Config.json"
+    p.write_text("{}", encoding="utf-8")
+    assert _drop_path("{%s}" % str(p)) == str(p)
+
+
+def test_first_drop_path_multiple_files_takes_first(tmp_path):
+    p1 = tmp_path / "a.json"
+    p2 = tmp_path / "b.json"
+    p1.write_text("{}", encoding="utf-8")
+    p2.write_text("{}", encoding="utf-8")
+    assert _drop_path("{%s} {%s}" % (p1, p2)) == str(p1)
+
+
+def test_first_drop_path_unbraced_multi_space_path(tmp_path):
+    p = tmp_path / "dir with space" / "cfg file.json"
+    p.parent.mkdir()
+    p.write_text("{}", encoding="utf-8")
+    # TkinterDnD always hands a Tcl list - a spaced path arrives braced
+    assert _drop_path("{%s}" % str(p)) == str(p)
+
+
+def test_first_drop_path_file_uri(tmp_path):
+    p = tmp_path / "a.json"
+    p.write_text("{}", encoding="utf-8")
+    uri = "file:///" + str(p).replace("\\", "/")
+    out = _drop_path(uri)
+    assert out is not None
+    assert os.path.isfile(out) and out.lower().endswith(".json")
+
+
+def test_first_drop_path_ignores_non_json(tmp_path):
+    p = tmp_path / "a.txt"
+    p.write_text("x", encoding="utf-8")
+    assert _drop_path(str(p)) is None
+
+
+def test_first_drop_path_skips_missing_and_picks_json(tmp_path):
+    gone = tmp_path / "gone.json"
+    good = tmp_path / "good.json"
+    good.write_text("{}", encoding="utf-8")
+    assert _drop_path("{%s} {%s}" % (gone, good)) == str(good)
+
+
+def test_first_drop_path_none_on_empty():
+    assert _drop_path("") is None
+    assert _drop_path("   ") is None
+
+
+# --- T-149-F: tray Quit must marshal to the Tk thread via root.after ----------
+
+def test_tray_quit_marshals_via_root_after():
+    """quit_app touches Tk widgets; it must never run on the pystray callback
+    thread. _tray_quit only schedules it on the Tk mainloop (T-149-F)."""
+    import main as main_mod
+    w = object.__new__(main_mod.VacWPlayer)
+    calls = []
+
+    class FakeRoot:
+        def after(self, *a):
+            calls.append(a)
+            return 1
+
+    w.root = FakeRoot()
+    w.quit_app = lambda *a, **k: calls.append("DIRECT")
+    w._tray_quit()
+    assert calls == [(0, w.quit_app)]  # scheduled, never invoked directly
+
+
+def test_setup_tray_wires_quit_through_marshaling(monkeypatch):
+    import main as main_mod
+    w = object.__new__(main_mod.VacWPlayer)
+    w.root = type("R", (), {"after": lambda *a: None})()
+    w.tray_icon = None
+    w._tray_image = lambda: object()
+
+    class FakeIcon:
+        last = None
+
+        def __init__(self, *a):
+            FakeIcon.last = a
+
+        def run(self):
+            pass
+
+    class FakeItem:
+        def __init__(self, text, action, **kw):
+            self.text = text
+            self.action = action
+
+    class FakeMenu:
+        def __init__(self, *items):
+            self.items = items
+
+    monkeypatch.setitem(sys.modules, "pystray", type(
+        "PS", (), {"Icon": FakeIcon, "MenuItem": FakeItem,
+                   "Menu": FakeMenu})())
+    w.setup_tray()
+    quit_item = [i for i in FakeIcon.last[3].items
+                 if i.text == main_mod.Locale.tr("tray_quit")]
+    assert quit_item and quit_item[0].action == w._tray_quit

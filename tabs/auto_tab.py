@@ -6,7 +6,8 @@ from theme import VintageSunken, VintageButton, VintageLabel, TOKENS, FONT_MAIN,
 from vintage_widgets import VintageWindowPicker, grid_row
 from process_runner import ProcessRunner
 from locales import Locale
-from tabs.tab_config import load_json, save_json
+from tabs.tab_config import load_json, update_json
+from engine_config import canonical_default
 
 BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -26,11 +27,7 @@ class AutoContinueTab(tk.Frame):
         super().__init__(parent, bg=TOKENS["background"])
         self.cfg_path = os.path.join(BASE, self.CONFIG_NAME)
         cfg = load_json(self.cfg_path)
-        self.buttons = [dict(b) for b in cfg.get("buttons", [])]
-        # Keep a pristine copy so Remove is always reversible via Reset.
-        # Deep copy: nested region lists must never be shared with the live
-        # buttons list, so a future in-place edit can't leak into the defaults.
-        self._default_buttons = [copy.deepcopy(b) for b in self.buttons]
+        self.buttons = [dict(b) for b in cfg.get("buttons", canonical_default(self.CONFIG_NAME)["buttons"])]
 
 
         form = tk.Frame(self, bg=TOKENS["background"])
@@ -133,17 +130,19 @@ class AutoContinueTab(tk.Frame):
         self.tree.heading("threshold", text=Locale.tr("match_lbl"))
 
     def reset_defaults(self):
-        cfg = load_json(self.cfg_path)
-        self.poll_interval.set(str(cfg.get("poll_interval_sec", 0.6)))
-        self.click_cooldown.set(str(cfg.get("click_cooldown_sec", 2.5)))
-        self.window_picker.title_var.set(cfg.get("window_title", ""))
-        # Undo removes: bring back the buttons the config shipped with.
-        self.buttons = [dict(b) for b in self._default_buttons]
+        d = canonical_default(self.CONFIG_NAME)
+        self.poll_interval.set(str(d["poll_interval_sec"]))
+        self.click_cooldown.set(str(d["click_cooldown_sec"]))
+        self.window_picker.title_var.set(d["window_title"])
+        # Undo removes: restore the canonical buttons (deep-copied so the live
+        # list never aliases the canonical source's region lists, T-141).
+        self.buttons = copy.deepcopy(d["buttons"])
         self._refresh_tree()
         self._auto_save()
 
     def _trigger_apply(self):
-        self.save()
+        if not self.save():
+            return  # nothing was persisted - don't touch the engine (T-142)
         if self.monitor_var.get():
             self.runner.start(["--replace"])
         try:
@@ -153,16 +152,19 @@ class AutoContinueTab(tk.Frame):
 
     def toggle_monitor(self):
         if self.monitor_var.get():
-            self.save()
+            if not self.save():
+                self.monitor_var.set(False)  # persistence failed - don't start
+                return
             self.runner.start(["--replace"])
         else:
             self.runner.stop()
-            self.save_monitor_state()
+            if not self.save_monitor_state():
+                self.monitor_var.set(True)  # disk still says enabled - restore
 
     def save_monitor_state(self):
-        cfg = load_json(self.cfg_path)
-        cfg["monitor_enabled"] = self.monitor_var.get()
-        save_json(self.cfg_path, cfg)
+        update_json(self.cfg_path,
+                    lambda c: c.__setitem__("monitor_enabled", self.monitor_var.get()),
+                    canonical_default(self.CONFIG_NAME))
 
     def stop_all(self):
         self.runner.stop()
@@ -195,18 +197,19 @@ class AutoContinueTab(tk.Frame):
         self._refresh_tree()
 
     def save(self, silent=False):
+        def mutate(cfg):
+            cfg["monitor_enabled"] = self.monitor_var.get()
+            cfg["window_title"] = self.window_picker.get()
+            cfg["poll_interval_sec"] = float(self.poll_interval.get())
+            cfg["click_cooldown_sec"] = float(self.click_cooldown.get())
+            cfg["buttons"] = [dict(b) for b in self.buttons]
         try:
-            cfg = {
-                "monitor_enabled": self.monitor_var.get(),
-                "window_title": self.window_picker.get(),
-                "poll_interval_sec": float(self.poll_interval.get()),
-                "click_cooldown_sec": float(self.click_cooldown.get()),
-                "buttons": self.buttons,
-            }
+            ok = update_json(self.cfg_path, mutate,
+                             canonical_default(self.CONFIG_NAME))
         except ValueError as e:
             if silent:
                 print(f"AutoContinue save skipped (invalid input): {e}", file=sys.stderr)
             else:
                 messagebox.showerror(Locale.tr("invalid_value"), str(e))
             return
-        save_json(self.cfg_path, cfg)
+        return ok
