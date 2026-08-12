@@ -1,4 +1,6 @@
-<img width="922" height="566" alt="clipboard_20260812_220242_c91e7ad6" src="https://github.com/user-attachments/assets/3677f85a-5a66-445f-ae8a-3e7e8563b9b1" />
+<img width="922" height="566" alt="clipboard_20260812_220242_c91e7ad6" src="https://github.com/user-attachments/assets/3677f85a-5a66-
+445f-ae8a-3e7e8563b9b1" />
+
 🇪🇪 [Eesti](README.ee.md) | 🇷🇺 [Русский](README.ru.md) | 🇺🇸 **English** | 👴 [Дед-Мод](README.ded.md) | 🇯🇵 [日本語](README.ja.md)
 
 # VacWPlayer
