@@ -134,6 +134,7 @@ def test_kill_previous_holder_kills_verified_holder(monkeypatch):
 
     monkeypatch.setattr("builtins.open", lambda path, *a, **k: F())
     monkeypatch.setattr(si.win32api, "OpenProcess", lambda *a: 9)
+    monkeypatch.setattr(si.win32process, "GetModuleFileNameEx", lambda *a: "C:\\Python\\python.exe")
     monkeypatch.setattr(si.win32api, "TerminateProcess", lambda *a: killed.append("KILL"))
     monkeypatch.setattr(si.win32event, "WaitForSingleObject", lambda *a: None)
     monkeypatch.setattr(si.win32api, "CloseHandle", lambda *a: None)
