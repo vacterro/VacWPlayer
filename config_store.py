@@ -39,6 +39,17 @@ def read_raw(path: str) -> tuple[object, str | None]:
         return None, "corrupt"
 
 
+def _atomic_replace_bytes(path: str, data: bytes, promote_bak: bool) -> None:
+    """Low-level primitive (T-195). Temp-write EXACT bytes -> optional bak
+    promotion -> atomic replace. Raises OSError on disk failures."""
+    tmp = path + ".tmp"
+    with open(tmp, "wb") as f:
+        f.write(data)
+    if promote_bak and os.path.exists(path):
+        shutil.copy2(path, path + BAK_SUFFIX)
+    os.replace(tmp, path)
+
+
 def atomic_write(path: str, data: dict, promote_bak: bool = True) -> None:
     """Write `data` as JSON to `path`, keeping the previous content as .bak.
 
@@ -51,25 +62,16 @@ def atomic_write(path: str, data: dict, promote_bak: bool = True) -> None:
     source - a corrupt/rejected file must never overwrite the last-good .bak
     with garbage. Recovery writes never promote the damaged source.
     """
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=4)
-        f.write("\n")
-    if promote_bak and os.path.exists(path):
-        shutil.copy2(path, path + BAK_SUFFIX)
-    os.replace(tmp, path)
+    import json
+    raw = (json.dumps(data, indent=4) + "\n").encode("utf-8")
+    _atomic_replace_bytes(path, raw, promote_bak)
 
 
 def atomic_write_bytes(path: str, data: bytes, promote_bak: bool = True) -> None:
     """Atomic write of EXACT bytes (T-187): restores a previous file byte-for-
     byte, never re-parsing/re-serializing it (a corrupt old file must roll back
     as the same corrupt bytes)."""
-    tmp = path + ".tmp"
-    with open(tmp, "wb") as f:
-        f.write(data)
-    if promote_bak and os.path.exists(path):
-        shutil.copy2(path, path + BAK_SUFFIX)
-    os.replace(tmp, path)
+    _atomic_replace_bytes(path, data, promote_bak)
 
 
 def restore_backup(path: str) -> bool:
@@ -78,11 +80,21 @@ def restore_backup(path: str) -> bool:
     Callers MUST read and validate the .bak (read_raw + validate_config)
     BEFORE calling this - an unvalidated backup must never become the live
     config (T-135).
+
+    T-190: atomic replace via temp file so an I/O error during copy cannot
+    damage the live primary.
     """
     bak = path + BAK_SUFFIX
+    tmp = path + ".tmp"
     try:
-        shutil.copy2(bak, path)
-    except (OSError, shutil.SameFileError):
+        shutil.copy2(bak, tmp)
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except OSError:
+            pass
         return False
     return True
 

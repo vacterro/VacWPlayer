@@ -331,12 +331,23 @@ def _kill_previous_holder(name, timeout_sec=5):
               f"process identity not proven", file=sys.stderr)
         return
     try:
-        handle = win32api.OpenProcess(win32con.PROCESS_TERMINATE | win32con.SYNCHRONIZE, False, pid)
+        # T-185: open the handle with query rights first.
+        handle = win32api.OpenProcess(
+            win32con.PROCESS_TERMINATE | win32con.SYNCHRONIZE |
+            win32con.PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
     except Exception:
-        return  # can't open — already gone or permission denied
+        return  # can't open - already gone or permission denied
     try:
+        # Verify the process instance we just opened is STILL python.exe/pythonw.exe
+        # running our script (a reused PID now pointing at notepad.exe fails this).
+        import win32process
+        img = win32process.GetModuleFileNameEx(handle, 0)
+        if not img or not os.path.basename(img).lower().startswith("python"):
+            return  # identity changed before open, foreign process
         win32api.TerminateProcess(handle, 0)
         win32event.WaitForSingleObject(handle, int(timeout_sec * 1000))
+    except Exception:
+        pass
     finally:
         win32api.CloseHandle(handle)
 

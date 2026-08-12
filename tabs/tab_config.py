@@ -18,7 +18,6 @@ persist a config the engine itself would reject.
 import copy
 import json
 import os
-import shutil
 
 import engine_config
 
@@ -63,15 +62,12 @@ def save_json(path, data):
     a successful write; never raises on disk errors."""
     if not isinstance(data, dict):
         return False
-    tmp = path + ".tmp"
+    from config_store import _atomic_replace_bytes
     try:
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
-            f.write("\n")
-        if os.path.exists(path):
-            shutil.copy2(path, path + BAK_SUFFIX)
-        os.replace(tmp, path)
+        raw = (json.dumps(data, indent=2) + "\n").encode("utf-8")
+        _atomic_replace_bytes(path, raw, True)
     except OSError:
+        tmp = path + ".tmp"
         try:
             if os.path.exists(tmp):
                 os.remove(tmp)

@@ -351,6 +351,7 @@ class VacWPlayer:
 
         bar = tk.Frame(self.root, bg=TOKENS["background"])
         bar.pack(side="bottom", fill="x", padx=4, pady=(0, 4))
+        self.bar = bar
 
         self.notebook = VintageNotebook(self.root)
         self.notebook.pack(fill="both", expand=True, padx=2, pady=2)
@@ -371,6 +372,11 @@ class VacWPlayer:
         ]
         self._build_all_tabs()
         self._restore_active_tab()
+        # Dynamic UI (no scrollbars): fit the window to the ACTIVE tab so no
+        # element ever clips out of bounds - the window follows its content
+        # and the user never has to resize manually.
+        self.notebook.bind("<<NotebookTabChanged>>", self._fit_window_to_content)
+        self.root.after(10, self._fit_window_to_content)
 
         self._bar_locale_widgets = []
         self.lang_var = tk.StringVar()
@@ -453,6 +459,31 @@ class VacWPlayer:
         self._apply_locale()
         self.collect_config()
         save_config(self.config)
+
+    def _fit_window_to_content(self, _event=None):
+        """Dynamic UI (no scrollbars): the window grows to fit the ACTIVE tab
+        so every element stays in view - out-of-bounds elements move by the
+        window following its content, never by manual resize. minsize clamps
+        manual shrinking below the content so nothing can clip."""
+        try:
+            self.root.update_idletasks()
+        except tk.TclError:
+            return
+        try:
+            need_w = self.notebook.winfo_reqwidth() + 4
+            need_h = self.notebook.winfo_reqheight() + 4
+            if getattr(self, "bar", None) is not None:
+                need_h += self.bar.winfo_reqheight()
+            self.root.minsize(need_w, need_h)
+            cur_w = self.root.winfo_width()
+            cur_h = self.root.winfo_height()
+            # grow-only: a larger user-chosen window is preserved, a smaller
+            # one is bumped up to the content so nothing is ever cut off.
+            if need_w > cur_w or need_h > cur_h:
+                self.root.geometry("%dx%d" % (max(need_w, cur_w),
+                                              max(need_h, cur_h)))
+        except tk.TclError:
+            pass
 
     def _apply_locale(self):
         for kind, widget, key in self._bar_locale_widgets:
@@ -693,8 +724,11 @@ class VacWPlayer:
         self._refresh_mode_box()
 
     def _update_ahk_dot(self, running):
-        self.ahk_dot.itemconfig(self.ahk_dot_id,
-                                fill=TOKENS["success"] if running else TOKENS["danger"])
+        if running == "unknown":
+            color = TOKENS.get("warning", "#7A7A20")
+        else:
+            color = TOKENS["success"] if running else TOKENS["danger"]
+        self.ahk_dot.itemconfig(self.ahk_dot_id, fill=color)
 
     def apply_and_start(self):
         if self._applying:
@@ -754,9 +788,18 @@ class VacWPlayer:
 
     def stop_engine(self):
         self._engine_should_run = False
-        ahk_generator.stop_ahk()
-        self.status_lbl.config(text=Locale.tr("engine_stopped"), fg=TOKENS["textPrimary"])
-        self._update_ahk_dot(False)
+        res = ahk_generator.stop_ahk()
+        if res in ("STOPPED", "ALREADY_STOPPED"):
+            self.status_lbl.config(text=Locale.tr("engine_stopped"), fg=TOKENS["textPrimary"])
+            self._update_ahk_dot(False)
+        else:
+            self.status_lbl.config(text="Stop Unknown/Failed", fg=TOKENS["error"])
+            # dot reflects actual is_running/unknown semantics
+            ahk_is = ahk_generator.is_running()
+            if ahk_is is None:
+                self._update_ahk_dot("unknown")
+            else:
+                self._update_ahk_dot(ahk_is)
 
     def _engine_watchdog(self):
         if getattr(self, "_engine_should_run", False) and not self._applying:
