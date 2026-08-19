@@ -15,6 +15,7 @@
         "stop_key": "s",
         "manual_aim_block": true,
         "guard_outside_game": true,
+        "cursor_outside_mode": "pause",
         "exit_when_bs_gone": true,
         "target_exe": "HD-Player.exe"
     },
@@ -22,15 +23,15 @@
     "champions": {
         "ryze": {
             "trigger_wave": "F13",
-            "keys_wave": "q,e,{Space}",
+            "keys_wave": "q,e,r,{Space}",
             "move_when_pressed_wave": false,
-            "trigger_jungle": "F14,",
+            "trigger_jungle": "F14",
             "keys_jungle": "q,q,e,q,w,q,{Space}",
             "move_when_pressed_jungle": false,
-            "trigger_pvp": "F15,mbutton",
-            "keys_pvp": "q,e,w,{Space}",
+            "trigger_pvp": "F15,Mbutton",
+            "keys_pvp": "{Space},q,e,w",
             "move_when_pressed_pvp": true,
-            "interval": 16,
+            "interval": 32,
             "use_shift": false,
             "qwer_as_uiop": true,
             "display_name": "Ryze",

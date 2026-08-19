@@ -117,6 +117,28 @@ def _client_bounds_ok(hwnd, x, y):
     return 0 <= x < w and 0 <= y < h
 
 
+def _wait_foreground(hwnd, timeout=3.0, settle=0.2):
+    """Wait until `hwnd` is genuinely the foreground window, then settle.
+
+    SetForegroundWindow can win the race ahead of the window's input routing
+    actually switching (T-202): an action fired the instant the check passes
+    can still land in whatever was in front a moment before. Polling until the
+    foreground check holds, plus a settle pause, makes every resurrect action
+    land inside the game window. False = never became foreground (or a probe
+    failed) - callers must skip, never force.
+    """
+    t_end = time.time() + timeout
+    while time.time() < t_end:
+        try:
+            if win32gui.GetForegroundWindow() == hwnd:
+                time.sleep(settle)
+                return True
+        except Exception:
+            return False
+        time.sleep(0.05)
+    return False
+
+
 def _reload_candidate():
     """Non-exiting candidate config read for HOT RELOAD (T-191): returns the
     parsed+semantically-valid config, or None (keep last-good, warn once).
@@ -241,7 +263,11 @@ def handle_death(hwnd, cfg, templates):
         window_ctl.maximize_and_focus(hwnd)
         print("restored and focused")
 
-        if win32gui.GetForegroundWindow() == hwnd:
+        # T-202: wait until the game is REALLY the foreground window (and a
+        # settle pause has passed) before any resurrect action - a click fired
+        # while the switch is still landing can hit the window that was in
+        # front a moment ago and pop its context menu over the game.
+        if _wait_foreground(hwnd):
             if cfg.get("click_mid_on_resurrect"):
                 mid = _mid_click_coords()
                 if mid is None:
@@ -250,8 +276,10 @@ def handle_death(hwnd, cfg, templates):
                     x, y = mid
                     # T-178: verified inside the current client rect immediately
                     # before the click - an out-of-bounds coordinate never fires.
+                    # click_at posts background messages straight into the game
+                    # window, so the click can never land on another program.
                     if _client_bounds_ok(hwnd, x, y):
-                        window_ctl.click_client_pos(hwnd, x, y)
+                        window_ctl.click_at(hwnd, x, y, button="left")
                         print(f"clicked mid on minimap ({x}, {y})")
                     else:
                         print(f"resurrect mid-click skipped: ({x}, {y}) outside client area")
@@ -260,7 +288,7 @@ def handle_death(hwnd, cfg, templates):
                 if not toggle_mouse_lock(hwnd):
                     print("warning: mouse-lock toggle failed after resurrect, mouse may remain locked")
         else:
-            print("resurrect actions skipped: game not focused after restore")
+            print("resurrect actions skipped: game did not become the foreground window")
     finally:
         _set_block(0)
         print("phase-3 finished, pedals unblocked")

@@ -117,6 +117,13 @@ def _check_toggles(problems, toggles):
         else:  # int
             if not _is_int(v):
                 problems.append("'toggles.%s' must be an integer, got %r" % (key, v))
+    if "cursor_outside_mode" in toggles and isinstance(toggles["cursor_outside_mode"], str):
+        v = toggles["cursor_outside_mode"]
+        if v not in ("pause", "stop", "off"):
+            # T-203: a misspelled mode must never silently act as 'pause' -
+            # the AHK gate compares the literal value.
+            problems.append("'toggles.cursor_outside_mode' must be one of "
+                            "'pause', 'stop', 'off', got %r" % (v,))
 
 
 def _check_combos(problems, combos):

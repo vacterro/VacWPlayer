@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.3.33 (2026-08-19)
+- Deathwatch resurrect click now lands INSIDE the game: the phase-3 action waits until the game is really the foreground window (plus a settle pause) before firing, and the resurrect mid-click is posted straight into the game window instead of crashing on a never-implemented helper - a context menu of another program can no longer pop over the game (T-202).
+- Spam cursor guard is now a three-way choice (toggles.cursor_outside_mode): pause (default) skips clicks while the cursor is outside the game but keeps the mechanism armed - it resumes the moment the cursor is back; stop kills the running spam entirely on cursor leave; no-guard disables the check. The movement re-hold after focus return is deferred until the cursor is over the game, so the restore right-click can never open another window's context menu (T-203).
+- New "Cursor outside game" combobox on the Main tab, config whitelist validation, 34 locale bundles.
+- Tests: suite 614 -> 633 PASS, pyflakes 0.
+
 ## v0.3.32 (2026-08-12)
 - Safety audit pass 6, 12 tickets (T-181..T-191, T-195). AHK ownership is now EXACT-TOKEN: the identity scan fetches pid+command-line as JSON and requires the first script argument to equal wr_runtime.ahk exactly (no substring regex); every kill opens a process HANDLE and re-verifies that same instance as an AutoHotkey binary before terminating (PID-reuse TOCTOU closed); stop_ahk returns a result contract - on an UNKNOWN identity scan it retains the PID file and cache instead of erasing ownership; verified cache data keeps its own clock (failed scans never extend its TTL, is_running returns UNKNOWN instead of guessing) (T-181, T-182, T-183, T-184).
 - Apply determinism: the Apply candidate is deep-copied and frozen on the main thread - editor/autosave mutations mid-generation can no longer change what is generated or recorded as applied; the watchdog freezes its restart candidate the same way (T-185). save_config(False) now means NO durable half was committed (a blocked local half refuses the whole save instead of reporting partial success); failed recovery rolls back the previous local as exact bytes (never re-parsed); recovery writes never overwrite a good .bak with a rejected source (T-186, T-187, T-188).

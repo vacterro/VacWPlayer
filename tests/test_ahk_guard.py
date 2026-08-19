@@ -201,3 +201,87 @@ def test_rmb_plain_remap_guarded_when_rmb_hold_off():
         "target_exe": "HD-Player.exe",
         "rmb_hold_pvp": False,
     }))[0])
+
+
+# --- T-203: cursor-outside spam mode (pause / stop / off) -------------------
+
+def _master_segment(script):
+    """MasterSpammer timer body, from its label to the helper functions."""
+    start = script.index("MasterSpammer:")
+    end = script.index("CheckMovement() {", start)
+    return script[start:end]
+
+
+def _spam_cfg(mode="pause", mouse_remap=True, keep_move=False):
+    cfg = _cfg(toggles={
+        "target_exe": "HD-Player.exe",
+        "mouse_remap": mouse_remap,
+        "cursor_outside_mode": mode,
+        "keep_movement_on_death": keep_move,
+    })
+    cfg["combos"] = [{"trigger": "F15", "keys": "q,w,e"}]
+    return cfg
+
+
+def test_cursor_pause_default_skips_sends_keeps_flags():
+    """Pause (default): cursor outside -> the tick returns WITHOUT ResetState,
+    so every armed flag survives and the spam resumes when the cursor is back."""
+    seg = _master_segment(ab.generate_script(_spam_cfg("pause"))[0])
+    assert 'if (!MouseIsOver("ahk_exe HD-Player.exe")) {' in seg
+    assert ('if (!MouseIsOver("ahk_exe HD-Player.exe")) {\n'
+            '        return\n    }') in seg
+    # the cursor gate must never kill state - ResetState stays reserved for
+    # the window-not-active path above the gate
+    assert ('if (!MouseIsOver("ahk_exe HD-Player.exe")) {\n'
+            '        ResetState()') not in seg
+
+
+def test_cursor_stop_kills_state_on_leave():
+    """Stop: cursor outside -> ResetState() kills the whole mechanism (the
+    pre-T-203 behavior, now opt-in)."""
+    seg = _master_segment(ab.generate_script(_spam_cfg("stop"))[0])
+    assert 'if (!MouseIsOver("ahk_exe HD-Player.exe")) {' in seg
+    assert '        ResetState()\n        return\n    }' in seg
+
+
+def test_cursor_off_emits_no_spammer_cursor_gate():
+    """Off: no cursor check at all in the spammer (LMB/RMB pass-through bypass
+    guards in the hotkey section are a different, unrelated mechanism)."""
+    seg = _master_segment(ab.generate_script(_spam_cfg("off"))[0])
+    assert 'if (!MouseIsOver("ahk_exe HD-Player.exe")) {' not in seg
+
+
+def test_cursor_gate_only_emitted_with_mouse_remap():
+    seg = _master_segment(
+        ab.generate_script(_spam_cfg("pause", mouse_remap=False))[0])
+    assert 'if (!MouseIsOver("ahk_exe HD-Player.exe")) {' not in seg
+
+
+def test_cursor_pause_keeps_combo_steps_in_script():
+    """The combo step sends themselves are untouched in pause mode - only the
+    tick entry is gated."""
+    seg = _master_segment(ab.generate_script(_spam_cfg("pause"))[0])
+    assert "{sc010}" in seg
+
+
+def test_focus_watch_restore_defers_move_hold_until_cursor_over_game():
+    """keep_movement_on_death restore: the real RButton down must wait until
+    the cursor is over the game - otherwise the click lands in the window
+    under the cursor and pops its context menu over the game (T-203)."""
+    script, _ = ab.generate_script(_spam_cfg("pause", keep_move=True))
+    assert "global RestorePending := false" in script
+    assert "RestorePending := true" in script
+    assert 'if (RestorePending && _fw_act' in script
+    assert '        && MouseIsOver("ahk_exe HD-Player.exe")) {' in script
+    assert "RestorePending := false" in script
+
+
+def test_focus_watch_restore_immediate_when_cursor_gate_off():
+    """No guard -> the restore fires right away, exactly like pre-T-203."""
+    script, _ = ab.generate_script(_spam_cfg("off", keep_move=True))
+    assert "RestorePending" not in script
+
+
+def test_focus_watch_no_restore_block_without_keep_move():
+    script, _ = ab.generate_script(_spam_cfg("pause", keep_move=False))
+    assert "RestorePending" not in script

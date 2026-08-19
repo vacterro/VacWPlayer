@@ -5,7 +5,7 @@
 
 # VacWPlayer
 
-**v0.3.32** — [Changelog](CHANGELOG.md)
+**v0.3.33** — [Changelog](CHANGELOG.md)
 
 One vintage-themed GUI over the whole Wild Rift toolkit: pedal combos, per-champion
 rotations, death auto-minimize, and post-game auto-continue — a controllable "super

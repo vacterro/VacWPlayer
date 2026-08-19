@@ -1454,3 +1454,20 @@ def test_apply_worker_uses_frozen_candidate_not_mutable_draft(monkeypatch):
     assert seen[0]["combos"][0]["trigger"] == "F13"  # generated from A
     assert w._last_applied_config["combos"][0]["trigger"] == "F13"
     assert w.config["combos"][0]["trigger"] == "F14"  # draft B unchanged
+
+# --- T-203: cursor_outside_mode whitelist ------------------------------------
+
+def test_validate_config_cursor_outside_mode_valid():
+    assert config_store.validate_config({"toggles": {"cursor_outside_mode": "pause"}}) == []
+    assert config_store.validate_config({"toggles": {"cursor_outside_mode": "stop"}}) == []
+    assert config_store.validate_config({"toggles": {"cursor_outside_mode": "off"}}) == []
+
+
+def test_validate_config_cursor_outside_mode_rejected():
+    """A misspelled mode must never silently act as 'pause' - the AHK gate
+    compares the literal value (T-203)."""
+    for bad in ("everything", "PAUSE", "", "stop "):
+        problems = config_store.validate_config({"toggles": {"cursor_outside_mode": bad}})
+        assert problems, bad
+        assert any("cursor_outside_mode" in p for p in problems), bad
+    assert config_store.validate_config({"toggles": {"cursor_outside_mode": 5}})

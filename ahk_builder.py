@@ -84,6 +84,13 @@ def _is_plain_key(trigger):
     return bool(t and re.fullmatch(r"[A-Za-z0-9]|F\d{1,2}", t))
 
 
+def _indent(text, n):
+    """Indent every non-empty line of `text` by `n` spaces (cosmetic only -
+    AHK blocks are brace-delimited, indentation is for human readers)."""
+    pad = " " * n
+    return "".join(pad + ln if ln.strip() else ln for ln in text.splitlines(True))
+
+
 # Re-engages the LMB toggle-hold after a death-minimize / Alt-Tab once the game
 # window is focused again (see ResetState + FocusWatch). Emitted only when the
 # keep_movement_on_death toggle is on; indentation is 4 spaces in both contexts.
@@ -589,6 +596,8 @@ def _gen_header(a, target_exe, combos, afk, toggles):
     a.append("global RMB_PvpActive := false")
     if toggles.get("keep_movement_on_death"):
         a.append("global KeepMovePending := false")
+        if toggles.get("cursor_outside_mode", "pause") != "off":
+            a.append("global RestorePending := false")
     for c in combos:
         flag = "P_" + c["tag"]
         a.append("global " + flag + "_Held := false")
@@ -723,12 +732,33 @@ def _gen_focus_watch(a, target_exe, toggles, guard_bases=()):
     release burst that could not be delivered while the window was gone, so the
     game never comes back with LMB/RMB or an ability key still logically down.
 
+    The movement re-hold (KeepMoveRestore -> CheckMovement -> real RButton
+    down) is DEFERRED while the cursor is still outside the game window
+    (T-203): a right-click that fires the instant focus returns lands in
+    whatever window is under the cursor and pops its context menu in front of
+    the game. Button-up releases are never deferred - they cannot open a menu
+    - so stuck keys are still paid back immediately.
+
     PhantomSweep only runs while the game is NOT active, which is exactly when
     the script itself never sends anything - so any key the OS still reports as
     logically down while it is physically up is a leftover from an interrupted
     send, and releasing it is always safe. Two consecutive sightings are
     required so a send that is genuinely in flight is never cut in half.
     """
+    cursor_gate = toggles.get("cursor_outside_mode", "pause") != "off"
+    keep_move = bool(toggles.get("keep_movement_on_death"))
+    restore_body = ""
+    if keep_move:
+        if cursor_gate:
+            restore_body = (
+                "            if (!MouseIsOver(\"ahk_exe " + target_exe + "\")) {\n"
+                "                RestorePending := true\n"
+                "            } else {\n"
+                + _indent(_KEEP_MOVE_RESTORE, 16)
+                + "            }\n"
+            )
+        else:
+            restore_body = _indent(_KEEP_MOVE_RESTORE, 12)
     a.append("FocusWatch:")
     a.append('    _fw_act := WinActive("ahk_exe ' + target_exe + '") ? true : false')
     a.append("    if (_fw_act != WasActive) {")
@@ -738,10 +768,15 @@ def _gen_focus_watch(a, target_exe, toggles, guard_bases=()):
     a.append("        } else if (NeedCleanup) {")
     a.append("            NeedCleanup := false")
     a.append("            ReleaseAll()")
-    if toggles.get("keep_movement_on_death"):
-        a.append(_KEEP_MOVE_RESTORE.rstrip())
+    a.append(restore_body or "; nothing to restore")
     a.append("        }")
     a.append("    }")
+    if keep_move and cursor_gate:
+        a.append("    if (RestorePending && _fw_act")
+        a.append('        && MouseIsOver("ahk_exe ' + target_exe + '")) {')
+        a.append("        RestorePending := false")
+        a.append(_indent(_KEEP_MOVE_RESTORE, 8))
+        a.append("    }")
     a.append("    if (!_fw_act)")
     a.append("        PhantomSweep()")
     if guard_bases:
@@ -1148,9 +1183,17 @@ def _gen_master_spammer(a, target_exe, toggles, combos):
     a.append("        ResetState()")
     a.append("        return")
     a.append("    }")
-    if toggles.get("mouse_remap", True):
+    cursor_mode = toggles.get("cursor_outside_mode", "pause")
+    if toggles.get("mouse_remap", True) and cursor_mode != "off":
         a.append('    if (!MouseIsOver("ahk_exe ' + target_exe + '")) {')
-        a.append("        ResetState()")
+        if cursor_mode == "stop":
+            # stop: cursor leaving the game kills the whole mechanism.
+            a.append("        ResetState()")
+        # pause: skip this tick's sends but keep every flag armed - the spam
+        # resumes the moment the cursor is over the game again. The gate runs
+        # BEFORE the release cleanups on purpose: a cleanup may call
+        # CheckMovement, whose RButton down is a REAL click that must never
+        # land outside the game window (T-203).
         a.append("        return")
         a.append("    }")
     a.append('    if (LMB_Held && !GetKeyState("LButton", "P")) {')

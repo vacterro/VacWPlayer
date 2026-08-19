@@ -47,9 +47,17 @@ TOGGLE_DEFAULTS = {
     "stop_key": "s",
     "manual_aim_block": True,
     "guard_outside_game": True,
+    "cursor_outside_mode": "pause",
     "exit_when_bs_gone": True,
     "target_exe": "HD-Player.exe",
 }
+
+# Cursor-outside spam behavior (T-203): raw config value -> locale key.
+CURSOR_MODES = [
+    ("pause", "cursor_mode_pause"),
+    ("stop", "cursor_mode_stop"),
+    ("off", "cursor_mode_off"),
+]
 
 
 class MainTab(tk.Frame):
@@ -127,6 +135,20 @@ class MainTab(tk.Frame):
         self._chk_manual.grid(row=2, column=0, sticky="w")
         self._chk_guard = make_check(tog, Locale.tr("toggle_guard_outside"), self.var_guard)
         self._chk_guard.grid(row=2, column=1, sticky="w", padx=(6, 0))
+        self._lbl_cursor_mode = VintageLabel(tog, text=Locale.tr("cursor_mode_lbl"), font=FONT_SM)
+        self._lbl_cursor_mode.grid(row=8, column=0, sticky="w")
+        self._locale_widgets.append(("lbl", self._lbl_cursor_mode, "cursor_mode_lbl"))
+        cursor_mode = toggles.get("cursor_outside_mode", "pause")
+        if cursor_mode not in [v for v, _ in CURSOR_MODES]:
+            cursor_mode = "pause"
+        self.var_cursor_mode = tk.StringVar(value=self._cursor_mode_label(cursor_mode))
+        self.var_cursor_mode.trace_add("write", self._auto_save)
+        self.cursor_mode_combo = ttk.Combobox(
+            tog, textvariable=self.var_cursor_mode,
+            values=[self._cursor_mode_label(v) for v, _ in CURSOR_MODES],
+            width=20, font=FONT_SM, state="readonly")
+        self.cursor_mode_combo.grid(row=8, column=1, sticky="w", padx=(6, 0))
+        ToolTip(self.cursor_mode_combo, text=Locale.tr("tt_cursor_mode"))
         self._chk_exit_bs = make_check(tog, Locale.tr("toggle_exit_bs_gone"), self.var_exit_bs)
         self._chk_exit_bs.grid(row=7, column=0, columnspan=2, sticky="w")
         for w, k in ((self._chk_remap, "toggle_mouse_remap"),
@@ -178,6 +200,21 @@ class MainTab(tk.Frame):
         sep = tk.Frame(self, bg=TOKENS["borderMuted"], height=1)
         sep.pack(fill="x", padx=4, pady=4)
 
+    def _cursor_mode_label(self, value):
+        """Localized display label for a raw cursor-outside mode value."""
+        for v, k in CURSOR_MODES:
+            if v == value:
+                return Locale.tr(k)
+        return Locale.tr("cursor_mode_pause")
+
+    def _cursor_mode_value(self):
+        """Raw cursor-outside mode from the combobox's displayed label."""
+        label = self.var_cursor_mode.get()
+        for v, k in CURSOR_MODES:
+            if Locale.tr(k) == label:
+                return v
+        return "pause"
+
     def apply_locale(self):
         for kind, widget, key in self._locale_widgets:
             if kind == "lbl":
@@ -186,6 +223,12 @@ class MainTab(tk.Frame):
                 widget.label.config(text=Locale.tr(key))
             elif kind == "chk":
                 widget.config(text=Locale.tr(key))
+        # combobox labels are localized too - preserve the raw mode across
+        # the language switch
+        raw = self._cursor_mode_value()
+        self.cursor_mode_combo.config(
+            values=[self._cursor_mode_label(v) for v, _ in CURSOR_MODES])
+        self.var_cursor_mode.set(self._cursor_mode_label(raw))
 
     def _sync_release_on_keys(self, *args):
         """'Keys release hold', 'Untoggle keys' and 'Keep movement after death'
@@ -268,6 +311,7 @@ class MainTab(tk.Frame):
             "stop_key": self.var_stop.get().strip(),
             "manual_aim_block": self.var_manual.get(),
             "guard_outside_game": self.var_guard.get(),
+            "cursor_outside_mode": self._cursor_mode_value(),
             "exit_when_bs_gone": self.var_exit_bs.get(),
             "target_exe": self.var_exe.get().strip() or "HD-Player.exe",
         }
