@@ -164,23 +164,38 @@ def run_poller(name, config_path, config_name, build_targets, scan_targets,
     deterministic FATAL (SystemExit 1) - an engine with zero usable targets
     must not idle forever. On hot reload a rejected set keeps the last-good
     config and targets transactionally, warning once instead of losing work.
+
+    T-W2-001: validate config and resources BEFORE acquiring the single-instance
+    mutex so a bad candidate cannot destructively replace a healthy running engine.
     """
     engine_config.setup_logging()
+
+    # Candidate readiness check FIRST: validate config, build targets, verify
+    # usability - only then acquire the mutex so we never kill a healthy holder
+    # over a bad candidate (T-W2-001).
+    try:
+        cfg = load_config(config_path, config_name)
+    except SystemExit:
+        raise
+    except Exception:
+        raise SystemExit(1)
+    try:
+        targets = build_targets(cfg)
+    except Exception:
+        print("FATAL: failed to build targets for %s - not starting" % config_name)
+        raise SystemExit(1)
+    if usable is not None and not usable(targets):
+        print("FATAL: no usable targets in %s - not starting" % config_name)
+        raise SystemExit(1)
+
+    # Candidate is ready: now acquire ownership and start runtime side effects.
     single_instance.ensure_single_instance(name, replace=replace)
     single_instance.start_parent_watchdog()
     window_ctl.set_dpi_aware()
 
-    # Guarded load FIRST (missing/corrupt config -> deterministic FATAL, not a
-    # raw getmtime traceback), then seed the mtime probe from the file we just
-    # read (T-082).
-    cfg = load_config(config_path, config_name)
     cfg_last_mtime = os.path.getmtime(config_path)
     hwnd = None
     loaded_window_title = cfg["window_title"]
-    targets = build_targets(cfg)
-    if usable is not None and not usable(targets):
-        print("FATAL: no usable targets in %s - not starting" % config_name)
-        raise SystemExit(1)
     print(startup(cfg, targets))
 
     while True:

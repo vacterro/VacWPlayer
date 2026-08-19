@@ -125,7 +125,7 @@ class DeathWatchTab(tk.Frame):
     def __init__(self, parent):
         super().__init__(parent, bg=TOKENS["background"])
         self.cfg_path = os.path.join(BASE, self.CONFIG_NAME)
-        self._static_cfg = load_json(self.cfg_path, self.CONFIG_NAME)
+        self._static_cfg, cfg_status = load_json(self.cfg_path, self.CONFIG_NAME)
         cfg = self._static_cfg
 
         form = tk.Frame(self, bg=TOKENS["background"])
@@ -133,7 +133,13 @@ class DeathWatchTab(tk.Frame):
 
         self._locale_widgets = []
 
-        mon_enabled = cfg.get("monitor_enabled", True)
+        # T-CORE-012: missing => canonical default; corrupt/invalid => OFF.
+        if cfg_status == "missing":
+            mon_enabled = canonical_default(self.CONFIG_NAME).get("monitor_enabled", False)
+        elif cfg_status in ("corrupt", "io_error", "semantic_invalid", "wrong_shape"):
+            mon_enabled = False
+        else:
+            mon_enabled = cfg.get("monitor_enabled", False)
         self.monitor_var = tk.BooleanVar(value=mon_enabled)
         self.chk_monitor = tk.Checkbutton(form, text=Locale.tr("enable_death_monitor"), variable=self.monitor_var,
                                           bg=TOKENS["background"], fg=TOKENS["textPrimary"], selectcolor=TOKENS["compareBack"],
@@ -222,6 +228,35 @@ class DeathWatchTab(tk.Frame):
         self._locale_widgets.append(("chk", lw_btn, "lock_window_lbl"))
         ToolTip(lw_btn, key="tt_lock_window")
 
+        self.cursor_move = tk.BooleanVar(value=cfg.get("cursor_move_on_resurrect", True))
+        self.cursor_move.trace_add("write", self._auto_save)
+        cm_btn = tk.Checkbutton(actions, text=Locale.tr("cursor_move_lbl"), variable=self.cursor_move,
+                       bg=TOKENS["background"], fg=TOKENS["textPrimary"], selectcolor=TOKENS["compareBack"])
+        cm_btn.pack(side="left", padx=(6, 0))
+        self._locale_widgets.append(("chk", cm_btn, "cursor_move_lbl"))
+        ToolTip(cm_btn, key="tt_cursor_move")
+
+        self.pvp_after_res = tk.BooleanVar(value=cfg.get("pvp_after_resurrect", False))
+        self.pvp_after_res.trace_add("write", self._auto_save)
+        pvp_btn = tk.Checkbutton(actions, text=Locale.tr("pvp_after_res_lbl"), variable=self.pvp_after_res,
+                       bg=TOKENS["background"], fg=TOKENS["textPrimary"], selectcolor=TOKENS["compareBack"])
+        pvp_btn.pack(side="left", padx=(6, 0))
+        self._locale_widgets.append(("chk", pvp_btn, "pvp_after_res_lbl"))
+        ToolTip(pvp_btn, key="tt_pvp_after_res")
+
+        cursor_frame = tk.Frame(config_frame, bg=TOKENS["background"])
+        cursor_frame.pack(fill="x", pady=0)
+        self.cursor_move_x = tk.StringVar(value=cfg.get("cursor_move_x_pct", 75))
+        self.cursor_move_x.trace_add("write", self._auto_save)
+        self.cursor_move_y = tk.StringVar(value=cfg.get("cursor_move_y_pct", 25))
+        self.cursor_move_y.trace_add("write", self._auto_save)
+        self.cursor_move_hold = tk.StringVar(value=cfg.get("cursor_move_hold_ms", 250))
+        self.cursor_move_hold.trace_add("write", self._auto_save)
+        self._locale_widgets.extend(grid_row(cursor_frame, 0,
+                 ("cursor_move_x_lbl", self.cursor_move_x, 5),
+                 ("cursor_move_y_lbl", self.cursor_move_y, 5),
+                 ("cursor_move_hold_lbl", self.cursor_move_hold, 6)))
+
         self.work_window = VintageWindowPicker(config_frame, Locale.tr("work_window_lbl"), cfg.get("work_window_title", ""), label_key="work_window_lbl")
         self.work_window.pack(fill="x", pady=0)
         self._locale_widgets.append(("picker", self.work_window, "work_window_lbl"))
@@ -265,6 +300,11 @@ class DeathWatchTab(tk.Frame):
         self.switch_to_work.set(d["switch_to_work_window"])
         self.click_mid.set(d["click_mid_on_resurrect"])
         self.lock_window.set(d["lock_window_resurrect"])
+        self.cursor_move.set(d["cursor_move_on_resurrect"])
+        self.cursor_move_x.set(str(d["cursor_move_x_pct"]))
+        self.cursor_move_y.set(str(d["cursor_move_y_pct"]))
+        self.cursor_move_hold.set(str(d["cursor_move_hold_ms"]))
+        self.pvp_after_res.set(d["pvp_after_resurrect"])
         self.window_picker.title_var.set(d["window_title"])
         self.work_window.title_var.set(d["work_window_title"])
 
@@ -286,8 +326,9 @@ class DeathWatchTab(tk.Frame):
             self.runner.start(["--replace"])
         else:
             self.runner.stop()
+            # W2-002: stopping is authoritative - never lie about runtime state.
             if not self.save_monitor_state():
-                self.monitor_var.set(True)  # disk still says enabled - restore
+                self.status_var.set(Locale.tr("save_failed", fallback="Stopped (state not persisted)"))
 
     def save_monitor_state(self):
         return update_json(self.cfg_path,
@@ -318,10 +359,8 @@ class DeathWatchTab(tk.Frame):
             cfg["shop_buffer_sec"] = float(self.shop_buffer.get())
             cfg["restore_buffer_sec"] = float(self.restore_buffer.get())
             cfg["match_threshold"] = float(self.match_threshold.get())
-            cfg["death_label_region"] = self._static_cfg.get("death_label_region", [900, 118, 1165, 145])
-            cfg["timer_digits_region"] = self._static_cfg.get("timer_digits_region", [955, 143, 1035, 170])
-            cfg["death_label_template"] = self._static_cfg.get("death_label_template", "templates/death_label.png")
-            cfg["digit_templates_dir"] = self._static_cfg.get("digit_templates_dir", "templates/digits")
+            # W2-005: only write UI-owned fields; do not overwrite externally
+            # hot-reloaded resource/region values from the startup snapshot.
             cfg["max_death_wait_sec"] = float(self.max_wait.get())
             raw = self.blocked_keys.get()
             cfg["blocked_keys"] = [k.strip().upper() for k in raw.split(",") if k.strip()]
@@ -330,6 +369,11 @@ class DeathWatchTab(tk.Frame):
             cfg["work_window_title"] = self.work_window.get()
             cfg["click_mid_on_resurrect"] = self.click_mid.get()
             cfg["lock_window_resurrect"] = self.lock_window.get()
+            cfg["cursor_move_on_resurrect"] = self.cursor_move.get()
+            cfg["cursor_move_x_pct"] = int(self.cursor_move_x.get())
+            cfg["cursor_move_y_pct"] = int(self.cursor_move_y.get())
+            cfg["cursor_move_hold_ms"] = int(self.cursor_move_hold.get())
+            cfg["pvp_after_resurrect"] = self.pvp_after_res.get()
         try:
             ok = update_json(self.cfg_path, mutate,
                              canonical_default(self.CONFIG_NAME), config_name=self.CONFIG_NAME)

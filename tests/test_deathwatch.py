@@ -1,4 +1,4 @@
-"""deathwatch restore-gating unit tests (T-202)."""
+"""deathwatch restore-gating unit tests (T-202, T-204)."""
 
 import sys
 from pathlib import Path
@@ -51,6 +51,11 @@ def _death_cfg():
         "work_window_title": "",
         "click_mid_on_resurrect": True,
         "lock_window_resurrect": False,
+        "cursor_move_on_resurrect": True,
+        "cursor_move_x_pct": 75,
+        "cursor_move_y_pct": 25,
+        "cursor_move_hold_ms": 250,
+        "pvp_after_resurrect": False,
     }
 
 
@@ -75,12 +80,19 @@ def _install_handle_death_mocks(monkeypatch, hwnd):
     monkeypatch.setattr(deathwatch.capture, "get_client_size",
                         lambda h: (1920, 1080))
     monkeypatch.setattr(deathwatch, "_mid_click_coords", lambda: (270, 293))
+    monkeypatch.setattr(deathwatch, "_cursor_move_point", lambda h, cfg: (1440, 270))
+    moved = []
+    monkeypatch.setattr(deathwatch, "_move_cursor_tap",
+                        lambda h, x, y, hold: moved.append((x, y, hold)) or True)
+    monkeypatch.setattr(deathwatch, "_pvp_trigger_vk", lambda: None)
+    sent_keys = []
+    monkeypatch.setattr(deathwatch, "_send_key_tap", lambda h, vk: sent_keys.append(vk) or True)
 
     def fake_click_at(target, x, y, button="right"):
         clicked.append((target, x, y, button))
 
     monkeypatch.setattr(deathwatch.window_ctl, "click_at", fake_click_at)
-    return clicked
+    return clicked, moved, sent_keys
 
 
 def test_resurrect_click_posts_into_game_window(monkeypatch):
@@ -88,14 +100,14 @@ def test_resurrect_click_posts_into_game_window(monkeypatch):
     messages into the game window) - the never-implemented
     window_ctl.click_client_pos crashed the phase with AttributeError (T-202)."""
     hwnd = 999
-    clicked = _install_handle_death_mocks(monkeypatch, hwnd)
+    clicked, _, _ = _install_handle_death_mocks(monkeypatch, hwnd)
     deathwatch.handle_death(hwnd, _death_cfg(), templates=None)
     assert clicked == [(hwnd, 270, 293, "left")]
 
 
 def test_resurrect_click_skipped_when_outside_client_bounds(monkeypatch):
     hwnd = 999
-    clicked = _install_handle_death_mocks(monkeypatch, hwnd)
+    clicked, _, _ = _install_handle_death_mocks(monkeypatch, hwnd)
     monkeypatch.setattr(deathwatch.capture, "get_client_size",
                         lambda h: (100, 100))  # mid (270,293) outside
     deathwatch.handle_death(hwnd, _death_cfg(), templates=None)
@@ -104,16 +116,172 @@ def test_resurrect_click_skipped_when_outside_client_bounds(monkeypatch):
 
 def test_resurrect_actions_skipped_when_game_never_foreground(monkeypatch):
     hwnd = 999
-    clicked = _install_handle_death_mocks(monkeypatch, hwnd)
+    clicked, moved, sent = _install_handle_death_mocks(monkeypatch, hwnd)
     monkeypatch.setattr(deathwatch, "_wait_foreground", lambda h, **k: False)
     deathwatch.handle_death(hwnd, _death_cfg(), templates=None)
     assert clicked == []
+    assert moved == []
+    assert sent == []
 
 
 def test_resurrect_click_off_when_not_configured(monkeypatch):
     hwnd = 999
-    clicked = _install_handle_death_mocks(monkeypatch, hwnd)
+    clicked, _, _ = _install_handle_death_mocks(monkeypatch, hwnd)
     cfg = _death_cfg()
     cfg["click_mid_on_resurrect"] = False
     deathwatch.handle_death(hwnd, cfg, templates=None)
     assert clicked == []
+
+
+# --- T-204 cursor move + PvP restart -----------------------------------------
+
+def test_cursor_move_point_computed_from_client_pct(monkeypatch):
+    hwnd = 999
+    monkeypatch.setattr(deathwatch.win32gui, "GetWindowRect",
+                        lambda h: (100, 200, 1900, 1080))  # w=1800, h=880
+    assert deathwatch._cursor_move_point(hwnd,
+                                         {"cursor_move_x_pct": 75,
+                                          "cursor_move_y_pct": 25}) == (1450, 420)
+    assert deathwatch._cursor_move_point(hwnd,
+                                         {"cursor_move_x_pct": 0,
+                                          "cursor_move_y_pct": 99}) == (100, 1071)
+
+
+def test_cursor_move_tap_sends_real_lmb_with_hold(monkeypatch):
+    import ctypes
+    hwnd = 999
+    calls = []
+    monkeypatch.setattr(deathwatch.win32gui, "GetForegroundWindow", lambda: hwnd)
+    monkeypatch.setattr(ctypes.windll.user32, "SetCursorPos",
+                        lambda x, y: calls.append(("set", x, y)) or 1)
+    monkeypatch.setattr(ctypes.windll.user32, "mouse_event",
+                        lambda ev, *a: calls.append(("ev", ev)))
+    monkeypatch.setattr(deathwatch.time, "sleep", lambda s: calls.append(("sleep", s)))
+    assert deathwatch._move_cursor_tap(hwnd, 1440, 270, 250) is True
+    assert calls[0] == ("set", 1440, 270)
+    assert ("ev", 0x02) in calls  # LMB down
+    assert ("ev", 0x04) in calls  # LMB up
+    assert ("sleep", 0.25) in calls
+    assert calls[-1] == ("ev", 0x04)
+
+
+def test_cursor_move_tap_skipped_when_not_foreground(monkeypatch):
+    import ctypes
+    calls = []
+    monkeypatch.setattr(deathwatch.win32gui, "GetForegroundWindow", lambda: 1)
+    monkeypatch.setattr(ctypes.windll.user32, "SetCursorPos",
+                        lambda x, y: calls.append(("set", x, y)) or 1)
+    monkeypatch.setattr(ctypes.windll.user32, "mouse_event",
+                        lambda ev, *a: calls.append(("ev", ev)))
+    assert deathwatch._move_cursor_tap(999, 100, 100, 100) is False
+    # SetCursorPos happens (non-destructive), but LMB down never fires
+    # because foreground was lost JIT-before the hardware DOWN (T-CORE-007).
+    assert calls[0] == ("set", 100, 100)
+    assert all(c[0] != ("ev", 0x02) for c in calls)
+
+
+def test_cursor_move_tap_false_when_setcursorpos_fails(monkeypatch):
+    import ctypes
+    hwnd = 999
+    calls = []
+    monkeypatch.setattr(deathwatch.win32gui, "GetForegroundWindow", lambda: hwnd)
+    monkeypatch.setattr(ctypes.windll.user32, "SetCursorPos",
+                        lambda x, y: calls.append(("set", x, y)) or 0)
+    monkeypatch.setattr(ctypes.windll.user32, "mouse_event",
+                        lambda ev, *a: calls.append(("ev", ev)))
+    assert deathwatch._move_cursor_tap(hwnd, 100, 100, 100) is False
+    assert ("ev", 0x02) not in calls
+    assert ("ev", 0x04) not in calls
+
+
+# --- T-204 PvP trigger resolution --------------------------------------------
+
+def test_trigger_vk_mapping():
+    assert deathwatch._trigger_vk("F1") == 0x70
+    assert deathwatch._trigger_vk("F15") == 0x7E
+    assert deathwatch._trigger_vk("F24") == 0x87
+    assert deathwatch._trigger_vk("MButton") == 0x04
+    assert deathwatch._trigger_vk("RButton") == 0x02
+    assert deathwatch._trigger_vk("LButton") == 0x01
+    assert deathwatch._trigger_vk("q") == ord("Q")  # via key_vk canonical parser
+    assert deathwatch._trigger_vk("vk7E") == 0x7E
+    assert deathwatch._trigger_vk("F25") is None
+    assert deathwatch._trigger_vk("") is None
+    assert deathwatch._trigger_vk(None) is None
+
+
+def test_pvp_trigger_vk_uses_first_trigger_of_active_pvp_combo(monkeypatch):
+    data = {"mode": "ryze", "champions": {"ryze": {}}}
+    monkeypatch.setattr(deathwatch.config_store, "validate_config",
+                        lambda d: False)
+    monkeypatch.setattr(deathwatch.ahk_builder, "_active_combos",
+                        lambda d: ([{"tag": "ryze_wave", "triggers": ["F13"]},
+                                    {"tag": "ryze_pvp", "triggers": ["F15", "MButton"]}], []))
+    vk = deathwatch._pvp_trigger_vk()
+    assert vk == 0x7E
+
+
+def test_pvp_trigger_vk_none_without_pvp_combo(monkeypatch):
+    monkeypatch.setattr(deathwatch.config_store, "validate_config",
+                        lambda d: False)
+    monkeypatch.setattr(deathwatch.ahk_builder, "_active_combos",
+                        lambda d: ([{"tag": "ryze_wave", "triggers": ["F13"]}], []))
+    assert deathwatch._pvp_trigger_vk() is None
+
+
+def test_pvp_trigger_vk_none_when_config_invalid(monkeypatch):
+    monkeypatch.setattr(deathwatch.config_store, "validate_config",
+                        lambda d: True)
+    monkeypatch.setattr(deathwatch.ahk_builder, "_active_combos",
+                        lambda d: ([{"tag": "ryze_pvp", "triggers": ["F15"]}], []))
+    assert deathwatch._pvp_trigger_vk() is None
+
+
+def test_send_key_tap_down_and_up(monkeypatch):
+    import ctypes
+    sent = []
+    monkeypatch.setattr(deathwatch.win32gui, "GetForegroundWindow", lambda: 999)
+    monkeypatch.setattr(ctypes.windll.user32, "keybd_event",
+                        lambda vk, *a: sent.append(vk))
+    assert deathwatch._send_key_tap(999, 0x7E) is True
+    assert sent == [0x7E, 0x7E]
+    assert deathwatch._send_key_tap(999, 0) is False
+    assert deathwatch._send_key_tap(999, None) is False
+
+
+def test_resurrect_cursor_move_then_pvp_order(monkeypatch):
+    """T-204 integration: when both flags are on, the order is mid-click,
+    cursor move+tap, then the PvP trigger key."""
+    hwnd = 999
+    clicked, moved, sent = _install_handle_death_mocks(monkeypatch, hwnd)
+    monkeypatch.setattr(deathwatch, "_pvp_trigger_vk", lambda: 0x7E)
+    cfg = _death_cfg()
+    cfg["cursor_move_on_resurrect"] = True
+    cfg["pvp_after_resurrect"] = True
+    deathwatch.handle_death(hwnd, cfg, templates=None)
+    assert clicked == [(hwnd, 270, 293, "left")]
+    assert moved == [(1440, 270, 250)]
+    assert sent == [0x7E]
+
+
+def test_resurrect_cursor_move_skipped_when_off(monkeypatch):
+    hwnd = 999
+    clicked, moved, sent = _install_handle_death_mocks(monkeypatch, hwnd)
+    cfg = _death_cfg()
+    cfg["cursor_move_on_resurrect"] = False
+    cfg["pvp_after_resurrect"] = False
+    deathwatch.handle_death(hwnd, cfg, templates=None)
+    assert moved == []
+    assert sent == []
+    assert clicked == [(hwnd, 270, 293, "left")]
+
+
+def test_resurrect_pvp_skipped_when_trigger_unresolvable(monkeypatch):
+    hwnd = 999
+    clicked, moved, sent = _install_handle_death_mocks(monkeypatch, hwnd)
+    monkeypatch.setattr(deathwatch, "_pvp_trigger_vk", lambda: None)
+    cfg = _death_cfg()
+    cfg["pvp_after_resurrect"] = True
+    deathwatch.handle_death(hwnd, cfg, templates=None)
+    assert sent == []
+    assert moved == [(1440, 270, 250)]

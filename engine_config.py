@@ -115,6 +115,11 @@ ENGINE_DEFAULTS = {
         "work_window_title": "",
         "click_mid_on_resurrect": False,
         "lock_window_resurrect": False,
+        "cursor_move_on_resurrect": True,
+        "cursor_move_x_pct": 75,
+        "cursor_move_y_pct": 25,
+        "cursor_move_hold_ms": 250,
+        "pvp_after_resurrect": False,
         "autobuy_after_b": False,
         "buy_after_b_delay_sec": 6.5,
         "autobuy_then_mid": False,
@@ -307,6 +312,31 @@ def _collect_problems(cfg, name):
     _check_template_list("buttons")
     if name == "autocontinue_config.json":
         _check_autocontinue_buttons()
+    if name == "surrender_config.json":
+        # T-CORE-014: migrate legacy template names to explicit action field.
+        items = cfg.get("templates")
+        if isinstance(items, list):
+            for i, item in enumerate(items):
+                if not isinstance(item, dict):
+                    continue
+                action = item.get("action")
+                name_val = item.get("name", "")
+                if action is not None:
+                    if action not in ("accept", "decline"):
+                        _p("key 'templates'[%d].action must be 'accept' or 'decline', got %r",
+                           i, action)
+                    continue
+                low = name_val.lower()
+                migrated = False
+                if low == "accept":
+                    items[i]["action"] = "accept"
+                    migrated = True
+                elif low == "decline":
+                    items[i]["action"] = "decline"
+                    migrated = True
+                if not migrated and ("accept" in low or "decline" in low):
+                    _p("key 'templates'[%d].name %r is ambiguous; add explicit action",
+                       i, name_val)
 
     # Deathwatch-specific fields - every consumed value is validated.
     _check_region("death_label_region")

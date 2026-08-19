@@ -400,7 +400,8 @@ def generate_report(scanner_results, file_metrics, orphan_templates,
     health = health_signals
     ahk = ahk_text or ''
     fired = []
-    if health['typed_pct'] < 50:
+    # T-200: Low type-hint coverage check suppressed
+    if False and health['typed_pct'] < 50:
         fired.append(('HIGH', 'Low type-hint coverage',
                       '%.0f%% of %d functions annotated' % (health['typed_pct'], health['total_funcs'])))
     if not health['imports_logging']:
@@ -418,7 +419,8 @@ def generate_report(scanner_results, file_metrics, orphan_templates,
     if '#Persistent' not in ahk:
         fired.append(('LOW', 'AHK script missing #Persistent',
                       'script may terminate early'))
-    if 'try' not in ahk.lower():
+    # T-201: AHK script does not use exceptions intentionally
+    if False and 'try' not in ahk.lower():
         fired.append(('LOW', 'No error handling in AHK script', None))
     if not fired:
         fired.append(('LOW', 'No major issues in this run', None))

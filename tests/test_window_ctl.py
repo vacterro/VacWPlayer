@@ -204,3 +204,38 @@ def test_press_key_burst_fires_when_foreground(monkeypatch):
     assert len(pressed) == 6
     assert pressed[0] == (0x41, 0, 0, 0)
     assert pressed[-1] == (0x41, 0, window_ctl.win32con.KEYEVENTF_KEYUP, 0)
+
+# --- SetForegroundWindow pywintypes.error must never kill the watcher --------
+
+def test_force_foreground_refused_never_raises(monkeypatch):
+    """Windows refuses foreground-steal from a background process with
+    pywintypes.error (0, 'SetForegroundWindow', ...) - best-effort focus must
+    never propagate that into the deathwatch engine (regression)."""
+    import pywintypes
+    err = pywintypes.error(0, "SetForegroundWindow", "foreground lock")
+    calls = []
+
+    def boom(hwnd):
+        calls.append(hwnd)
+        raise err
+
+    monkeypatch.setattr(window_ctl.win32gui, "SetForegroundWindow", boom)
+    monkeypatch.setattr(window_ctl.win32gui, "GetForegroundWindow",
+                        lambda: 1)
+    monkeypatch.setattr(window_ctl.win32process,
+                        "GetWindowThreadProcessId", lambda h: (7, 0))
+    monkeypatch.setattr(window_ctl.win32api, "GetCurrentThreadId",
+                        lambda: 5)
+    monkeypatch.setattr(window_ctl.win32process,
+                        "AttachThreadInput", lambda *a: None)
+    # _force_foreground must swallow both failures and return normally
+    assert window_ctl._force_foreground(999) is None
+
+
+def test_maximize_and_focus_never_raises_on_window_op_error(monkeypatch):
+    import pywintypes
+    monkeypatch.setattr(window_ctl.win32gui, "ShowWindow",
+                        lambda *a: (_ for _ in ()).throw(
+                            pywintypes.error(5, "ShowWindow", "access denied")))
+    monkeypatch.setattr(window_ctl, "_force_foreground", lambda h: None)
+    assert window_ctl.maximize_and_focus(999) is None

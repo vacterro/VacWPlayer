@@ -48,13 +48,17 @@ def load_json(path, config_name=None):
     Safe because nothing may follow it with a write: read-modify-write MUST go
     through update_json(), which refuses to overwrite a source it could not
     read safely (T-137) or that the engine would reject (T-152).
+
+    Returns (data, status) so callers can distinguish missing (materialize
+    complete canonical before honoring monitor flag) from corrupt/invalid
+    (force monitor OFF, no child start) (T-CORE-012).
     """
     data, status = read_json(path)
     if status != "ok":
-        return {}
+        return {}, status
     if config_name is not None and engine_config.semantic_problems(data, config_name):
-        return {}
-    return data
+        return {}, "semantic_invalid"
+    return data, "ok"
 
 
 def save_json(path, data):

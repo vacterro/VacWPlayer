@@ -30,18 +30,24 @@ class SurrenderTab(tk.Frame):
     def __init__(self, parent):
         super().__init__(parent, bg=TOKENS["background"])
         self.cfg_path = os.path.join(BASE, self.CONFIG_NAME)
-        
+
         if not os.path.exists(self.cfg_path):
             update_json(self.cfg_path, lambda c: None,
                         canonical_default(self.CONFIG_NAME), config_name=self.CONFIG_NAME)
-        cfg = load_json(self.cfg_path, self.CONFIG_NAME)
+        cfg, cfg_status = load_json(self.cfg_path, self.CONFIG_NAME)
 
         form = tk.Frame(self, bg=TOKENS["background"])
         form.pack(fill="x", padx=4, pady=(4, 2))
 
         self._locale_widgets = []
 
-        mon_enabled = cfg.get("monitor_enabled", False)
+        # T-CORE-012: missing => canonical default; corrupt/invalid => OFF.
+        if cfg_status == "missing":
+            mon_enabled = canonical_default(self.CONFIG_NAME).get("monitor_enabled", False)
+        elif cfg_status in ("corrupt", "io_error", "semantic_invalid", "wrong_shape"):
+            mon_enabled = False
+        else:
+            mon_enabled = cfg.get("monitor_enabled", False)
         self.monitor_var = tk.BooleanVar(value=mon_enabled)
         self.monitor_var.trace_add("write", self._auto_save)
         self.chk_monitor = tk.Checkbutton(
@@ -184,15 +190,29 @@ class SurrenderTab(tk.Frame):
             filetypes=[("PNG images", "*.png"), ("All files", "*.*")])
         if not path:
             return
-        rel = os.path.relpath(path, BASE)
+        # W2-008: handle cross-drive relpath gracefully.
+        try:
+            rel = os.path.relpath(path, BASE)
+        except ValueError:
+            rel = os.path.normpath(path)
         name = simpledialog.askstring(Locale.tr("template_name_title"), Locale.tr("template_name"),
                                       initialvalue=os.path.splitext(os.path.basename(path))[0])
         if not name:
+            return
+        action = simpledialog.askstring(
+            Locale.tr("template_action_title", fallback="Action"),
+            Locale.tr("template_action", fallback="Action (accept/decline)"),
+            initialvalue="accept")
+        if action not in ("accept", "decline"):
+            messagebox.showerror(
+                Locale.tr("invalid_value"),
+                Locale.tr("template_action_invalid", fallback="Action must be 'accept' or 'decline'"))
             return
         update_json(self.cfg_path, lambda c: c["templates"].append({
             "name": name,
             "file": rel,
             "threshold": 0.75,
+            "action": action,
         }), canonical_default(self.CONFIG_NAME), config_name=self.CONFIG_NAME)
         self._refresh_tree()
 
@@ -213,10 +233,7 @@ class SurrenderTab(tk.Frame):
             return  # nothing was persisted - don't touch the engine (T-142)
         if self.monitor_var.get():
             self.runner.start(["--replace"])
-        try:
-            self.event_generate("<<ApplyStart>>")
-        except tk.TclError:
-            pass
+        # W2-003: Surrender engine owns only its own config/process - no global ApplyStart.
 
     def toggle_monitor(self):
         if self.monitor_var.get():
@@ -226,8 +243,9 @@ class SurrenderTab(tk.Frame):
             self.runner.start(["--replace"])
         else:
             self.runner.stop()
+            # W2-002: stopping is authoritative - never lie about runtime state.
             if not self.save_monitor_state():
-                self.monitor_var.set(True)  # disk still says enabled - restore
+                self.status_var.set(Locale.tr("save_failed", fallback="Stopped (state not persisted)"))
 
     def save_monitor_state(self):
         return update_json(self.cfg_path,

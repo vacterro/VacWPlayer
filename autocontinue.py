@@ -17,11 +17,11 @@ def load_config():
     return poller_engine.load_config(CONFIG_PATH, "autocontinue_config.json")
 
 
-def match_score(region_bgr, template_gray):
-    crop = cv2.cvtColor(region_bgr, cv2.COLOR_BGR2GRAY)
-    if crop.shape != template_gray.shape:
-        crop = cv2.resize(crop, (template_gray.shape[1], template_gray.shape[0]))
-    return cv2.matchTemplate(crop, template_gray, cv2.TM_CCOEFF_NORMED)[0][0]
+def match_score(region_gray, template_gray):
+    """Compare two grayscale crops directly - caller already converted once."""
+    if region_gray.shape != template_gray.shape:
+        region_gray = cv2.resize(region_gray, (template_gray.shape[1], template_gray.shape[0]))
+    return cv2.matchTemplate(region_gray, template_gray, cv2.TM_CCOEFF_NORMED)[0][0]
 
 
 def group_by_region(buttons):
@@ -72,23 +72,42 @@ def _reload(cfg, targets):
 
 
 def _scan(hwnd, cfg, targets):
+    """W2-PERF-004: one full-frame capture per poll regardless of region count.
+    Background path uses a single PrintWindow + one BGR->gray conversion,
+    then slices region crops from the coherent frame. Foreground retains
+    cheap region BitBlt but still converts each region to gray only once."""
     buttons, region_groups = targets
     foreground = capture.is_foreground(hwnd)
-    for region, group in region_groups.items():
-        x0, y0, x1, y1 = region
-        if foreground:
-            crop = capture.grab_region(hwnd, region)
-        else:
-            # occlusion-safe (T-146): never match foreign pixels when the
-            # window is behind another one
-            crop = capture.grab_client_region(hwnd, region)
-        for b in group:
-            cx, cy = (x0 + x1) // 2, (y0 + y1) // 2
-            score = match_score(crop, b["tmpl"])
-            if score >= b["threshold"]:
-                print("matched '%s' (score=%.2f), clicking (%d,%d)" % (b["name"], score, cx, cy))
-                window_ctl.click_at(hwnd, cx, cy, button="left")
-                return True
+    if foreground:
+        # Foreground: cheap region BitBlt per group, one gray conversion per group.
+        for region, group in region_groups.items():
+            x0, y0, x1, y1 = region
+            bgr_crop = capture.grab_region(hwnd, region)
+            gray_crop = cv2.cvtColor(bgr_crop, cv2.COLOR_BGR2GRAY)
+            for b in group:
+                cx, cy = (x0 + x1) // 2, (y0 + y1) // 2
+                score = match_score(gray_crop, b["tmpl"])
+                if score >= b["threshold"]:
+                    print("matched '%s' (score=%.2f), clicking (%d,%d)" % (b["name"], score, cx, cy))
+                    window_ctl.click_at(hwnd, cx, cy, button="left")
+                    return True
+    else:
+        # Background: one full PrintWindow + one full BGR->gray, then slice.
+        try:
+            full_bgr = capture.grab(hwnd)
+        except RuntimeError:
+            return None
+        full_gray = cv2.cvtColor(full_bgr, cv2.COLOR_BGR2GRAY)
+        for region, group in region_groups.items():
+            x0, y0, x1, y1 = region
+            gray_crop = full_gray[y0:y1, x0:x1]
+            for b in group:
+                cx, cy = (x0 + x1) // 2, (y0 + y1) // 2
+                score = match_score(gray_crop, b["tmpl"])
+                if score >= b["threshold"]:
+                    print("matched '%s' (score=%.2f), clicking (%d,%d)" % (b["name"], score, cx, cy))
+                    window_ctl.click_at(hwnd, cx, cy, button="left")
+                    return True
     return False
 
 

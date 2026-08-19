@@ -26,7 +26,7 @@ class AutoContinueTab(tk.Frame):
     def __init__(self, parent):
         super().__init__(parent, bg=TOKENS["background"])
         self.cfg_path = os.path.join(BASE, self.CONFIG_NAME)
-        cfg = load_json(self.cfg_path, self.CONFIG_NAME)
+        cfg, cfg_status = load_json(self.cfg_path, self.CONFIG_NAME)
         self.buttons = [dict(b) for b in cfg.get("buttons", canonical_default(self.CONFIG_NAME)["buttons"])]
 
 
@@ -35,7 +35,14 @@ class AutoContinueTab(tk.Frame):
 
         self._locale_widgets = []
 
-        mon_enabled = cfg.get("monitor_enabled", True)
+        # T-CORE-012: missing => materialize complete canonical before honoring
+        # its monitor flag; corrupt/invalid/io_error => force monitor OFF.
+        if cfg_status == "missing":
+            mon_enabled = canonical_default(self.CONFIG_NAME).get("monitor_enabled", False)
+        elif cfg_status in ("corrupt", "io_error", "semantic_invalid", "wrong_shape"):
+            mon_enabled = False
+        else:
+            mon_enabled = cfg.get("monitor_enabled", False)
         self.monitor_var = tk.BooleanVar(value=mon_enabled)
         self.chk_monitor = tk.Checkbutton(form, text=Locale.tr("enable_auto_monitor"), variable=self.monitor_var, 
                                           bg=TOKENS["background"], fg=TOKENS["textPrimary"], selectcolor=TOKENS["compareBack"],
@@ -145,10 +152,7 @@ class AutoContinueTab(tk.Frame):
             return  # nothing was persisted - don't touch the engine (T-142)
         if self.monitor_var.get():
             self.runner.start(["--replace"])
-        try:
-            self.event_generate("<<ApplyStart>>")
-        except tk.TclError:
-            pass
+        # W2-003: AutoContinue engine owns only its own config/process - no global ApplyStart.
 
     def toggle_monitor(self):
         if self.monitor_var.get():
@@ -158,8 +162,9 @@ class AutoContinueTab(tk.Frame):
             self.runner.start(["--replace"])
         else:
             self.runner.stop()
+            # W2-002: stopping is authoritative - never lie about runtime state.
             if not self.save_monitor_state():
-                self.monitor_var.set(True)  # disk still says enabled - restore
+                self.status_var.set(Locale.tr("save_failed", fallback="Stopped (state not persisted)"))
 
     def save_monitor_state(self):
         return update_json(self.cfg_path,

@@ -50,7 +50,7 @@ def test_ast_health_signals_computed(tmp_path):
     assert h["total_funcs"] == 3
     assert h["typed_funcs"] == 1
     assert h["imports_logging"] is True
-    assert h["empty_excepts"] == 1
+    assert h["empty_excepts"] == 1  # the bare `except ...: pass`
     assert h["max_complexity"] >= 4
 
 

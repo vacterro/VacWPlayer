@@ -43,6 +43,11 @@ def _scan(hwnd, cfg, targets):
     return False
 
 
+def targets_usable(targets):
+    """True when at least one template was loaded successfully (T-W2-006)."""
+    return bool(targets)
+
+
 def main(replace=False):
     poller_engine.run_poller(
         "accept", CONFIG_PATH, "accept_config.json",
@@ -50,6 +55,7 @@ def main(replace=False):
         scan_targets=_scan,
         startup=_startup,
         reload_msg=_reload,
+        usable=targets_usable,
         replace=replace,
     )
 

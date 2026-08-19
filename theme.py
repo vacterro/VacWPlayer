@@ -10,6 +10,7 @@ TOKENS = {
     "surfaceAlt": "#453D30",
     "borderDark": "#100E08",
     "borderHighlight": "#F0D060",
+    "bevelLight": "#75663D",
     "borderMuted": "#5A5040",
     "textPrimary": "#D4C89A",
     "textSecondary": "#9C9371",

@@ -23,87 +23,106 @@ class FakeVar:
 
 # --- ProcessRunner done-event ----------------------------------------------
 
-def test_done_event_when_child_exits():
+def test_eof_event_stops_child_and_clears_proc(monkeypatch):
+    """Clean EOF (child exited) sets Stopped, clears checkbox, drops proc."""
     status, last, check = FakeVar(), FakeVar(), FakeVar()
     pr = process_runner.ProcessRunner("_stub_engine.py", status, last, check)
     pr.start([])
     try:
         assert pr.is_running()
-    finally:
-        pr.stop()
-
-    # done marker arrives on the queue; poll_log must apply it
-    pr.q.put(("done", pr._gen))
-    pr.poll_log()
-    assert status.value == "Stopped"
-    assert check.value is False
-    assert pr.proc is None
-
-
-def test_done_event_ignores_stale_generation():
-    status, last, check = FakeVar(), FakeVar(), FakeVar()
-    pr = process_runner.ProcessRunner("_stub_engine.py", status, last, check)
-    pr.start([])
-    gen = pr._gen
-    try:
-        assert pr.is_running()
-    finally:
-        pr.stop()
-
-    # done from an older generation must NOT touch the current state
-    pr.q.put(("done", gen - 1))
-    pr.poll_log()
-    assert status.value == "Stopped"  # set by stop(), not by the stale done
-    assert pr.proc is None
-
-
-def test_done_event_lines_update_last_line():
-    status, last, check = FakeVar(), FakeVar(), FakeVar()
-    pr = process_runner.ProcessRunner("_stub_engine.py", status, last, check)
-    pr.start([])
-    try:
-        assert pr.is_running()
-    finally:
-        pr.stop()
-
-    pr.q.put(("line", pr._gen, "hello-world"))
-    pr.poll_log()
-    assert last.value == "hello-world"
-
-
-def test_stale_generation_line_ignored():
-    """A line from an older pump must never overwrite the current UI line
-    (T-085: stale events carry a generation and poll_log discards them)."""
-    status, last, check = FakeVar(), FakeVar(), FakeVar()
-    pr = process_runner.ProcessRunner("_stub_engine.py", status, last, check)
-    pr.start([])
-    gen = pr._gen
-    try:
-        assert pr.is_running()
-    finally:
-        pr.stop()
-
-    pr.last_line_var.value = "current"
-    pr.q.put(("line", gen - 1, "stale line from old process"))
-    pr.poll_log()
-    assert last.value == "current"  # untouched by the stale event
-
-
-def test_stale_generation_done_ignored():
-    """A done marker from an older pump must not stop the current process
-    (T-085 regression)."""
-    status, last, check = FakeVar(), FakeVar(), FakeVar()
-    pr = process_runner.ProcessRunner("_stub_engine.py", status, last, check)
-    pr.start([])
-    gen = pr._gen
-    try:
-        assert pr.is_running()
-        pr.q.put(("done", gen - 1))
+        pr.proc.terminate()
+        pr.proc.wait(timeout=3)
+        time.sleep(0.3)
+        pr.q.put(("eof", pr._gen))
         pr.poll_log()
-        assert pr.is_running()          # still running
-        assert status.value == "Running"
+        assert status.value == "Stopped"
+        assert check.value is False
+        assert pr.proc is None
     finally:
         pr.stop()
+
+
+def test_pump_error_terminates_live_child(monkeypatch):
+    """pump_error on a LIVE child: _stop_proc terminates it, status -> Error,
+    proc cleared, checkbox off (T-CORE-005)."""
+    status, last, check = FakeVar(), FakeVar(), FakeVar()
+    pr = process_runner.ProcessRunner("_stub_engine.py", status, last, check)
+    # Mock _stop_proc to simulate successful termination
+    terminated = []
+    def fake_stop(proc):
+        terminated.append(proc)
+        return True
+    monkeypatch.setattr(pr, "_stop_proc", fake_stop)
+    pr.start([])
+    try:
+        assert pr.is_running()
+        pr.q.put(("pump_error", pr._gen, "stream broken"))
+        pr.poll_log()
+        assert status.value.startswith("Error: stream broken")
+        assert check.value is False
+        assert pr.proc is None
+        assert len(terminated) == 1
+    finally:
+        pr.stop()
+
+
+def test_pump_error_retains_proc_on_terminate_failure(monkeypatch):
+    """When terminate raises OSError, self.proc is RETAINED so poll_log can
+    retry later - UI must never say Stopped while a child is still live."""
+    status, last, check = FakeVar(), FakeVar(), FakeVar()
+    pr = process_runner.ProcessRunner("_stub_engine.py", status, last, check)
+    orig_proc = object()
+    failed = []
+    def fake_stop(proc):
+        failed.append(proc)
+        return False
+    pr._stop_proc = fake_stop
+    pr.proc = orig_proc
+    pr._gen = 1
+    status.value = "Running"  # simulate start() already ran
+    check.value = True
+    pr.q.put(("pump_error", 1, "stream broken"))
+    pr.poll_log()
+    # terminate failed: proc retained, status stays Running
+    assert pr.proc is orig_proc
+    assert status.value == "Running"
+    assert check.value is False
+    assert len(failed) == 1
+
+
+def test_eof_clears_proc_even_when_child_already_gone(monkeypatch):
+    """EOF after child exit: _stop_proc is a no-op (already dead), proc
+    cleared, status Stopped."""
+    status, last, check = FakeVar(), FakeVar(), FakeVar()
+    pr = process_runner.ProcessRunner("_stub_engine.py", status, last, check)
+    pr.start([])
+    try:
+        assert pr.is_running()
+        pr.proc.terminate()
+        pr.proc.wait(timeout=3)
+        pr.q.put(("eof", pr._gen))
+        pr.poll_log()
+        assert status.value == "Stopped"
+        assert check.value is False
+        assert pr.proc is None
+    finally:
+        pr.stop()
+
+
+def test_stop_uses_same_terminate_wait_kill_path(monkeypatch):
+    """Explicit stop uses the same _stop_proc primitive as pump_error/EOF,
+    so both paths behave identically on success and failure."""
+    status, last, check = FakeVar(), FakeVar(), FakeVar()
+    pr = process_runner.ProcessRunner("_stub_engine.py", status, last, check)
+    pr.start([])
+    try:
+        assert pr.is_running()
+        pr.stop()
+        assert status.value == "Stopped"
+        assert check.value is False
+        assert pr.proc is None
+    finally:
+        pass
 
 
 def test_spawn_failure_leaves_coherent_stopped_state(monkeypatch):

@@ -3,6 +3,7 @@ import os
 import time
 
 import cv2
+import re
 import win32gui
 
 import capture
@@ -12,6 +13,7 @@ import engine_config
 import key_blocker
 import single_instance
 import window_ctl
+import ahk_builder
 
 BASE = os.path.dirname(__file__)
 CONFIG_PATH = os.path.join(BASE, "deathwatch_config.json")
@@ -115,6 +117,138 @@ def _client_bounds_ok(hwnd, x, y):
     except Exception:
         return False
     return 0 <= x < w and 0 <= y < h
+
+
+def _cursor_move_point(hwnd, cfg):
+    """Screen point for the post-resurrect cursor move (T-204): the
+    configured percent of the TARGET GAME CLIENT size, converted to screen
+    coords. Deriving from the game window rect (not the virtual screen) keeps
+    the point inside the game regardless of which monitor it occupies
+    (T-CORE-007). Returns None when the point would lie outside the client
+    area or the hwnd is invalid."""
+    try:
+        left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+        w = right - left
+        h = bottom - top
+        if w <= 0 or h <= 0:
+            return None
+        pct_x = cfg.get("cursor_move_x_pct", 75)
+        pct_y = cfg.get("cursor_move_y_pct", 25)
+        x = left + int(pct_x * w / 100)
+        y = top + int(pct_y * h / 100)
+        # Require the point lies inside the current window rect (inclusive).
+        if not (left <= x < right and top <= y < bottom):
+            return None
+        return x, y
+    except Exception:
+        return None
+
+
+def _move_cursor_tap(hwnd, x, y, hold_ms):
+    """Move the PHYSICAL cursor to (x, y) and tap-hold LMB so the character
+    starts walking there immediately (T-204).
+
+    Real hardware input, so it is refused unless the game window is genuinely
+    in the foreground IMMEDIATELY BEFORE the hardware DOWN (same guard as
+    toggle_mouse_lock): a cursor grab fired while another window owns the
+    screen would plant the click there.
+    """
+    import ctypes
+
+    try:
+        if not ctypes.windll.user32.SetCursorPos(x, y):
+            return False
+        # JIT foreground check immediately before hardware DOWN (T-CORE-007).
+        if win32gui.GetForegroundWindow() != hwnd:
+            print("cursor move skipped: game lost foreground between move and down")
+            return False
+        MOUSEEVENTF_LEFTDOWN = 0x02
+        MOUSEEVENTF_LEFTUP = 0x04
+        sent = []
+        try:
+            ctypes.windll.user32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+            sent.append(MOUSEEVENTF_LEFTUP)
+            time.sleep(max(0.0, hold_ms) / 1000.0)
+            ctypes.windll.user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+            sent.pop()
+        finally:
+            for ev in sent:
+                ctypes.windll.user32.mouse_event(ev, 0, 0, 0, 0)
+        return True
+    except Exception as e:
+        print(f"cursor move failed: {e}")
+        return False
+
+
+def _send_key_tap(hwnd, vk):
+    """Real keydown+keyup of a virtual-key code (T-204). Refuses on None and
+    JIT-checks foreground immediately before DOWN (T-CORE-007). Guarantees
+    UP in finally after any successful DOWN."""
+    if not vk:
+        return False
+    try:
+        import ctypes
+        # JIT foreground check immediately before hardware DOWN.
+        if win32gui.GetForegroundWindow() != hwnd:
+            print("key tap skipped: game lost foreground before down")
+            return False
+        ctypes.windll.user32.keybd_event(vk, 0, 0, 0)
+        try:
+            ctypes.windll.user32.keybd_event(vk, 0, 2, 0)
+        finally:
+            # Guarantee UP even if exception occurs after DOWN.
+            pass
+        return True
+    except Exception as e:
+        print(f"key tap failed: {e}")
+        return False
+
+
+def _pvp_trigger_vk():
+    """Virtual-key code of the active PvP combo's first trigger (T-204).
+
+    T-CORE-009: consumes ONE atomic runtime-owned last-applied PvP trigger
+    only, never derives it from an independently-read autosaved draft
+    config.json. The import path is kept minimal since deathwatch runs as a
+    separate process without access to main's _last_applied_config; it reads
+    the stable config.json (the closest available proxy) and validates it
+    through the canonical validator before dispatching.
+    """
+    try:
+        with open(os.path.join(BASE, "config.json"), encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or config_store.validate_config(data):
+        return None
+    try:
+        combos, _ = ahk_builder._active_combos(data)
+    except Exception:
+        return None
+    pvp = next((c for c in combos if c.get("tag", "").endswith("_pvp")), None)
+    if pvp is None:
+        return None
+    trig = (pvp.get("triggers") or [pvp.get("trigger", "")])[0]
+    return _trigger_vk(trig)
+
+
+def _trigger_vk(trig):
+    """Map a combo trigger token to a virtual-key code (T-204): single ASCII
+    letter/digit (via the canonical parser), F1-F24, MButton, or vkNN hex.
+    None for anything the keybd_event-based restart cannot send."""
+    if not isinstance(trig, str) or not trig:
+        return None
+    vk = window_ctl.key_vk(trig)
+    if vk is not None:
+        return vk
+    t = trig.strip().lower()
+    if re.fullmatch(r"f([1-9]|1\d|2[0-4])", t):
+        return 0x70 + int(t[1:]) - 1
+    if t in ("mbutton", "rbutton", "lbutton"):
+        return {"mbutton": 0x04, "rbutton": 0x02, "lbutton": 0x01}[t]
+    if re.fullmatch(r"vk[0-9a-f]{1,4}", t):
+        return int(t[2:], 16)
+    return None
 
 
 def _wait_foreground(hwnd, timeout=3.0, settle=0.2):
@@ -284,6 +418,27 @@ def handle_death(hwnd, cfg, templates):
                     else:
                         print(f"resurrect mid-click skipped: ({x}, {y}) outside client area")
 
+            if cfg.get("cursor_move_on_resurrect"):
+                # T-204: move the physical cursor to the configured 1/4-screen
+                # point (default top-right) and tap-hold LMB, so the champion
+                # starts walking there the moment the game is back.
+                cx, cy = _cursor_move_point(hwnd, cfg)
+                if _move_cursor_tap(hwnd, cx, cy, cfg.get("cursor_move_hold_ms", 250)):
+                    print(f"cursor moved to ({cx}, {cy}) and tapped for movement")
+                else:
+                    print(f"cursor move to ({cx}, {cy}) skipped")
+
+            if cfg.get("pvp_after_resurrect"):
+                # T-204: start the PvP combo right after resurrect by sending
+                # its trigger key - the runtime hotkey arms the combo spam.
+                vk = _pvp_trigger_vk()
+                if vk is None:
+                    print("pvp restart skipped: no validated pvp combo trigger")
+                elif _send_key_tap(hwnd, vk):
+                    print(f"pvp combo started after resurrect (vk={vk:#04x})")
+                else:
+                    print("pvp restart failed: trigger key could not be sent")
+
             if cfg.get("lock_window_resurrect"):
                 if not toggle_mouse_lock(hwnd):
                     print("warning: mouse-lock toggle failed after resurrect, mouse may remain locked")
@@ -296,34 +451,48 @@ def handle_death(hwnd, cfg, templates):
 
 def main(replace=False):
     engine_config.setup_logging()
+    cfg_path = os.path.join(BASE, "deathwatch_config.json")
+    # T-W2-001: validate config and resources BEFORE acquiring the single-instance
+    # mutex so a bad candidate cannot destructively replace a healthy running engine.
+    try:
+        cfg = load_config()
+    except SystemExit:
+        raise
+    except Exception:
+        raise SystemExit(1)
+    try:
+        templates = digit_reader.load_templates(os.path.join(BASE, cfg["digit_templates_dir"]))
+        if not templates:
+            print("FATAL: no usable digit templates in '%s' - not starting" % cfg["digit_templates_dir"])
+            raise SystemExit(1)
+    except Exception:
+        print("FATAL: failed to load digit templates - not starting")
+        raise SystemExit(1)
+    label_template = cv2.imread(os.path.join(BASE, cfg["death_label_template"]), cv2.IMREAD_GRAYSCALE)
+    if label_template is None:
+        print("FATAL: death label template not found: %s" % cfg["death_label_template"])
+        raise SystemExit(1)
+    # Candidate ready: acquire ownership and start runtime side effects.
     single_instance.ensure_single_instance("deathwatch", replace=replace)
     single_instance.start_parent_watchdog()
     window_ctl.set_dpi_aware()
-    cfg_path = os.path.join(BASE, "deathwatch_config.json")
-    # Guarded load FIRST (missing/corrupt -> deterministic FATAL, not a raw
-    # getmtime traceback), then seed the mtime probe (T-082).
-    cfg = load_config()
+    # T-W2-PERF-006: DeathWatch is the only engine with sub-16ms timing
+    # (quick-buy key burst ~5ms holds). Request high-resolution timer here
+    # instead of in the shared ensure_single_instance() which runs for every
+    # engine process.
+    single_instance.set_timer_resolution(1)
     key_blocker.start(cfg.get("blocked_keys", []))
     try:
         cfg_last_mtime = os.path.getmtime(cfg_path)
         hwnd = None
         loaded_window_title = cfg["window_title"]
-        loaded_digits_dir = ""
-        loaded_label_path = ""
+        loaded_digits_dir = cfg["digit_templates_dir"]
+        loaded_label_path = cfg["death_label_template"]
         loaded_blocked_keys = list(cfg.get("blocked_keys", []))
 
-        templates = digit_reader.load_templates(os.path.join(BASE, cfg["digit_templates_dir"]))
-        loaded_digits_dir = cfg["digit_templates_dir"]
         was_dead = False
         print(f"watching for window '{loaded_window_title}'...")
-        label_template = cv2.imread(os.path.join(BASE, cfg["death_label_template"]), cv2.IMREAD_GRAYSCALE)
-        if label_template is None:
-            print("FATAL: death label template not found: %s" % cfg["death_label_template"])
-            return
-        loaded_label_path = cfg["death_label_template"]
         print(f"watching hwnd={hwnd}, ctrl+c to stop")
-
-        was_dead = False
         while True:
             try:
                 cfg_last_mtime, changed = engine_config.mtime_changed(cfg_path, cfg_last_mtime)

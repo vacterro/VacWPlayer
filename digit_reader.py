@@ -45,11 +45,16 @@ def segment_columns(mask):
 
 
 def load_templates(digits_dir):
+    """Load digit templates from directory. All-or-nothing: any discovered
+    image that cannot be decoded rejects the whole candidate set so a corrupt
+    resource never enters live state (T-CORE-011)."""
     templates = {}
     for fname in os.listdir(digits_dir):
         if fname.endswith(".png"):
             ch = os.path.splitext(fname)[0]
             img = cv2.imread(os.path.join(digits_dir, fname), cv2.IMREAD_GRAYSCALE)
+            if img is None:
+                raise ValueError("corrupt digit template: %s" % fname)
             templates[ch] = img
     return templates
 

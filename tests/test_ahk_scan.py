@@ -14,9 +14,10 @@ import ahk_generator as ag
 
 
 class FakeOut:
-    def __init__(self, text=""):
+    def __init__(self, text="", returncode=0):
         self.stdout = text.encode("utf-8")
         self.stderr = b""
+        self.returncode = returncode
 
 
 def _monkey_ts(monkeypatch, value=99.0):
@@ -43,25 +44,59 @@ def test_probe_entries_parses_json(monkeypatch):
         ]))
 
     monkeypatch.setattr(ag.subprocess, "run", fake_run)
-    assert ag._probe_entries("CMD") == [(123, 'x "a.ahk"'), (456, "y")]
+    state, entries = ag._probe_entries("CMD")
+    assert state == "ok"
+    assert entries == [(123, 'x "a.ahk"'), (456, "y")]
     assert "powershell" in calls[0][0]
 
 
 def test_probe_entries_empty_and_single_object(monkeypatch):
     import json as _j
     monkeypatch.setattr(ag.subprocess, "run", lambda *a, **k: FakeOut(""))
-    assert ag._probe_entries("") == []
+    state, entries = ag._probe_entries("")
+    assert state == "ok"
+    assert entries == []
+    state, entries = ag._probe_entries("")
+    assert state == "ok"
+    assert entries == []
     monkeypatch.setattr(ag.subprocess, "run",
                         lambda *a, **k: FakeOut(_j.dumps(
                             {"ProcessId": 1, "CommandLine": "x"})))
-    assert ag._probe_entries("") == [(1, "x")]
+    state, entries = ag._probe_entries("")
+    assert state == "ok"
+    assert entries == [(1, "x")]
+
+
+def test_probe_entries_nonzero_rc_returns_failed(monkeypatch):
+    monkeypatch.setattr(ag.subprocess, "run",
+                        lambda *a, **k: FakeOut(returncode=1))
+    state, entries = ag._probe_entries("CMD")
+    assert state == "failed"
+    assert entries == []
+
+
+def test_probe_entries_malformed_json_returns_failed(monkeypatch):
+    monkeypatch.setattr(ag.subprocess, "run",
+                        lambda *a, **k: FakeOut("not json"))
+    state, entries = ag._probe_entries("CMD")
+    assert state == "failed"
+    assert entries == []
+
+
+def test_probe_entries_invalid_item_schema_returns_failed(monkeypatch):
+    import json as _j
+    monkeypatch.setattr(ag.subprocess, "run",
+                        lambda *a, **k: FakeOut(_j.dumps(["not-a-dict"])))
+    state, entries = ag._probe_entries("CMD")
+    assert state == "failed"
+    assert entries == []
 
 
 # --- _find_our_pids (state, pids) contract ---------------------------------
 
 def test_find_our_pids_success(monkeypatch):
     _monkey_ts(monkeypatch)
-    monkeypatch.setattr(ag, "_probe_entries", lambda ps_cmd: [_ours(777)])
+    monkeypatch.setattr(ag, "_probe_entries", lambda ps_cmd: ("ok", [_ours(777)]))
     state, pids = ag._find_our_pids()
     assert state == "ok"
     assert pids == [777]
@@ -69,7 +104,7 @@ def test_find_our_pids_success(monkeypatch):
 
 def test_find_our_pids_verified_zero(monkeypatch):
     _monkey_ts(monkeypatch)
-    monkeypatch.setattr(ag, "_probe_entries", lambda ps_cmd: [])
+    monkeypatch.setattr(ag, "_probe_entries", lambda ps_cmd: ("ok", []))
     state, pids = ag._find_our_pids()
     assert state == "ok"
     assert pids == []
@@ -77,7 +112,7 @@ def test_find_our_pids_verified_zero(monkeypatch):
 
 def test_find_our_pids_throttle_reuses_cached(monkeypatch):
     _monkey_ts(monkeypatch)
-    monkeypatch.setattr(ag, "_probe_entries", lambda ps_cmd: [_ours(1)])
+    monkeypatch.setattr(ag, "_probe_entries", lambda ps_cmd: ("ok", [_ours(1)]))
     state, pids = ag._find_our_pids()  # first call runs the scan
     assert state == "ok"
     assert pids == [1]
@@ -94,7 +129,7 @@ def test_find_our_pids_force_bypasses_throttle(monkeypatch):
 
     def fake(ps_cmd):
         calls.append(1)
-        return [_ours(42)]
+        return ("ok", [_ours(42)])
 
     monkeypatch.setattr(ag, "_probe_entries", fake)
     ag._find_our_pids()
@@ -112,7 +147,7 @@ def test_find_our_pids_timeout_retries_once(monkeypatch, capsys):
         calls.append(1)
         if len(calls) == 1:
             raise subprocess.TimeoutExpired("powershell", 10)
-        return [_ours(42)]
+        return ("ok", [_ours(42)])
 
     monkeypatch.setattr(ag, "_probe_entries", flaky)
     state, pids = ag._find_our_pids()
@@ -159,7 +194,7 @@ def test_scan_uses_json_not_substring_regex(monkeypatch):
 
     def fake(ps_cmd):
         captured["cmd"] = ps_cmd
-        return [(123, "x")]
+        return ("ok", [(123, "x")])
 
     monkeypatch.setattr(ag, "_probe_entries", fake)
     monkeypatch.setattr(ag, "_last_scan_ts", 0.0)

@@ -89,6 +89,8 @@ class VintageWindowPicker(tk.Frame):
         VintageEntry(self, textvariable=self.title_var, width=22).pack(side="left", padx=2)
         self.pick_btn = VintageButton(self, text=Locale.tr("pick_btn"), command=self._start_pick, width=10)
         self.pick_btn.pack(side="left", padx=2)
+        # W2-012: generation token to invalidate stale workers.
+        self._gen = 0
 
     def apply_locale(self):
         if self.label_key:
@@ -99,12 +101,18 @@ class VintageWindowPicker(tk.Frame):
         return self.title_var.get()
 
     def _start_pick(self):
+        # W2-012: bump generation so any in-flight worker from a previous click
+        # will see its token expired and skip writing the result.
+        self._gen += 1
+        gen = self._gen
         self.pick_btn.label.config(text=Locale.tr("pick_prompt"))
-        threading.Thread(target=self._worker, daemon=True).start()
+        threading.Thread(target=self._worker, args=(gen,), daemon=True).start()
 
-    def _worker(self):
+    def _worker(self, gen):
         title = pick_window_title_blocking()
-        self.after(0, lambda: self._finish(title))
+        # W2-012: only apply if this is still the current generation.
+        if hasattr(self, "_gen") and self._gen == gen:
+            self.after(0, lambda: self._finish(title))
 
     def _finish(self, title):
         self.pick_btn.label.config(text=Locale.tr("pick_btn_2"))

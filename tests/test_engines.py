@@ -192,6 +192,51 @@ def test_deathwatch_invalid_quickbuy_key_rejected(monkeypatch):
         _load_with(deathwatch, cfg, monkeypatch)
 
 
+def test_deathwatch_cursor_move_pct_out_of_range_rejected(monkeypatch):
+    cfg = {"window_title": "X", "cursor_move_x_pct": 101}
+    with pytest.raises(SystemExit):
+        _load_with(deathwatch, cfg, monkeypatch)
+    cfg = {"window_title": "X", "cursor_move_y_pct": -1}
+    with pytest.raises(SystemExit):
+        _load_with(deathwatch, cfg, monkeypatch)
+
+
+def test_deathwatch_cursor_move_pct_non_int_rejected(monkeypatch):
+    cfg = {"window_title": "X", "cursor_move_x_pct": 75.0}
+    with pytest.raises(SystemExit):
+        _load_with(deathwatch, cfg, monkeypatch)
+    cfg = {"window_title": "X", "cursor_move_y_pct": True}
+    with pytest.raises(SystemExit):
+        _load_with(deathwatch, cfg, monkeypatch)
+
+
+def test_deathwatch_cursor_move_hold_ms_bad_rejected(monkeypatch):
+    cfg = {"window_title": "X", "cursor_move_hold_ms": -1}
+    with pytest.raises(SystemExit):
+        _load_with(deathwatch, cfg, monkeypatch)
+    cfg = {"window_title": "X", "cursor_move_hold_ms": 1.5}
+    with pytest.raises(SystemExit):
+        _load_with(deathwatch, cfg, monkeypatch)
+
+
+def test_deathwatch_cursor_move_flags_bool_strict(monkeypatch):
+    cfg = {"window_title": "X", "cursor_move_on_resurrect": "false"}
+    with pytest.raises(SystemExit):
+        _load_with(deathwatch, cfg, monkeypatch)
+    cfg = {"window_title": "X", "pvp_after_resurrect": 1}
+    with pytest.raises(SystemExit):
+        _load_with(deathwatch, cfg, monkeypatch)
+
+
+def test_deathwatch_cursor_move_defaults_in_canonical():
+    d = engine_config.canonical_default("deathwatch_config.json")
+    assert d["cursor_move_on_resurrect"] is True
+    assert d["cursor_move_x_pct"] == 75
+    assert d["cursor_move_y_pct"] == 25
+    assert d["cursor_move_hold_ms"] == 250
+    assert d["pvp_after_resurrect"] is False
+
+
 def test_deathwatch_quickbuy_key_vk_hex_accepted(monkeypatch):
     cfg = dict(engine_config.canonical_default("deathwatch_config.json"))
     cfg["quickbuy_key"] = "vk5A"
@@ -544,7 +589,9 @@ def test_pump_stale_generation_events_ignored():
     pr.proc = child
     pr._gen = 2  # current generation
     pr.q.put(("eof", 1))  # stale pump's event
-    pr.q.put(("line", 1, "old"))
+    pr.q.put(("line", 1))  # stale line event (format changed: line data in deque)
+    with pr._lock:
+        pr._line_buf.append("old line")
     pr.poll_log()
     assert pr.proc is child  # untouched by stale events
     assert child.termed is False
@@ -930,7 +977,7 @@ def _run_deathwatch_loop(monkeypatch, grab_fn, stop_after=999):
     monkeypatch.setattr(deathwatch.key_blocker, "start", lambda *a, **k: None)
     monkeypatch.setattr(deathwatch.key_blocker, "stop", lambda *a, **k: None)
     monkeypatch.setattr(deathwatch.digit_reader, "load_templates",
-                        lambda *a, **k: [])
+                        lambda *a, **k: {"0": np.zeros((10, 10), dtype=np.uint8)})
     monkeypatch.setattr(deathwatch.cv2, "imread",
                         lambda *a, **k: np.zeros((10, 10), dtype=np.uint8))
     monkeypatch.setattr(deathwatch.win32gui, "IsWindow", lambda h: True)

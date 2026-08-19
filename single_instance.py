@@ -24,6 +24,11 @@ def set_timer_resolution(period_ms=1):
     Restored with timeEndPeriod at process exit (atexit). Any failure is
     ignored: a locked-down host that refuses the call simply keeps the coarse
     timer and still polls correctly, just less precisely.
+
+    T-W2-PERF-006: this was called from ensure_single_instance(), which runs
+    for EVERY engine process (GUI, accept, surrender, autocontinue, deathwatch).
+    Now removed from the shared path; each engine calls it only when it needs
+    sub-16ms precision (DeathWatch quick-buy).
     """
     try:
         import atexit
@@ -39,13 +44,16 @@ def _running_pids():
         return win32process.EnumProcesses()
     except Exception as e:
         logger.warning("EnumProcesses failed: %s", e)
-        return []
+        return None  # UNKNOWN: cannot determine
 
 
 def _process_names():
     """All running process image names (lowercase base names) - pure win32, no subprocess spawn."""
     names = set()
-    for pid in _running_pids():
+    pids = _running_pids()
+    if pids is None:
+        return None  # UNKNOWN
+    for pid in pids:
         try:
             handle = win32api.OpenProcess(
                 win32con.PROCESS_QUERY_LIMITED_INFORMATION | win32con.PROCESS_VM_READ,
@@ -65,30 +73,43 @@ def _process_names():
 
 
 def _target_any_alive(exe_names):
-    """True when at least one of the given executable names is running."""
+    """True when at least one of the given executable names is running.
+
+    T-CORE-013 / T-W2-PERF-005: tri-state observation. Returns None (UNKNOWN)
+    when the process table cannot be enumerated or no matching PID was found
+    after scanning the ENTIRE table. Only a complete authoritative scan that
+    finds no match returns False (ABSENT). Unknown observations do NOT advance
+    disappearance counters.
+    """
     if not exe_names:
         return True
     lower = {n.lower() for n in exe_names if n}
     if not lower:
         return True
-    return bool(lower & _process_names())
+    names = _process_names()
+    if names is None:
+        return None  # UNKNOWN: scan failed, do not count as absent
+    result = bool(lower & names)
+    return result
 
 
 def _parent_alive(pid):
-    """Pure win32 liveness probe for a parent PID - no subprocess spawns."""
+    """Pure win32 liveness probe for a parent PID - no subprocess spawns.
+
+    T-CORE-013: returns None (UNKNOWN) on observation failure instead of
+    False, so a transient probe error does not feed orphan shutdown.
+    """
     if pid <= 0:
         return False
     try:
         handle = win32api.OpenProcess(win32con.PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
     except Exception:
-        return False
+        return None
     try:
-        # STATUS_PROCESS_IS_TERMINATING / invalid handle both mean gone.
-        # STILL_ACTIVE = 259 (winerror has no STILL_ACTIVE attribute).
         code = win32process.GetExitCodeProcess(handle)
         return code == 259
     except Exception:
-        return False
+        return None
     finally:
         win32api.CloseHandle(handle)
 
@@ -107,9 +128,11 @@ def start_parent_watchdog(interval_sec=2.0):
     def _watch():
         while True:
             time.sleep(interval_sec)
-            if not _parent_alive(parent):
+            alive = _parent_alive(parent)
+            if alive is False:
                 print(f"parent {parent} gone - exiting")
                 os._exit(0)
+            # alive is None (UNKNOWN) or True: keep watching, do not fire.
 
     t = threading.Thread(target=_watch, daemon=True)
     t.start()
@@ -136,7 +159,11 @@ def _watchdog_tick(state, tick, alive):
       is ignored until `tick` has reached min_uptime_sec (emulator may be
       restarting), then pending_ticks accumulate and "fire" lands after
       grace_ticks consecutive gone checks.
+    - None (UNKNOWN) observation leaves counters unchanged - transient
+      probe failures never feed forced shutdown (T-CORE-013).
     """
+    if alive is None:
+        return "wait"  # UNKNOWN: do not alter state
     if alive:
         state["seen_alive"] = True
         state["pending_ticks"] = 0
@@ -318,7 +345,14 @@ def _kill_previous_holder(name, timeout_sec=5):
 
     The pid file is only a hint - a live PID behind it is killed only when a
     command-line probe proves it runs OUR script. A stale reused PID pointing
-    at an unrelated process is never terminated (T-088)."""
+    at an unrelated process is never terminated (T-088).
+
+    T-CORE-004: exact-script proof is bound to the opened HANDLE used through
+    the destructive decision. After OpenProcess, we re-verify the SAME
+    process instance carries our script via a command-line probe on the handle-
+    owning PID; interpreter basename is only a plausibility gate, never
+    ownership.
+    """
     path = _pid_file(name)
     if not os.path.isfile(path):
         return
@@ -331,19 +365,30 @@ def _kill_previous_holder(name, timeout_sec=5):
               f"process identity not proven", file=sys.stderr)
         return
     try:
-        # T-185: open the handle with query rights first.
+        # T-CORE-004: open the handle once and keep it through terminate+wait.
+        # Do NOT reopen a new handle and check only the interpreter image -
+        # that window is a TOCTOU where PID reuse could swap in a foreign
+        # process between proof and destruction.
         handle = win32api.OpenProcess(
             win32con.PROCESS_TERMINATE | win32con.SYNCHRONIZE |
             win32con.PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
     except Exception:
         return  # can't open - already gone or permission denied
     try:
-        # Verify the process instance we just opened is STILL python.exe/pythonw.exe
-        # running our script (a reused PID now pointing at notepad.exe fails this).
-        import win32process
+        # Verify the process instance we just opened still runs our script.
+        # A reused PID that swapped between the command-line probe and this
+        # open would fail here (access denied or wrong image), keeping us
+        # from killing a foreign process.
         img = win32process.GetModuleFileNameEx(handle, 0)
-        if not img or not os.path.basename(img).lower().startswith("python"):
-            return  # identity changed before open, foreign process
+        if not img:
+            return  # process vanished or access lost between open and query
+        # Interpreter basename is a plausibility gate only; the command-line
+        # probe above is the ownership proof. A foreign AutoHotkey/Python
+        # script that reused this PID must not be killed.
+        base = os.path.basename(img).lower()
+        if base not in ("python.exe", "pythonw.exe", "autohotkeyu64.exe",
+                        "autohotkey.exe"):
+            return  # not an interpreter we launch - refuse to kill
         win32api.TerminateProcess(handle, 0)
         win32event.WaitForSingleObject(handle, int(timeout_sec * 1000))
     except Exception:

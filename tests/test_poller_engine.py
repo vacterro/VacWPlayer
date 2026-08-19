@@ -347,22 +347,21 @@ def test_scan_by_region_occluded_capture_failure_returns_none(monkeypatch):
 
 
 def test_autocontinue_scan_occluded_uses_printwindow(monkeypatch):
+    """Background scan uses full PrintWindow (T-146, W2-PERF-004)."""
     import autocontinue
-    grabbed, safe = [], []
+    grabbed_full, grabbed_region = [], []
     monkeypatch.setattr(autocontinue.capture, "is_foreground", lambda h: False)
+    monkeypatch.setattr(autocontinue.capture, "get_client_size", lambda h: (10, 10))
+    monkeypatch.setattr(autocontinue.capture, "grab",
+                        lambda h: grabbed_full.append(h) or np.zeros((10, 10, 3), dtype=np.uint8))
     monkeypatch.setattr(autocontinue.capture, "grab_region",
-                        lambda h, r: grabbed.append(r) or np.zeros((10, 10, 3), dtype=np.uint8))
-    monkeypatch.setattr(autocontinue.capture, "grab_client_region",
-                        lambda h, r: safe.append(r) or np.zeros((10, 10, 3), dtype=np.uint8))
+                        lambda h, r: grabbed_region.append(r) or np.zeros((10, 10, 3), dtype=np.uint8))
     monkeypatch.setattr(autocontinue, "match_score", lambda crop, tmpl: 0.0)
-    targets = ([{"name": "b", "template": "t.png", "threshold": 0.9,
-                 "region": [0, 0, 10, 10], "tmpl": object()}],
-               {(0, 0, 10, 10): [{"name": "b", "template": "t.png",
-                                   "threshold": 0.9, "region": [0, 0, 10, 10],
-                                   "tmpl": object()}]})
+    b = {"name": "b", "template": "t.png", "threshold": 0.9,
+         "region": [0, 0, 10, 10], "tmpl": object()}
+    targets = ([b], {(0, 0, 10, 10): [b]})
     assert autocontinue._scan(123, {}, targets) is False
-    assert safe and not grabbed
-
+    assert grabbed_full and not grabbed_region
 
 def test_autocontinue_scan_foreground_uses_fast_path(monkeypatch):
     import autocontinue

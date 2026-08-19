@@ -158,7 +158,11 @@ class AcceptTab(tk.Frame):
             filetypes=[("PNG images", "*.png"), ("All files", "*.*")])
         if not path:
             return
-        rel = os.path.relpath(path, BASE)
+        # W2-008: handle cross-drive relpath gracefully.
+        try:
+            rel = os.path.relpath(path, BASE)
+        except ValueError:
+            rel = os.path.normpath(path)
         name = simpledialog.askstring(Locale.tr("template_name_title"), Locale.tr("template_name"),
                                       initialvalue=os.path.splitext(os.path.basename(path))[0])
         if not name:
@@ -190,8 +194,11 @@ class AcceptTab(tk.Frame):
             self.runner.start(["--replace"])
         else:
             self.runner.stop()
+            # W2-002: stopping is authoritative - never lie about runtime state.
+            # On save failure keep checkbox False and show a warning; do NOT
+            # restart the runner or revert the checkbox to True.
             if not self.save_monitor_state():
-                self.monitor_var.set(True)  # disk still says enabled - restore
+                self.status_var.set(Locale.tr("save_failed", fallback="Stopped (state not persisted)"))
 
     def save_monitor_state(self):
         return update_json(self.cfg_path,
@@ -210,10 +217,7 @@ class AcceptTab(tk.Frame):
             return  # nothing was persisted - don't touch the engine (T-142)
         if self.monitor_var.get():
             self.runner.start(["--replace"])
-        try:
-            self.event_generate("<<ApplyStart>>")
-        except tk.TclError:
-            pass
+        # W2-003: Accept engine owns only its own config/process - no global ApplyStart.
 
     def _tick(self):
         if not self.winfo_exists():

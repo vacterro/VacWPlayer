@@ -224,7 +224,7 @@ def test_find_our_pids_filters_by_exact_token(monkeypatch):
         (202, '"C:\\Python\\AutoHotkeyU64.exe" "C:\\Other\\wr_runtime.ahk"'),
         (303, '"C:\\Python\\AutoHotkeyU64.exe" "C:\\Other\\x.ahk" "%s"' % ours),
     ]
-    monkeypatch.setattr(ag, "_probe_entries", lambda ps_cmd: entries)
+    monkeypatch.setattr(ag, "_probe_entries", lambda ps_cmd: ("ok", entries))
     monkeypatch.setattr(ag.time, "monotonic", lambda: 100.0)
     monkeypatch.setattr(ag, "_last_scan_ts", 0.0)
     state, pids = ag._find_our_pids(force=True)

@@ -99,8 +99,8 @@ class SmokeTester:
 
         # Test champions data
         try:
-            from champions import CHAMPIONS, SOURCED_COMBOS
-            n_champs = len(CHAMPIONS)
+            from champions import ROSTER, SOURCED_COMBOS
+            n_champs = len(ROSTER)
             n_combos = len(SOURCED_COMBOS) if SOURCED_COMBOS else 0
             results.append(('champions', 'OK', f'{n_champs} champions, {n_combos} combos'))
         except Exception as e:
@@ -143,7 +143,8 @@ class SmokeTester:
 
         # Test ahk_generator key functions
         try:
-            from ahk_generator import parse_steps, generate_script
+            from ahk_builder import parse_steps
+            from ahk_generator import generate_script
             results.append(('ahk_generator', 'OK', f'imported {parse_steps.__name__}, {generate_script.__name__}'))
         except Exception as e:
             results.append(('ahk_generator', 'FAIL', str(e)[:80]))
@@ -416,7 +417,8 @@ class ModuleSafetyChecker:
                                 'reversed', 'zip', 'map', 'filter', 'any', 'all',
                                 'sum', 'min', 'max', 'Path', '__import__', 'dir',
                                 'repr', 'bytes', 'json', 'os', 'sys', 're',
-                                'datetime', 'atexit', 'time', 'slug', 'RuntimeError'})
+                                'datetime', 'atexit', 'time', 'slug', 'RuntimeError',
+                                '_load_locale_bundles'})
 
         for f in files:
             sp = short_path(f)
@@ -486,10 +488,13 @@ class ConfigUsageXRef:
             if isinstance(data, dict):
                 for key, value in data.items():
                     full_path = f'{path}.{key}' if path else key
-                    # Check if key appears as string literal in source
-                    key_refs = source_text.count(f"'{key}'") + source_text.count(f'"{key}"')
-                    if key_refs <= 2:  # Only the config.json itself references it
-                        results.append(('config.json', 'UNUSED', f'field "{full_path}" never referenced in code'))
+                    # Skip dynamic champion keys
+                    is_champ_key = path.startswith('champions.') or path == 'champions'
+                    if not is_champ_key:
+                        # Check if key appears as string literal in source
+                        key_refs = source_text.count(f"'{key}'") + source_text.count(f'"{key}"')
+                        if key_refs <= 2:  # Only the config.json itself references it
+                            results.append(('config.json', 'UNUSED', f'field "{full_path}" never referenced in code'))
                     if isinstance(value, (dict, list)):
                         _check(prefix, value, full_path)
 

@@ -232,6 +232,11 @@ def _fake_death_tab(path):
     tab.switch_to_work = _FakeVar(False)
     tab.click_mid = _FakeVar(False)
     tab.lock_window = _FakeVar(False)
+    tab.cursor_move = _FakeVar(True)
+    tab.cursor_move_x = _FakeVar("75")
+    tab.cursor_move_y = _FakeVar("25")
+    tab.cursor_move_hold = _FakeVar("250")
+    tab.pvp_after_res = _FakeVar(False)
     tab.work_window = _FakeWindowPicker("")
     return tab
 
@@ -367,7 +372,8 @@ def test_load_json_semantic_invalid_returns_display_safe(tmp_path):
     for name, doc in cases:
         p = tmp_path / name
         p.write_text(json.dumps(doc), encoding="utf-8")
-        assert load_json(str(p), name) == {}, name
+        data, status = load_json(str(p), name)
+        assert data == {} and status == "semantic_invalid", name
         assert p.read_text(encoding="utf-8") == json.dumps(doc)  # read never writes
 
 
@@ -375,8 +381,9 @@ def test_load_json_accepts_semantically_valid(tmp_path):
     p = tmp_path / "accept_config.json"
     p.write_text(json.dumps({"window_title": "W", "templates": []}),
                  encoding="utf-8")
-    assert load_json(str(p), "accept_config.json") == {
-        "window_title": "W", "templates": []}
+    data, status = load_json(str(p), "accept_config.json")
+    assert data == {"window_title": "W", "templates": []}
+    assert status == "ok"
 
 
 def test_update_json_semantic_invalid_source_aborts(tmp_path):
@@ -530,14 +537,18 @@ def test_toggle_monitor_on_aborts_and_restores_checkbox(cls_name):
 
 
 @pytest.mark.parametrize("cls_name", list(_TAB_MODULES))
-def test_toggle_monitor_off_restores_checkbox_on_failed_state_save(cls_name):
+def test_toggle_monitor_off_keeps_checkbox_false_on_failed_state_save(cls_name):
+    """W2-002: stopping is authoritative. Failed OFF leaves checkbox False
+    and runner stopped regardless of persistence result - no lying about state."""
     tab = _new_tab(cls_name)
     tab.runner = _FakeRunner()
     tab.monitor_var = _FakeVar(False)  # turned off
     tab.save_monitor_state = lambda: False
+    tab.status_var = _FakeVar("Stopped")
     tab.toggle_monitor()
     assert tab.runner.stopped == 1
-    assert tab.monitor_var.get() is True  # disk still says enabled - restore
+    assert tab.monitor_var.get() is False  # stays False - stopping is authoritative
+    assert tab.status_var._v is not None  # warning was shown
 
 
 @pytest.mark.parametrize("cls_name", list(_TAB_MODULES))
@@ -579,18 +590,19 @@ def test_toggle_monitor_off_success_persists_and_keeps_checkbox(tmp_path, cls_na
 
 
 @pytest.mark.parametrize("cls_name", list(_TAB_MODULES))
-def test_toggle_monitor_off_failure_restores_checkbox_real(tmp_path, cls_name):
-    """REAL implementation: corrupt source -> update_json False -> checkbox
-    restored True, source bytes untouched."""
+def test_toggle_monitor_off_failure_keeps_checkbox_false_real(tmp_path, cls_name):
+    """W2-002 REAL implementation: corrupt source -> update_json False ->
+    checkbox stays False, runner stopped, source bytes untouched."""
     tab = _new_tab(cls_name)
     p = tmp_path / tab.CONFIG_NAME
     p.write_text("{corrupt", encoding="utf-8")
     tab.cfg_path = str(p)
     tab.runner = _FakeRunner()
     tab.monitor_var = _FakeVar(False)
+    tab.status_var = _FakeVar("Stopped")
     tab.toggle_monitor()
     assert tab.runner.stopped == 1
-    assert tab.monitor_var.get() is True        # persisted state restored
+    assert tab.monitor_var.get() is False        # stays OFF - stopping is authoritative
     assert p.read_text(encoding="utf-8") == "{corrupt"
 
 

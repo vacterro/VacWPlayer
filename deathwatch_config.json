@@ -37,5 +37,10 @@
   "buy_after_b_delay_sec": 6.5,
   "autobuy_then_mid": false,
   "controlsend_z": false,
-  "autobuy_then_mid_delay_sec": 0.5
+  "autobuy_then_mid_delay_sec": 0.5,
+  "cursor_move_on_resurrect": true,
+  "cursor_move_x_pct": 75,
+  "cursor_move_y_pct": 25,
+  "cursor_move_hold_ms": 250,
+  "pvp_after_resurrect": false
 }

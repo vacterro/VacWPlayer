@@ -24,21 +24,37 @@ def minimize(hwnd):
 
 
 def maximize_and_focus(hwnd):
-    win32gui.ShowWindow(hwnd, win32con.SW_MAXIMIZE)
-    _force_foreground(hwnd)
+    """Best-effort: maximize + focus the game window for the death sequence.
+    Never raises - a background watcher must not die over a window-op refusal."""
+    try:
+        win32gui.ShowWindow(hwnd, win32con.SW_MAXIMIZE)
+    except Exception as e:
+        print(f"window_ctl: ShowWindow failed: {e}", file=sys.stderr)
+    try:
+        _force_foreground(hwnd)
+    except Exception as e:
+        print(f"window_ctl: focus failed: {e}", file=sys.stderr)
 
 
 def switch_to(hwnd):
     """Bring an already-open window to the front for the death window, without
     forcing its size - unlike the game window (always maximized), a work window
     (editor, browser, etc.) should reappear at whatever size/position it was
-    left at, just un-minimized if needed."""
-    if win32gui.IsIconic(hwnd):
-        win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
-    _force_foreground(hwnd)
+    left at, just un-minimized if needed. Best-effort, never raises."""
+    try:
+        if win32gui.IsIconic(hwnd):
+            win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+        _force_foreground(hwnd)
+    except Exception as e:
+        print(f"window_ctl: switch_to failed: {e}", file=sys.stderr)
 
 
 def _force_foreground(hwnd):
+    """Best-effort focus. Windows refuses foreground-steal from background
+    processes (pywintypes.error (0, 'SetForegroundWindow', ...)) unless the
+    caller was last to have an input event - this is EXPECTED for a background
+    watcher, never a reason to die. Every attempt is guarded and logged;
+    the function never raises."""
     try:
         win32gui.SetForegroundWindow(hwnd)
         return
@@ -59,9 +75,17 @@ def _force_foreground(hwnd):
             win32process.AttachThreadInput(current_thread_id, fg_thread_id, True)
             attached = True
         win32gui.SetForegroundWindow(hwnd)
+    except Exception as e:
+        # Focus steal is best-effort: the game window is already maximized and
+        # resurrect actions are gated on GetForegroundWindow() == hwnd, so a
+        # refused focus simply skips them - it must NEVER kill the watcher.
+        print(f"window_ctl: SetForegroundWindow refused: {e}", file=sys.stderr)
     finally:
         if attached:
-            win32process.AttachThreadInput(current_thread_id, fg_thread_id, False)
+            try:
+                win32process.AttachThreadInput(current_thread_id, fg_thread_id, False)
+            except Exception:
+                pass
 
 
 def click_at(hwnd, x, y, button="right"):

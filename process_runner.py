@@ -4,6 +4,7 @@ import threading
 import subprocess
 import queue
 import sys
+from collections import deque
 
 logger = logging.getLogger(__name__)
 
@@ -17,9 +18,15 @@ class ProcessRunner:
     Thread-safe: a generation counter isolates pump threads from previous
     start() calls, so a stale pump can never consume the NEW process's stream
     or overwrite current UI state. The Popen object is captured locally and
-    stored on the instance only after a successful spawn; every line/done
-    event carries its generation, and poll_log drops stale ones.
+    stored on the instance only after a successful spawn.
+
+    T-W2-PERF-001: line output is coalesced to the latest value via a bounded
+    deque (MAX_LINE_HISTORY=20) so a noisy child cannot grow memory without
+    bound. Control events (eof, pump_error) pass through unbounded because they
+    are terminal and few. poll_log() performs at most one visible .set() per
+    tick.
     """
+    MAX_LINE_HISTORY = 20
 
     def __init__(self, script_name, status_var, last_line_var, check_var):
         self.script_path = os.path.join(BASE, script_name)
@@ -27,7 +34,10 @@ class ProcessRunner:
         self.last_line_var = last_line_var
         self.check_var = check_var
         self.proc = None
+        # Control events use an unbounded queue (few, terminal).
         self.q = queue.Queue()
+        # Line output uses a bounded deque - only the latest N values matter.
+        self._line_buf = deque(maxlen=self.MAX_LINE_HISTORY)
         self._gen = 0
         self._lock = threading.Lock()
 
@@ -35,18 +45,10 @@ class ProcessRunner:
         return self.proc is not None and self.proc.poll() is None
 
     def start(self, extra_args):
-        """Spawn the child. Returns True on success, False on spawn failure.
-
-        On failure self.proc stays None (never a half-open Popen), the status
-        shows a diagnostic and the checkbox stays off - the GUI can never
-        look Running without a live child.
-        """
+        """Spawn the child. Returns True on success, False on spawn failure."""
         with self._lock:
             if self.is_running():
                 return True
-            # Reaching here means proc is None or a DEAD old child. Drop the
-            # stale reference now so a failed spawn below leaves proc = None,
-            # never a pointer to the dead process (T-171).
             self.proc = None
             self._gen += 1
             gen = self._gen
@@ -71,18 +73,13 @@ class ProcessRunner:
         return True
 
     def _pump(self, proc, gen):
-        # `proc` is the captured child from THIS generation - never reads
-        # self.proc, so a restarted process's stream cannot be drained by a
-        # leftover pump from an older start().
-        #
-        # T-173: a stream failure is NOT proof the child exited. Only a clean
-        # EOF (or a stream failure when the child is already gone) may become
-        # "eof". A stream failure while the child is STILL ALIVE becomes
-        # "pump_error" - poll_log then deliberately terminates it instead of
-        # marking Stopped with a live process running untracked.
         try:
             for line in proc.stdout:
-                self.q.put(("line", gen, line.rstrip("\n")))
+                # Line events: enqueue a bounded deque push (thread-safe for
+                # single append, poll_log drains via snapshot).
+                self.q.put(("line", gen))
+                with self._lock:
+                    self._line_buf.append(line.rstrip("\n"))
             self.q.put(("eof", gen))
         except ValueError:
             logger.debug("pump stream closed while draining (generation %d)", gen)
@@ -93,20 +90,28 @@ class ProcessRunner:
             self.q.put(("eof", gen) if proc.poll() is not None
                        else ("pump_error", gen, str(e)))
 
-    def _terminate_captured(self):
-        """Deliberately terminate the captured child when its stream died but
-        the process is still alive - never leave a live child untracked."""
-        if self.proc is None or self.proc.poll() is not None:
-            return
+    def _stop_proc(self, proc):
+        """Terminate+wait+kill a live process, returning True only when the
+        process is proven exited. One primitive used by explicit stop,
+        pump_error, and EOF cleanup."""
+        if proc is None or proc.poll() is not None:
+            return True
         try:
-            self.proc.terminate()
+            proc.terminate()
+        except OSError:
+            return False
+        try:
+            proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
             try:
-                self.proc.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                self.proc.kill()
-                self.proc.wait()
-        except OSError as e:
-            logger.warning("terminate of captured child failed: %s", e)
+                proc.kill()
+            except OSError:
+                pass
+            try:
+                proc.wait(timeout=3)
+            except Exception:
+                return False
+        return proc.poll() is not None
 
     def poll_log(self):
         while True:
@@ -116,41 +121,40 @@ class ProcessRunner:
                 break
             tag = item[0]
             if tag == "line":
-                gen, payload = item[1], item[2]
+                gen, = item[1:]
             elif tag == "eof":
-                gen, payload = item[1], None
+                gen, = item[1:]
             elif tag == "pump_error":
                 gen, payload = item[1], item[2]
             else:
                 continue
             if gen != self._gen:
-                # stale-generation event from an older pump: ignore entirely,
-                # lines, eof and error markers alike.
                 continue
             if tag == "line":
-                self.last_line_var.set(payload[:80])
+                # Coalesce: only show the latest N lines from the bounded buf.
+                with self._lock:
+                    latest = list(self._line_buf)
+                if latest:
+                    self.last_line_var.set(latest[-1][:80])
             elif tag == "pump_error":
                 with self._lock:
-                    self._terminate_captured()  # never orphan a live child
-                    self.status_var.set("Error: %s" % payload)
+                    ok = self._stop_proc(self.proc)
+                    if ok:
+                        self.proc = None
+                        self.status_var.set("Error: %s" % payload)
                     self.check_var.set(False)
-                    self.proc = None
-            else:  # eof: stream ended - the child is gone or was terminated
+            else:  # eof
                 with self._lock:
-                    self._terminate_captured()  # no-op if already exited
+                    self._stop_proc(self.proc)
+                    self.proc = None
                     self.status_var.set("Stopped")
                     self.check_var.set(False)
-                    self.proc = None
 
     def stop(self):
         with self._lock:
             if self.is_running():
-                self.proc.terminate()
-                try:
-                    self.proc.wait(timeout=3)
-                except subprocess.TimeoutExpired:
-                    self.proc.kill()
-                    self.proc.wait()
-                self.proc = None
+                ok = self._stop_proc(self.proc)
+                if ok:
+                    self.proc = None
         self.status_var.set("Stopped")
         self.check_var.set(False)

@@ -3,13 +3,15 @@ import os
 import subprocess
 import sys
 import time
+import hashlib
 
 import pywintypes
 import win32api
 import win32con
 import win32event
 import win32process
-from ahk_builder import generate_script, validate_config, check_hotkey_conflicts
+from ahk_builder import generate_script, check_hotkey_conflicts
+import config_store
 from single_instance import _split_command_line
 
 """Renders wr_runtime.ahk from config and manages its process.
@@ -50,6 +52,10 @@ VERIFIED_WINDOW_SEC = 30.0
 _last_scan_ts = 0.0          # last scan ATTEMPT (throttle gate)
 _last_verified_ts = 0.0      # when the last SUCCESSFUL identity scan ran
 _last_scan_pids = []         # pids verified by that successful scan
+
+
+# T-W2-PERF-003: cached launched process handle for cheap liveness.
+_last_launched_proc = None
 
 
 def _reset_scan_cache():
@@ -106,6 +112,16 @@ def _pid_is_ahk_image(pid):
         win32api.CloseHandle(handle)
 
 
+# T-W2-PERF-007: hash of the last successfully launched script. If a new
+# Apply produces the exact same hash AND the runtime is VERIFIED alive, skip
+# the full replacement transaction and return Running (unchanged).
+_last_launched_script_hash = None
+
+
+def _script_hash(script):
+    return hashlib.sha256(script.encode("utf-8")).hexdigest()
+
+
 def generate_and_run(config):
     """Transactionally replace the live AHK runtime.
 
@@ -115,11 +131,19 @@ def generate_and_run(config):
     script, stop the old runtime, launch the candidate. A rejected candidate
     never stops, kills or clobbers the last-good runtime.
     """
+    global _last_launched_proc, _last_launched_script_hash
     exe = find_ahk_exe()
     if not exe:
         return False, "AutoHotkey not found - place AutoHotkeyU64.exe next to the app"
 
-    config_warnings = validate_config(config)
+    # T-CORE-008: canonical config_store validation gates ALL AHK side effects.
+    # Builder diagnostics stay advisory (warnings) and are separate from the
+    # hard fail gate so a known-invalid config never reaches codegen/runtime.
+    config_problems = config_store.validate_config(config)
+    if config_problems:
+        return False, "Config rejected: " + "; ".join(config_problems[:3])
+
+    config_warnings = None
 
     # Render in memory first - the live script file is not touched until the
     # candidate has passed every gate below.
@@ -137,6 +161,14 @@ def generate_and_run(config):
     conflicts = check_hotkey_conflicts(script)
     if conflicts:
         return False, "Hotkey conflict: %s" % conflicts[0]
+
+    # T-W2-PERF-007: if the candidate script hash matches the last successfully
+    # launched hash AND the runtime is verified alive, skip the full replacement
+    # transaction. Failed candidates never update the trusted hash.
+    script_hash = _script_hash(script)
+    if (script_hash == _last_launched_script_hash
+            and is_running() is True):
+        return True, "Running (unchanged)"
 
     # Best-effort syntax/preflight of the candidate where the binary is
     # available. Tooling absence never blocks the chain (safety net, not the
@@ -170,6 +202,12 @@ def generate_and_run(config):
         _restore_previous_script(prev_script)
         _reset_scan_cache()
         return False, "AHK restart aborted: previous runtime identity unknown"
+    if stop_res == "KILL_FAILED":
+        # T-CORE-003: a live managed runtime survived a failed stop - abort
+        # replacement to avoid duplicating the automation.
+        _restore_previous_script(prev_script)
+        _reset_scan_cache()
+        return False, "AHK restart aborted: previous runtime kill failed"
 
     try:
         proc = subprocess.Popen([exe, AHK_PATH, str(os.getpid())])
@@ -194,6 +232,11 @@ def generate_and_run(config):
     # The world changed: any cached scan result from before the launch is stale,
     # so the next liveness check scans fresh instead of trusting it.
     _reset_scan_cache()
+    # T-W2-PERF-003: cache the launched handle for cheap liveness checks so
+    # normal watchdog ticks never need a PowerShell spawn.
+    _last_launched_proc = proc
+    # T-W2-PERF-007: record the hash of the successfully launched script.
+    _last_launched_script_hash = script_hash
 
     if config_warnings:
         msg = "Warnings: " + "; ".join(config_warnings[:3])
@@ -237,21 +280,28 @@ def _preflight_script(exe, script):
     entering its message loop; with /ErrorStdOut a load error exits non-zero
     with the message on stdout. The probe self-terminates via a watchdog timer
     so a parsing script never lingers.
+
+    T-W2-PERF-002: the SetTimer for _WRA_PreflightExit is injected BEFORE the
+    first generated label so it is armed during the auto-execute section (the
+    timer must be set before any label/endsection boundaries, otherwise AHK
+    v1 will not arm it for the normal persistent script path). The handler
+    itself is appended at the end as before.
     """
     import tempfile
     probe = script
-    # The real script's startup reads the parent python pid from %1% and
-    # deletes/rewrites .ahk.pid with its own pid. A probe launched without
-    # args would hit the blank-%1% error dialog and clobber the live runtime's
-    # pid file - neutralize both, then exit on a timer.
     probe = probe.replace("global ParentPID := %1%", "global ParentPID := 0")
     probe = probe.replace("FileDelete, %A_ScriptDir%\\.ahk.pid",
                           "; preflight: pid-file write disabled")
     probe = probe.replace("FileAppend, %ahkPid%, %A_ScriptDir%\\.ahk.pid",
                           "; preflight: pid-file write disabled")
-    probe += ("\nSetTimer, _WRA_PreflightExit, -600\n"
-              "_WRA_PreflightExit:\n"
-              "ExitApp\n")
+    # Inject the timer command before the first label so AHK v1 arms it during
+    # auto-execute (before the first label /EndSection boundary).
+    probe = probe.replace(":\n", ":\nSetTimer, _WRA_PreflightExit, -600\n", 1)
+    # If no label was found (unlikely for a real generated script), append at
+    # the end as a fallback so the probe still self-terminates.
+    if "SetTimer, _WRA_PreflightExit" not in probe:
+        probe += "\nSetTimer, _WRA_PreflightExit, -600\n"
+    probe += "_WRA_PreflightExit:\nExitApp\n"
     try:
         fd, tmp = tempfile.mkstemp(suffix=".ahk", dir=BASE)
     except OSError:
@@ -326,26 +376,40 @@ def _cmdline_launches_our_script(cmdline):
 def _probe_entries(ps_cmd):
     """Run the PowerShell probe once; return [(pid, command_line), ...] for
     every AutoHotkey process. Command lines are matched in Python by exact
-    token, not inside PowerShell by substring regex (T-181)."""
-    out = subprocess.run(
+    token, not inside PowerShell by substring regex (T-181).
+
+    Returns ("failed", []) on nonzero return code, malformed non-empty output,
+    or invalid schema - callers must never convert a scan failure into an
+    authoritative empty result (T-CORE-002).
+    """
+    result = subprocess.run(
         ["powershell", "-NoProfile", "-Command", ps_cmd],
         capture_output=True, creationflags=0x08000000,
-        timeout=10).stdout.decode("utf-8", errors="replace")
+        timeout=10)
+    if result.returncode != 0:
+        return "failed", []
+    out = result.stdout.decode("utf-8", errors="replace").strip()
+    if not out:
+        return "ok", []
     try:
         data = json.loads(out)
     except ValueError:
-        return []
+        return "failed", []
     if not data:
-        return []
+        return "ok", []
     if isinstance(data, dict):
         data = [data]
+    if not isinstance(data, list):
+        return "failed", []
     entries = []
     for item in data:
+        if not isinstance(item, dict):
+            return "failed", []
         pid = item.get("ProcessId")
         cmd = item.get("CommandLine")
         if isinstance(pid, int) and isinstance(cmd, str):
             entries.append((pid, cmd))
-    return entries
+    return "ok", entries
 
 
 def _find_our_pids(force=False):
@@ -373,19 +437,23 @@ def _find_our_pids(force=False):
         "ConvertTo-Json -Compress"
     )
     try:
-        entries = _probe_entries(ps_cmd)
+        state, entries = _probe_entries(ps_cmd)
     except subprocess.TimeoutExpired:
         print("ahk_generator: PID scan timed out (10s), retrying once", file=sys.stderr)
         try:
-            entries = _probe_entries(ps_cmd)
+            state, entries = _probe_entries(ps_cmd)
         except subprocess.TimeoutExpired:
             print("ahk_generator: PID scan timed out again, giving up", file=sys.stderr)
             return "failed", []
         except Exception as e:
             print(f"ahk_generator: PID scan failed: {e}", file=sys.stderr)
             return "failed", []
+        if state == "failed":
+            return "failed", []
     except Exception as e:
         print(f"ahk_generator: PID scan failed: {e}", file=sys.stderr)
+        return "failed", []
+    if state == "failed":
         return "failed", []
     pids = [pid for pid, cmd in entries
             if _cmdline_launches_our_script(cmd)]
@@ -417,9 +485,13 @@ def _stop_pids(pids, wait_ms=500):
     an AHK binary immediately before the destructive call - a reused PID now
     pointing at a foreign process is never terminated. All termination happens
     through the handle, never by stale PID number.
+
+    Returns "STOPPED" when all targeted owned instances are proven exited,
+    "KILL_FAILED" when any could not be terminated or proven exited, or
+    None when there were no pids to stop.
     """
     if not pids:
-        return
+        return None
     handles = []
     for pid in pids:
         try:
@@ -438,23 +510,30 @@ def _stop_pids(pids, wait_ms=500):
             win32api.CloseHandle(h)
             continue
         handles.append(h)
+    failed = False
     for h in handles:
         try:
             win32api.TerminateProcess(h, 0)
         except pywintypes.error as e:
             print(f"ahk_generator: terminate pid failed: {e}")
-        finally:
-            win32api.CloseHandle(h)
-    # Wait briefly for the terminated instances to exit.
-    if wait_ms and handles:
-        deadline = time.monotonic() + wait_ms / 1000
-        for h in handles:
-            if time.monotonic() >= deadline:
-                break
+            failed = True
             try:
-                win32event.WaitForSingleObject(h, max(0, int((deadline - time.monotonic()) * 1000)))
-            except pywintypes.error:
+                win32api.CloseHandle(h)
+            except Exception:
                 pass
+            continue
+        # Wait BEFORE closing so we can prove exit; keep handle open through wait.
+        try:
+            rc = win32event.WaitForSingleObject(h, max(0, int(wait_ms)))
+            if rc not in (0, 0x102):  # WAIT_OBJECT_0 or WAIT_TIMEOUT
+                failed = True
+        except pywintypes.error:
+            failed = True
+        try:
+            win32api.CloseHandle(h)
+        except Exception:
+            pass
+    return "KILL_FAILED" if failed else "STOPPED"
 
 
 def is_running():
@@ -468,7 +547,20 @@ def is_running():
     identity state is genuinely unknown (verified cache expired AND no fresh
     scan could run): callers must not treat UNKNOWN as either stopped or
     running.
+
+    T-W2-PERF-003: if we have a trusted launched handle whose process is still
+    alive (poll() is None), return True without any spawn.
     """
+    global _last_launched_proc
+    # Cheap path: trusted launched handle still alive.
+    if _last_launched_proc is not None:
+        try:
+            if _last_launched_proc.poll() is None:
+                return True
+        except Exception:
+            pass
+        # Handle is dead or gone - drop it so the full path can rescan.
+        _last_launched_proc = None
     pid = _read_pidfile()
     now = time.monotonic()
     if pid is not None and _last_scan_pids and now - _last_verified_ts < VERIFIED_WINDOW_SEC:
@@ -476,9 +568,6 @@ def is_running():
             return True
     state, pids = _find_our_pids(force=False)
     if state in ("failed", "cached"):
-        # Scan unavailable or throttled: reuse the last VERIFIED result only
-        # while its ORIGINAL verified TTL is still valid. A verified EMPTY set
-        # within TTL is a genuine False (stopped); an expired cache is UNKNOWN.
         if now - _last_verified_ts < VERIFIED_WINDOW_SEC:
             return bool(_last_scan_pids)
         return None
@@ -521,4 +610,9 @@ def stop_ahk():
     except OSError:
         pass  # PID file already gone
     _last_scan_pids = []
+    # T-W2-PERF-003: drop the cached handle on stop/restart so the next
+    # liveness check uses a fresh source of truth.
+    global _last_launched_proc, _last_launched_script_hash
+    _last_launched_proc = None
+    _last_launched_script_hash = None
     return "ALREADY_STOPPED" if not pids else "STOPPED"

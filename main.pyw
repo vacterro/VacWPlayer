@@ -184,26 +184,36 @@ def _recover_corrupt_config():
 
 
 def load_config_merge(on_disk, cfg):
+    # T-CORE-010: detect/migrate recognized legacy schema INTO a new modern
+    # candidate BEFORE modern validation runs. Copy ryze/xin values first,
+    # map xin -> xin_zhao, derive mode, remove legacy keys only after
+    # successful conversion. Then run canonical modern validation.
+    legacy_ryze = on_disk.pop("ryze", None)
+    legacy_xin = on_disk.pop("xin", None)
+    if isinstance(legacy_ryze, dict):
+        if "champions" not in on_disk or not isinstance(on_disk.get("champions"), dict):
+            on_disk["champions"] = {}
+        on_disk["champions"]["ryze"] = dict(champions.default_for("Ryze"), **legacy_ryze)
+    if isinstance(legacy_xin, dict):
+        if "champions" not in on_disk or not isinstance(on_disk.get("champions"), dict):
+            on_disk["champions"] = {}
+        on_disk["champions"]["xin_zhao"] = dict(champions.default_for("Xin Zhao"), **legacy_xin)
+
     if "mode" not in on_disk:
-        ryze = on_disk.get("ryze", {})
-        xin = on_disk.get("xin", {})
-        ryze_on = ryze.get("enabled", True) if isinstance(ryze, dict) else True
-        xin_on = xin.get("enabled", False) if isinstance(xin, dict) else False
-        on_disk["mode"] = "ryze" if ryze_on else ("xin" if xin_on else "general")
-        on_disk.pop("ryze", None)
-        on_disk.pop("xin", None)
+        ryze_on = False
+        xin_on = False
+        if isinstance(on_disk.get("champions"), dict):
+            ryze_on = on_disk["champions"].get("ryze", {}).get("enabled", True) if isinstance(on_disk.get("champions", {}).get("ryze"), dict) else True
+            xin_on = on_disk["champions"].get("xin_zhao", {}).get("enabled", False) if isinstance(on_disk.get("champions", {}).get("xin_zhao"), dict) else False
+        on_disk["mode"] = "ryze" if ryze_on else ("xin_zhao" if xin_on else "general")
 
     if "champions" not in on_disk:
-        champs = {}
-        if isinstance(on_disk.get("ryze"), dict):
-            champs["ryze"] = dict(champions.default_for("Ryze"), **on_disk["ryze"])
-        if isinstance(on_disk.get("xin"), dict):
-            champs["xin_zhao"] = dict(champions.default_for("Xin Zhao"), **on_disk["xin"])
-        on_disk["champions"] = champs or cfg["champions"]
-        if on_disk.get("mode") == "xin":
-            on_disk["mode"] = "xin_zhao"
-    on_disk.pop("ryze", None)
-    on_disk.pop("xin", None)
+        on_disk["champions"] = cfg["champions"]
+    elif not isinstance(on_disk.get("champions"), dict):
+        on_disk["champions"] = cfg["champions"]
+
+    if on_disk.get("mode") == "xin":
+        on_disk["mode"] = "xin_zhao"
 
     lang = on_disk.get("lang", "ru")
     Locale.set_lang(lang if lang in Locale.languages() else "ru")
@@ -238,6 +248,10 @@ def save_config(config, bypass_guard=False):
 
     `bypass_guard` recovery writes use promote_bak=False so a known-bad source
     never overwrites the last-good .bak (T-188).
+
+    T-CORE-006: if an existing local file cannot be snapshotted byte-for-byte,
+    abort BEFORE any transaction write - a failed rollback would otherwise
+    leave a durable candidate local half behind.
     """
     global config_write_blocked, local_write_blocked
     if config_write_blocked and not bypass_guard:
@@ -259,7 +273,12 @@ def save_config(config, bypass_guard=False):
             with open(CONFIG_LOCAL_FILE, "rb") as f:
                 local_prev = f.read()
         except OSError:
-            local_prev = None
+            # T-CORE-006: cannot snapshot existing local => cannot guarantee
+            # rollback. Abort before writing anything so no candidate half
+            # survives a failed transaction.
+            print("config_store: cannot snapshot config.local.json for "
+                  "rollback; aborting write", file=sys.stderr)
+            return False
     local_written = False
     try:
         # Local (volatile) half FIRST, stable half LAST (T-161): on a failed
@@ -341,7 +360,7 @@ class VacWPlayer:
         style = ctypes.windll.user32.GetWindowLongW(hwnd, -20)
         ctypes.windll.user32.SetWindowLongW(hwnd, -20, style | 0x02000000)
         ctypes.windll.user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, 0x0002 | 0x0001 | 0x0004 | 0x0020)
-        self.root.protocol("WM_DELETE_WINDOW", self.quit_app)
+        self.root.protocol("WM_DELETE_WINDOW", self.hide_window)
         self.root.drop_target_register("*")
         self.root.dnd_bind("<<Drop>>", self._on_file_drop)
         self.root.bind("<<AutoSave>>", self._on_auto_save)
@@ -428,7 +447,7 @@ class VacWPlayer:
         self.tray_icon = None
         self.setup_tray()
 
-        self._engine_should_run = True
+        self._engine_should_run = False
         self.root.after(100, self.apply_and_start)
 
         toggles = self.config.get("toggles", {})
@@ -550,6 +569,23 @@ class VacWPlayer:
             x, y = (int(v) for v in pos.split(","))
         except (ValueError, AttributeError):
             return "%dx%d" % (win_w, win_h)
+        # W2-011: respect the full Windows virtual desktop, not just the primary
+        # monitor. A position saved on a secondary/left monitor must round-trip.
+        try:
+            import ctypes
+            monitor = ctypes.windll.user32.MonitorFromPoint((x, y), 2)  # MONITOR_DEFAULTTONEXT
+            if monitor:
+                rect = ctypes.c_void_p()
+                rect = ctypes.pointer(ctypes.c_long * 4())
+                ctypes.windll.user32.GetMonitorInfoW(monitor, ctypes.cast(rect, ctypes.c_void_p))
+                r = rect.contents
+                mx, my, max_x, max_y = r[0], r[1], r[2], r[3]
+                cx = max(mx, min(x, max_x - win_w))
+                cy = max(my, min(y, max_y - win_h))
+                return "%dx%d+%d+%d" % (win_w, win_h, cx, cy)
+        except Exception:
+            pass
+        # Fallback for single-monitor or failure: clamp to primary screen.
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
         x = max(0, min(x, max(0, sw - win_w)))
@@ -601,12 +637,20 @@ class VacWPlayer:
         if not path:
             return
         self.collect_config()
+        # W2-009: write to temp then atomic replace so a failure never truncates
+        # an existing export at the destination.
+        tmp_path = path + ".tmp"
         try:
-            with open(path, "w", encoding="utf-8") as f:
+            with open(tmp_path, "w", encoding="utf-8") as f:
                 json.dump(self.config, f, indent=4)
                 f.write("\n")
+            os.replace(tmp_path, path)
             self.status_lbl.config(text=Locale.tr("export_ok"), fg=TOKENS["success"])
         except OSError as e:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
             messagebox.showerror(Locale.tr("export_failed"), str(e))
 
     def _on_file_drop(self, event):
@@ -639,10 +683,17 @@ class VacWPlayer:
         # bypass the guard, but the guard is only released after the write
         # actually landed and the result validates. A failed recovery write
         # restores the previous guard so later autosaves stay blocked (T-156).
+        # T-CORE-006: save_config exclusively owns guard transitions - import
+        # must never overwrite a stronger partial_commit guard with a weaker
+        # previous value.
         global config_write_blocked
         previous_guard = config_write_blocked
         if not save_config(imported, bypass_guard=True):
-            config_write_blocked = previous_guard
+            # Only restore the previous guard when it was weaker (not
+            # partial_commit): a failed rollback may have armed partial_commit
+            # and import must not downgrade it.
+            if previous_guard != "partial_commit":
+                config_write_blocked = previous_guard
             messagebox.showerror(Locale.tr("import_failed"),
                                  Locale.tr("import_write_failed", fallback="Import was not saved: config file write failed."))
             return
@@ -676,8 +727,15 @@ class VacWPlayer:
                 Locale.tr("backup_failed"),
                 Locale.tr("backup_blocked", fallback="No current-config backup created: %s" % reason))
             return
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S") + ".%06d" % datetime.now().microsecond
         backup_path = os.path.join(backup_dir, "config_%s.json" % ts)
+        # W2-010: collision-proof naming - use microseconds to avoid same-second
+        # overwrites. If somehow the path exists, append a numeric suffix.
+        counter = 1
+        while os.path.exists(backup_path):
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S") + ".%06d" % datetime.now().microsecond
+            backup_path = os.path.join(backup_dir, "config_%s_%d.json" % (ts, counter))
+            counter += 1
         try:
             shutil.copy2(CONFIG_FILE, backup_path)
             self.status_lbl.config(text=Locale.tr("backup_ok") + "config_%s.json" % ts,
@@ -707,21 +765,25 @@ class VacWPlayer:
                                    "until the file is fixed or a backup is imported."))
 
     def _rebuild_ui(self):
-        if self.tab_death:
-            self.tab_death.stop_all()
-        if self.tab_auto:
-            self.tab_auto.stop_all()
-        if self.tab_accept:
-            self.tab_accept.stop_all()
-        if self.tab_surrender:
-            self.tab_surrender.stop_all()
-        for tab in list(self.notebook.tabs()):
-            w = self.notebook.nametowidget(tab)
-            self.notebook.forget(tab)
-            w.destroy()
-
+        """Rebuild ONLY main-owned tabs (Main/Combos/Champions/Minimap/AFK).
+        Death/Accept/Surrender/Auto/Buy tabs own independent engine configs and
+        must not be destroyed or restarted by a main-config import (T-W2-004)."""
+        # Stop main-owned engines so they can be recreated with fresh config.
+        if self.tab_main:
+            pass  # main has no separate runner
+        # Preserve independent engine tabs: don't stop them, don't destroy them.
+        # Destroy only main-owned tabs.
+        for attr, key in self._tab_specs:
+            tab = getattr(self, attr, None)
+            if tab is not None:
+                self.notebook.forget(tab)
+                tab.destroy()
+                setattr(self, attr, None)
+        # Recreate main-owned tabs.
         self._build_all_tabs()
         self._refresh_mode_box()
+        self._restore_active_tab()
+        self._apply_locale()
 
     def _update_ahk_dot(self, running):
         if running == "unknown":
@@ -774,6 +836,13 @@ class VacWPlayer:
             # T-177: only an ACCEPTED candidate becomes the last-applied state
             # the watchdog resurrects; a rejected candidate never does.
             self._last_applied_config = copy.deepcopy(candidate)
+            # T-CORE-009: publish the accepted config so deathwatch can
+            # consume the same atomic runtime-owned snapshot for PvP trigger.
+            try:
+                import deathwatch
+                deathwatch.VacWPlayer_last_applied = copy.deepcopy(candidate)
+            except Exception:
+                pass
         self.status_lbl.config(text=self._short_status(msg),
                                fg=TOKENS["success"] if ok else TOKENS["danger"])
         self._update_ahk_dot(running)
@@ -811,8 +880,21 @@ class VacWPlayer:
                 # T-185: freeze the restart candidate on the MAIN thread before
                 # the background worker starts (never hand it a mutable dict).
                 last = getattr(self, "_last_applied_config", None)
-                frozen = copy.deepcopy(last) if last is not None \
-                    else copy.deepcopy(self.config)
+                if last is None:
+                    # T-CORE-001: never fall back to mutable self.config on
+                    # degraded startup - no engine should run without a
+                    # previously-accepted candidate.
+                    self._applying = False
+                    self.status_lbl.config(
+                        text=Locale.tr("config_locked",
+                                       fallback="No last-applied config; engine standby"),
+                        fg=TOKENS["danger"])
+                    try:
+                        self.root.after(3000, self._engine_watchdog)
+                    except tk.TclError:
+                        pass
+                    return
+                frozen = copy.deepcopy(last)
                 threading.Thread(target=self._watchdog_worker, args=(frozen,),
                                  daemon=True).start()
         try:
@@ -854,50 +936,55 @@ class VacWPlayer:
         def w(t):
             txt.insert("end", t + "\n")
 
-        toggles = self.config.get("toggles", {})
-        champs = self.config.get("champions", {})
-        minimap = self.config.get("minimap", {})
-        afkfarm = self.config.get("afkfarm", {})
+        # W2-007: show hotkeys from last-applied runtime config, not draft.
+        active = getattr(self, "_last_applied_config", None)
+        if active is None:
+            w(Locale.tr("hk_no_active_runtime", fallback="No active runtime - hotkeys unknown"))
+        else:
+            toggles = active.get("toggles", {})
+            champs = active.get("champions", {})
+            minimap = active.get("minimap", {})
+            afkfarm = active.get("afkfarm", {})
 
-        w("=== " + Locale.tr("hk_global") + " ===")
-        w("  " + Locale.tr("hk_stop_key") + ":     %s" % toggles.get("stop_key", "s"))
-        w("  " + Locale.tr("hk_anti_afk") + ":     Ctrl+G (" + Locale.tr("hk_in_game_toggle") + ")")
-        w("  " + Locale.tr("hk_mode") + ":         %s" % self.config.get("mode", "general"))
-        w("  " + Locale.tr("hk_target_exe") + ":   %s" % toggles.get("target_exe", "HD-Player.exe"))
-        w("")
+            w("=== " + Locale.tr("hk_global") + " ===")
+            w("  " + Locale.tr("hk_stop_key") + ":     %s" % toggles.get("stop_key", "s"))
+            w("  " + Locale.tr("hk_anti_afk") + ":     Ctrl+G (" + Locale.tr("hk_in_game_toggle") + ")")
+            w("  " + Locale.tr("hk_mode") + ":         %s" % active.get("mode", "general"))
+            w("  " + Locale.tr("hk_target_exe") + ":   %s" % toggles.get("target_exe", "HD-Player.exe"))
+            w("")
 
-        w("=== " + Locale.tr("hk_champ_triggers") + " ===")
-        mode = self.config.get("mode", "general")
-        if mode != "general":
-            entry = champs.get(mode, {})
-            for slot in ("wave", "jungle", "pvp"):
-                trig = entry.get("trigger_" + slot, "")
+            w("=== " + Locale.tr("hk_champ_triggers") + " ===")
+            mode = active.get("mode", "general")
+            if mode != "general":
+                entry = champs.get(mode, {})
+                for slot in ("wave", "jungle", "pvp"):
+                    trig = entry.get("trigger_" + slot, "")
+                    if trig:
+                        keys = entry.get("keys_" + slot, "")
+                        w("  %s: %s -> %s" % (slot, trig, keys))
+            else:
+                for c in active.get("combos", []):
+                    w("  %s -> %s  (%s %d)" % (
+                        c.get("trigger", "?"), c.get("keys", "?"),
+                        Locale.tr("hk_interval"), c.get("interval", 50)))
+            w("")
+
+            w("=== " + Locale.tr("hk_minimap") + " ===")
+            for key in minimap.get("_order", []):
+                entry = minimap.get(key, {})
+                trig = entry.get("trigger", "")
+                x, y = entry.get("x", 0), entry.get("y", 0)
                 if trig:
-                    keys = entry.get("keys_" + slot, "")
-                    w("  %s: %s -> %s" % (slot, trig, keys))
-        else:
-            for c in self.config.get("combos", []):
-                w("  %s -> %s  (%s %d)" % (
-                    c.get("trigger", "?"), c.get("keys", "?"),
-                    Locale.tr("hk_interval"), c.get("interval", 50)))
-        w("")
+                    w("  %s: %s  (%d, %d)" % (key, trig, x, y))
+            w("")
 
-        w("=== " + Locale.tr("hk_minimap") + " ===")
-        for key in minimap.get("_order", []):
-            entry = minimap.get(key, {})
-            trig = entry.get("trigger", "")
-            x, y = entry.get("x", 0), entry.get("y", 0)
-            if trig:
-                w("  %s: %s  (%d, %d)" % (key, trig, x, y))
-        w("")
-
-        w("=== " + Locale.tr("hk_afk_farm") + " ===")
-        if afkfarm.get("enabled"):
-            w("  " + Locale.tr("hk_toggle") + ":  %s" % afkfarm.get("toggle_key", "F5"))
-            w("  " + Locale.tr("hk_slots") + ":   %s" % ", ".join(afkfarm.get("slots", [])))
-            w("  " + Locale.tr("hk_combo") + ":   %s" % afkfarm.get("combo_keys", ""))
-        else:
-            w("  (" + Locale.tr("hk_disabled") + ")")
+            w("=== " + Locale.tr("hk_afk_farm") + " ===")
+            if afkfarm.get("enabled"):
+                w("  " + Locale.tr("hk_toggle") + ":  %s" % afkfarm.get("toggle_key", "F5"))
+                w("  " + Locale.tr("hk_slots") + ":   %s" % ", ".join(afkfarm.get("slots", [])))
+                w("  " + Locale.tr("hk_combo") + ":   %s" % afkfarm.get("combo_keys", ""))
+            else:
+                w("  (" + Locale.tr("hk_disabled") + ")")
 
         txt.config(state="disabled")
         VintageButton(win, text=Locale.tr("close_lbl"), command=win.destroy, width=8).pack(pady=(0, 8))
@@ -969,14 +1056,31 @@ class VacWPlayer:
     def show_window(self, icon=None, item=None):
         self.root.after(0, self.root.deiconify)
 
-    def quit_app(self, icon=None, item=None):
+    def hide_window(self):
+        """X button -> hide to tray (not quit), per README contract."""
+        if self.tray_icon:
+            try:
+                self.root.withdraw()
+            except tk.TclError:
+                pass
+        else:
+            self.quit_app()
+
+    def quit_app(self, icon=None, item=None, force=False):
         if self.tray_icon:
             self.tray_icon.stop()
         self.collect_config()
         for tab in (self.tab_death, self.tab_buy, self.tab_auto, self.tab_accept, self.tab_surrender):
             if tab and hasattr(tab, "save"):
                 tab.save(silent=True)
-        save_config(self.config)
+        saved = save_config(self.config)
+        if not saved and not force:
+            # Normal quit: persistence failure aborts shutdown so edits are not
+            # silently discarded (T-CORE-015). Force quit (target-gone safety)
+            # logs but continues teardown.
+            print("config_store: quit aborted - save failed; app stays alive",
+                  file=sys.stderr)
+            return
         self.stop_everything()
         self.root.after(0, self.root.destroy)
 
