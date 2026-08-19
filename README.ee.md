@@ -1,3 +1,6 @@
+<img width="922" height="566" alt="clipboard_20260812_220242_c91e7ad6" src="https://github.com/user-attachments/assets/98550093-7335-4606-8741-04cc3a6dac33" />
+
+
 🇪🇪 **Eesti** | 🇷🇺 [Русский](README.ru.md) | 🇺🇸 [English](README.md) | 👴 [Дед-Мод](README.ded.md) | 🇯🇵 [日本語](README.ja.md)
 
 # VacWPlayer
@@ -62,4 +65,4 @@ Viis konfiguratsiooni, igaühel üks töö: `config.json` (kombod, režiim, lül
 
 Komadega eraldatud klahvid. `{Space}`, `f`, tähed. Oskuste tähed q/w/e/r valatakse Shiftiga (enda peale valamine), kui "Shift-cast" pole välja lülitatud. Lisa `:ms` klahvile, et määrata selle sammu viivitus; vastasel juhul rakendub kombo intervall. Hoidke päästikut all, et tsüklit korrata.
 
-<!-- source-digest: README.md sha256:b1c6e5b71595a204 -->
+<!-- source-digest: README.md sha256:7e51a7b4419c7f3c -->

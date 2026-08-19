@@ -1,3 +1,6 @@
+<img width="922" height="566" alt="clipboard_20260812_220242_c91e7ad6" src="https://github.com/user-attachments/assets/98550093-7335-4606-8741-04cc3a6dac33" />
+
+
 🇪🇪 [Eesti](README.ee.md) | 🇷🇺 **Русский** | 🇺🇸 [English](README.md) | 👴 [Дед-Мод](README.ded.md) | 🇯🇵 [日本語](README.ja.md)
 
 # VacWPlayer
@@ -61,4 +64,4 @@ python -m pytest tests/ -v
 
 Клавиши через запятую. `{Space}`, `f`, буквы. Буквы способностей q/w/e/r кастуются с шифтом (на себя), если опция "Shift-cast" не выключена. Добавьте `:ms` к клавише для задания задержки конкретного шага; иначе применяется общий интервал комбо. Удерживайте педаль для зацикливания.
 
-<!-- source-digest: README.md sha256:b1c6e5b71595a204 -->
+<!-- source-digest: README.md sha256:7e51a7b4419c7f3c -->

@@ -1,3 +1,6 @@
+<img width="922" height="566" alt="clipboard_20260812_220242_c91e7ad6" src="https://github.com/user-attachments/assets/98550093-7335-4606-8741-04cc3a6dac33" />
+
+
 🇪🇪 [Eesti](README.ee.md) | 🇷🇺 [Русский](README.ru.md) | 🇺🇸 [English](README.md) | 👴 **Дед-Мод** | 🇯🇵 [日本語](README.ja.md)
 
 # VacWPlayer
@@ -59,4 +62,4 @@ python -m pytest tests/ -v
 
 Через запятую. `{Space}`, `f`, буквы. Скиллы (q/w/e/r) кастуются на себя (с шифтом), если рубильник не выключишь. Пиши `:ms` после кнопки для паузы. Зажмешь педаль — будет лупить по кругу.
 
-<!-- source-digest: README.md sha256:b1c6e5b71595a204 -->
+<!-- source-digest: README.md sha256:7e51a7b4419c7f3c -->
