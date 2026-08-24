@@ -1458,7 +1458,7 @@ def _gen_afk_farm(a, target_exe, config, afk, afk_k):
             else:
                 a.append("                SendEvent {Blind}{LButton}")
             a.append("            }")
-            a.append("        }")
+        a.append("        }")
         a.append("        MouseMove, _af_mx, _af_my, 0")
         a.append("        P_afk_PosIndex := Mod(P_afk_PosIndex + 1, " + str(len(positions)) + ")")
         a.append("        return")
