@@ -554,7 +554,22 @@ def _active_combos(config):
         unique.append(c)
     return unique, dropped
 
-def _gen_header(a, target_exe, combos, afk, toggles):
+def _afk_will_run(config, afk, afk_k):
+    """True if AFKFarmLogic label will be emitted (header timer + hotkey must exist).
+
+    Cycle through minimap requires usable positions - but anti-AFK wiggle+combo
+    (F4) must work even with zero cycle positions (user request). Only missing
+    death detector still disables fail-closed; header/hotkey timers that point
+    at a missing label would make AHK exit 2 and reject candidate.
+    """
+    if not afk_k:
+        return False
+    if _deathwatch_cfg() is None:
+        return False
+    return True
+
+
+def _gen_header(a, target_exe, combos, afk, toggles, config=None):
     """Prologue: directives, legacy cleanup, globals, watchdog timer."""
     a.append("#NoEnv")
     a.append("#SingleInstance Force")
@@ -636,7 +651,15 @@ def _gen_header(a, target_exe, combos, afk, toggles):
     a.append("SetTimer, MasterSpammer, 15")
     a.append("SetTimer, FocusWatch, 50")
     if isinstance(afk, dict) and afk.get("enabled") and (afk.get("toggle_key") or "").strip():
-        a.append("SetTimer, AFKFarmLogic, 15")
+        # Only arm AFK timer when logic label will actually be emitted - otherwise
+        # AHK exits 2 with "Target label does not exist" and generate_and_run
+        # rejects the candidate (current config: enabled F4 but zero usable slots).
+        try:
+            _will = _afk_will_run(config, afk, (afk.get("toggle_key") or "").strip()) if config is not None else True
+        except Exception:
+            _will = False
+        if _will:
+            a.append("SetTimer, AFKFarmLogic, 15")
     a.append("")
 
 def _gen_autobuy(a, target_exe, config):
@@ -837,7 +860,7 @@ def _gen_focus_watch(a, target_exe, toggles, guard_bases=()):
     a.append("")
 
 
-def _gen_hotkeys(a, target_exe, toggles, combos, minimap, afk_k):
+def _gen_hotkeys(a, target_exe, toggles, combos, minimap, afk_k, config=None):
     """All hotkeys under #IfWinActive: mouse remap, stop, space, combos, minimap, AFK toggle."""
     a.append("#IfWinActive ahk_exe " + target_exe)
     a.append("")
@@ -1144,20 +1167,37 @@ def _gen_hotkeys(a, target_exe, toggles, combos, minimap, afk_k):
             a.append("")
 
     if afk_k:
-        a.append("*" + _sc_key(afk_k) + "::")
-        if _base_key(afk_k) in guarded_bases:
-            a.append("    " + _carry_set(afk_k, True))
-        a.append("    P_afk_Active := !P_afk_Active")
-        a.append("    if (P_afk_Active) {")
-        a.append("        SetTimer, AFKFarmLogic, 15")
-        a.append("        P_afk_NeedRestart := true")
-        a.append("        P_afk_Cycle := 0")
-        a.append("        P_afk_WasDead := false")
-        a.append("        P_afk_PosIndex := 0")
-        a.append("        P_afk_Timer := A_TickCount")
-        a.append("    }")
-        a.append("return")
-        a.append("")
+        # Only reference AFKFarmLogic when label will exist - otherwise AHK
+        # parser fails with "Target label does not exist" (same root as header).
+        _afk_ok = True
+        if config is not None:
+            try:
+                # need full afk dict to evaluate will_run; reconstruct minimal afk
+                _afk_dict = {"enabled": True, "toggle_key": afk_k}
+                # use real config's afkfarm for slots/death check if available
+                if isinstance(config.get("afkfarm"), dict):
+                    _afk_dict = config.get("afkfarm")
+                _afk_ok = _afk_will_run(config, _afk_dict, afk_k)
+            except Exception:
+                _afk_ok = False
+        if _afk_ok:
+            a.append("*" + _sc_key(afk_k) + "::")
+            if _base_key(afk_k) in guarded_bases:
+                a.append("    " + _carry_set(afk_k, True))
+            a.append("    P_afk_Active := !P_afk_Active")
+            a.append("    if (P_afk_Active) {")
+            a.append("        SetTimer, AFKFarmLogic, 15")
+            a.append("        P_afk_NeedRestart := true")
+            a.append("        P_afk_Cycle := 0")
+            a.append("        P_afk_WasDead := false")
+            a.append("        P_afk_PosIndex := 0")
+            a.append("        P_afk_Timer := A_TickCount")
+            a.append("    } else {")
+            a.append("        SendEvent {Blind}{RButton up}")
+            a.append("        SetTimer, AFKFarmLogic, 1000")
+            a.append("    }")
+            a.append("return")
+            a.append("")
 
     a.append("#If")
     a.append("")
@@ -1335,6 +1375,25 @@ def _gen_afk_farm(a, target_exe, config, afk, afk_k):
     keys_str = (afk.get("combo_keys") or "").strip()
     combo_ms = int(afk.get("combo_interval", 128))
     steps = parse_steps(keys_str, combo_ms) if keys_str else []
+    # qwer -> uiop for AFK as well (F4 requested) - mirrors champion combo remap
+    try:
+        qwer_uiop = False
+        mode = config.get("mode", "general")
+        if mode != "general":
+            champ = config.get("champions", {}).get(mode, {})
+            if isinstance(champ, dict) and champ.get("qwer_as_uiop") is True:
+                qwer_uiop = True
+        if not qwer_uiop:
+            # general mode or active champ without qwer: check any champ that has it (user likely configured it once)
+            for champ in config.get("champions", {}).values():
+                if isinstance(champ, dict) and champ.get("qwer_as_uiop") is True:
+                    qwer_uiop = True
+                    break
+        if qwer_uiop and steps:
+            m = {"q": "u", "w": "i", "e": "o", "r": "p", "Q": "U", "W": "I", "E": "O", "R": "P"}
+            steps = [(m.get(k, k), d) for k, d in steps]
+    except Exception:
+        pass
 
     mm = config.get("minimap", {})
     slots_cfg = afk.get("slots", {}) if isinstance(afk, dict) else {}
@@ -1365,19 +1424,13 @@ def _gen_afk_farm(a, target_exe, config, afk, afk_k):
                 if slot_cfg.get("move_when_pressed", False):
                     move_slots.append(mk)
 
-    # T-164: NEVER fabricate coordinates. AFK enabled with zero usable
-    # positions = the AFK block is DISABLED (no clicks/moves) and
-    # validate_config reports why - an invented Mid would automate the wrong
-    # spot on the map.
-    if not positions:
-        return
-
     dl = _deathwatch_cfg()
     if dl is None:
-        # T-166: no valid death detector (missing/corrupt config or template)
-        # -> AFK is DISABLED, fail-closed. validate_config reports why; a
-        # fabricated detector could pause/automate on the wrong pixels.
+        # T-166: no valid death detector -> AFK DISABLED fail-closed.
         return
+    # T-164: NEVER fabricate coordinates. Zero usable positions -> cycle
+    # part skipped, but anti-AFK wiggle+combo (F4) still runs even without
+    # cycle (requested: F4 works without map cycle). No invented Mid.
     dl_region, dl_template = dl
     dl_x1, dl_y1, dl_x2, dl_y2 = dl_region
     death_template = dl_template
@@ -1387,12 +1440,15 @@ def _gen_afk_farm(a, target_exe, config, afk, afk_k):
 
     a.append("AFKFarmLogic:")
     a.append("    if (!P_afk_Active) {")
+    a.append("        SendEvent {Blind}{RButton up}")
     a.append("        SetTimer, AFKFarmLogic, 1000")
     a.append("        return")
     a.append("    }")
     a.append("    SetTimer, AFKFarmLogic, 15")
-    a.append('    if (!WinActive("ahk_exe ' + target_exe + '"))')
+    a.append('    if (!WinActive("ahk_exe ' + target_exe + '")) {')
+    a.append("        SendEvent {Blind}{RButton up}")
     a.append("        return")
+    a.append("    }")
     a.append("    currentTime := A_TickCount")
     a.append("")
     a.append("    ; --- restart -------------------------------------------------")
@@ -1431,8 +1487,10 @@ def _gen_afk_farm(a, target_exe, config, afk, afk_k):
     a.append("    }")
     a.append("")
     a.append("    ; while dead skip cycle -----------------------------------")
-    a.append("    if (P_afk_WasDead)")
+    a.append("    if (P_afk_WasDead) {")
+    a.append("        SendEvent {Blind}{RButton up}")
     a.append("        return")
+    a.append("    }")
     a.append("")
     if positions:
         a.append("    ; --- cycle: click pos -> move+combo -> next pos -> ... ---")
@@ -1469,26 +1527,18 @@ def _gen_afk_farm(a, target_exe, config, afk, afk_k):
         a.append("        P_afk_Cycle := 0")
         a.append("        return")
         a.append("    }")
+    # hold forward - no twitch, just RButton down while AFK active
     if follow:
-        a.append("    ; move toward current mouse position")
+        a.append("    ; hold movement toward current mouse position (follow cursor)")
+        a.append("    SendEvent {Blind}{RButton down}")
     else:
-        a.append("    ; move forward (center of game screen)")
-        a.append('    WinGetPos, , , _af_fww, _af_fwh, ahk_exe ' + target_exe)
-        a.append("    MouseMove, _af_fww // 2, _af_fwh // 3, 0")
-    a.append("    ; --- wiggle every 1s to prevent getting stuck ---")
-    a.append("    if (currentTime - P_afk_Wiggle >= 1000) {")
-    a.append("        P_afk_Wiggle := currentTime")
-    a.append("        P_afk_WiggleDir := !P_afk_WiggleDir")
-    a.append("        if (P_afk_WiggleDir)")
-    a.append("            MouseMove, 1, 0, 0, R")
-    a.append("        else")
-    a.append("            MouseMove, -1, 0, 0, R")
-    a.append("    }")
-    a.append("    ; --- re-issue move order every 300ms (was every 15ms tick) ---")
-    a.append("    if (currentTime - P_afk_LastMove >= 300) {")
-    a.append("        P_afk_LastMove := currentTime")
-    a.append("        SendEvent {Blind}{RButton}")
-    a.append("    }")
+        a.append("    ; hold movement forward (center) - throttled to 500ms to avoid mouse lock")
+        a.append("    if (A_TickCount - P_afk_LastMove > 500) {")
+        a.append("        P_afk_LastMove := A_TickCount")
+        a.append('        WinGetPos, , , _af_fww, _af_fwh, ahk_exe ' + target_exe)
+        a.append("        MouseMove, _af_fww // 2, _af_fwh // 3, 0")
+        a.append("    }")
+        a.append("    SendEvent {Blind}{RButton down}")
     a.append("    ; fire combo")
     a.append("    if (currentTime - P_afk_LastCombo >= P_afk_NextDelay) {")
     a.append("        P_afk_LastCombo := currentTime")
@@ -1642,12 +1692,12 @@ def generate_script(config):
     minimap = config.get("minimap", {})
 
     a = []
-    _gen_header(a, target_exe, combos, afk, toggles)
+    _gen_header(a, target_exe, combos, afk, toggles, config)
     _gen_autobuy(a, target_exe, config)
     _gen_watchdog(a)
     guard_bases = [b for _, b in _guarded_triggers(toggles, combos, minimap, afk_k)]
     _gen_focus_watch(a, target_exe, toggles, guard_bases)
-    _gen_hotkeys(a, target_exe, toggles, combos, minimap, afk_k)
+    _gen_hotkeys(a, target_exe, toggles, combos, minimap, afk_k, config)
     _gen_master_spammer(a, target_exe, toggles, combos)
     _gen_afk_farm(a, target_exe, config, afk, afk_k)
     _gen_helper_funcs(a, combos, afk_k, target_exe, toggles)

@@ -29,7 +29,7 @@
             "keys_jungle": "r,q,w,e,{Space}",
             "move_when_pressed_jungle": false,
             "trigger_pvp": "F15,Mbutton",
-            "keys_pvp": "{Space},q,e,w",
+            "keys_pvp": "{Space},q,w,e",
             "move_when_pressed_pvp": true,
             "interval": 32,
             "use_shift": false,
@@ -277,30 +277,30 @@
         "move_duration": 5000,
         "follow_cursor": true,
         "combo_keys": "q,w,e,{Space}",
-        "combo_interval": 128,
+        "combo_interval": 1024,
         "slots": {
             "top": {
-                "enabled": true,
+                "enabled": false,
                 "move_when_pressed": false
             },
             "mid": {
-                "enabled": true,
+                "enabled": false,
                 "move_when_pressed": false
             },
             "bot": {
-                "enabled": true,
+                "enabled": false,
                 "move_when_pressed": false
             },
             "top_deep": {
-                "enabled": true,
+                "enabled": false,
                 "move_when_pressed": false
             },
             "mid_deep": {
-                "enabled": true,
+                "enabled": false,
                 "move_when_pressed": false
             },
             "bot_deep": {
-                "enabled": true,
+                "enabled": false,
                 "move_when_pressed": false
             },
             "base": {

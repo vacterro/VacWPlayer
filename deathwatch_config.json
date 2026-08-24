@@ -1,5 +1,5 @@
 {
-  "monitor_enabled": true,
+  "monitor_enabled": false,
   "window_title": "BlueStacks App Player",
   "poll_interval_sec": 0.4,
   "shop_buffer_sec": 0.0,

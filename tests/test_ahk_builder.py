@@ -82,7 +82,8 @@ def _afk_cfg(minimap=None, slots=None, enabled=True):
 def test_afk_enabled_zero_slots_no_cycle_no_fabricated_coords():
     cfg = _afk_cfg()
     script, _ = generate_script(cfg)
-    assert "AFKFarmLogic:" not in script      # AFK block disabled
+    assert "AFKFarmLogic:" in script          # F4 anti-AFK (wiggle+combo) works even without cycle
+    assert "MINIMAP phase" not in script      # no cycle when zero usable positions
     assert "MouseMove, 116" not in script     # no invented Mid
     assert ", 293" not in script
 
@@ -91,8 +92,8 @@ def test_afk_enabled_invalid_coords_no_click_move():
     cfg = _afk_cfg(minimap={"top": {"x": 0, "y": 0, "trigger": "F1"}},
                    slots={"top": {"enabled": True}})
     script, _ = generate_script(cfg)
-    assert "AFKFarmLogic:" not in script
-    assert "SendEvent {Blind}{LButton}" not in script
+    assert "AFKFarmLogic:" in script          # wiggle+combo still runs, cycle skipped
+    assert "MINIMAP phase" not in script      # invalid coords -> no cycle, no fabricated click
 
 
 def test_afk_enabled_valid_slots_unchanged():
