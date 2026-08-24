@@ -44,9 +44,16 @@ def window_identity(hwnd: int):
 def find_window_identity(title: str = "HD-Player"):
     """Like find_window() but also returns the owning process id, so callers can
     bind the acquired handle to a stable identity (title + PID) and later detect
-    when the numeric handle has been reclaimed by a *different* window (W2-002)."""
+    when the numeric handle has been reclaimed by a *different* window (W2-002).
+
+    CORE-014: an unobservable PID (<= 0) is UNKNOWN, never a valid identity.
+    Acquisition fails loudly (RuntimeError) rather than yielding a title-only
+    identity the caller would believe carries a PID invariant."""
     hwnd = find_window(title)
-    return hwnd, window_pid(hwnd)
+    pid = window_pid(hwnd)
+    if not pid:
+        raise RuntimeError(f"cannot determine owning pid for window: {title}")
+    return hwnd, pid
 
 
 def is_same_window(hwnd: int, expected_title: str, expected_pid: int) -> bool:
@@ -56,12 +63,18 @@ def is_same_window(hwnd: int, expected_title: str, expected_pid: int) -> bool:
     ``win32gui.IsWindow`` alone is not enough: when the target window is
     destroyed its numeric handle can be reclaimed by an unrelated foreign
     window, which still passes IsWindow. Binding to title+PID catches that reuse
-    and forces a re-acquire instead of scanning/clicking the wrong window."""
-    if not hwnd or not win32gui.IsWindow(hwnd):
+    and forces a re-acquire instead of scanning/clicking the wrong window.
+
+    CORE-014: a zero/unknown expected PID or a zero current PID is never proof
+    of sameness - two failed observations must not compare equal."""
+    if not hwnd or not expected_pid or not win32gui.IsWindow(hwnd):
         return False
     try:
+        pid = window_pid(hwnd)
+        if not pid:
+            return False  # UNKNOWN current PID: not proof of sameness
         return (window_title(hwnd) == expected_title
-                and window_pid(hwnd) == expected_pid)
+                and pid == expected_pid)
     except Exception:
         return False
 

@@ -30,15 +30,27 @@ def capture_preview_bytes(region=None):
     hwnd = capture.find_window()
     if capture.is_minimized(hwnd):
         return None
-    img = capture.grab(hwnd)
     if region:
+        # PERF-004: never full-frame grab for a region. Clamp to CURRENT client
+        # dimensions first (no need to render the whole surface), then foreground
+        # -> cheap screen-region BitBlt; anything else -> occlusion-safe
+        # PrintWindow crop (crops BEFORE the BGR copy). Full-window grab is kept
+        # only for the region-less preview.
         x0, y0, x1, y1 = region
         x0, y0 = max(0, x0), max(0, y0)
-        x1 = min(img.shape[1], x1)
-        y1 = min(img.shape[0], y1)
-        img = img[y0:y1, x0:x1]
+        cw, ch = capture.get_client_size(hwnd)
+        x1 = min(cw, x1)
+        y1 = min(ch, y1)
+        if x1 <= x0 or y1 <= y0:
+            return None
+        if capture.is_foreground(hwnd):
+            img = capture.grab_region(hwnd, (x0, y0, x1, y1))
+        else:
+            img = capture.grab_client_region(hwnd, (x0, y0, x1, y1))
         if img.size == 0:
             return None
+    else:
+        img = capture.grab(hwnd)
     ok, buf = cv2.imencode(".png", img)
     if not ok:
         return None

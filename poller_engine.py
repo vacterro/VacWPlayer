@@ -12,7 +12,7 @@ import os
 import time
 
 import cv2
-import win32gui
+import win32gui  # re-exported for tests that monkeypatch poller_engine.win32gui
 
 import capture
 import engine_config
@@ -146,7 +146,9 @@ def scan_by_region(hwnd, entries, match=click_template_match):
     try:
         cw, ch = capture.get_client_size(hwnd)
     except Exception:
-        cw, ch = 9999, 9999
+        # CORE-009: UNKNOWN client geometry is NOT safe - never substitute
+        # fabricated bounds that would admit out-of-client regions.
+        return None
     valid = [e for e in entries
              if (0 <= e["region"][0] < e["region"][2] <= cw
                  and 0 <= e["region"][1] < e["region"][3] <= ch)]
@@ -169,7 +171,7 @@ def scan_by_region(hwnd, entries, match=click_template_match):
         crop = gray[r[1] - y0:r[3] - y0, r[0] - x0:r[2] - x0]
         if crop.shape[0] < 1 or crop.shape[1] < 1:
             continue
-        if match(hwnd, crop, entry, origin=(r[0] - x0, r[1] - y0)):
+        if match(hwnd, crop, entry, origin=(r[0], r[1])):
             return True
     return False
 

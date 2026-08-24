@@ -84,7 +84,9 @@ def _scan(hwnd, cfg, targets):
     try:
         cw, ch = capture.get_client_size(hwnd)
     except Exception:
-        cw, ch = 9999, 9999  # if we can't query, don't filter
+        # CORE-009: UNKNOWN client geometry is NOT safe - fabricated bounds
+        # would admit out-of-client regions; treat as a transient scan failure.
+        return None
     foreground = capture.is_foreground(hwnd)
     if foreground:
         # Foreground: cheap region BitBlt per group, one gray conversion per group.

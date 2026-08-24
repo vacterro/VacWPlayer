@@ -301,7 +301,8 @@ def test_stop_pids_kills_only_verified_ahk_instances(monkeypatch):
                                       202: r"C:\WINDOWS\notepad.exe"}[h])
     # CORE-001: ownership is now verified against the pinned handle. Only our
     # AHK script (handle 101) passes; the foreign notepad (202) does not.
-    monkeypatch.setattr(ag, "_handle_is_our_ahk", lambda h: h == 101)
+    monkeypatch.setattr(ag, "_handle_ownership",
+                        lambda h: "owned" if h == 101 else "foreign")
     monkeypatch.setattr(ag.win32api, "TerminateProcess",
                         lambda h, c: killed.append(h))
     monkeypatch.setattr(ag.win32api, "CloseHandle", lambda h: closed.append(h))
@@ -312,18 +313,18 @@ def test_stop_pids_kills_only_verified_ahk_instances(monkeypatch):
     assert 202 in closed     # foreign handle is closed, not killed
 
 
-def test_stop_pids_rejects_reused_foreign_ahk(monkeypatch):
-    """CORE-001: a PID reused by a foreign AutoHotkey process must NOT be
-    terminated. Image-name equality is not ownership; the command-line check on
-    the pinned handle must catch the foreign script. The stop still reports
-    KILL_FAILED because we cannot prove our own instance exited."""
+def test_stop_pids_reused_foreign_ahk_counts_target_gone(monkeypatch):
+    """CORE-013: a PID reused by a proven-foreign process means the original
+    scanned owned instance has already exited (Windows cannot reuse a live
+    PID). The foreign process must NOT be terminated, and the stop must report
+    success for that target - not KILL_FAILED."""
     killed, closed = [], []
     monkeypatch.setattr(ag.win32api, "OpenProcess",
                         lambda acc, inh, pid: pid)
     monkeypatch.setattr(ag.win32process, "GetModuleFileNameEx",
                         lambda h, i: r"C:\Other\AutoHotkeyU64.exe")
     monkeypatch.setattr(ag.win32process, "GetProcessId", lambda h: 101)
-    # The (reused) pid's command line is NOT our script -> ownership fails.
+    # The (reused) pid's command line is NOT our script -> PROVEN_FOREIGN.
     monkeypatch.setattr(ag, "_pid_cmdline",
                         lambda pid: "AutoHotkeyU64.exe C:\\foreign.ahk")
     monkeypatch.setattr(ag, "_cmdline_launches_our_script", lambda cmd: False)
@@ -334,7 +335,25 @@ def test_stop_pids_rejects_reused_foreign_ahk(monkeypatch):
                         lambda h, ms: 0)
     res = ag._stop_pids([101])
     assert killed == []        # foreign AHK never terminated
-    assert 101 in closed      # foreign handle closed
+    assert 101 in closed       # foreign handle is closed
+    assert res == "STOPPED"    # original target is proven gone -> success
+
+
+def test_stop_pids_unknown_ownership_fails_closed(monkeypatch):
+    """CORE-013: when ownership cannot be proven either way (probe failure),
+    the stop must fail closed - never terminate, never claim a clean stop."""
+    killed, closed = [], []
+    monkeypatch.setattr(ag.win32api, "OpenProcess",
+                        lambda acc, inh, pid: pid)
+    monkeypatch.setattr(ag, "_handle_ownership", lambda h: "unknown")
+    monkeypatch.setattr(ag.win32api, "TerminateProcess",
+                        lambda h, c: killed.append(h))
+    monkeypatch.setattr(ag.win32api, "CloseHandle", lambda h: closed.append(h))
+    monkeypatch.setattr(ag.win32event, "WaitForSingleObject",
+                        lambda h, ms: 0)
+    res = ag._stop_pids([101])
+    assert killed == []
+    assert 101 in closed
     assert res == "KILL_FAILED"
 
 

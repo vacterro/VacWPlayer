@@ -102,6 +102,14 @@ class ProcessRunner:
         try:
             proc.terminate()
         except OSError:
+            # W2-008: the child may have exited naturally between the initial
+            # poll and TerminateProcess. A non-destructive re-poll proves it;
+            # only a still-live or genuinely-unknown process is a failure.
+            try:
+                if proc.poll() is not None:
+                    return True
+            except Exception:
+                return False
             return False
         try:
             proc.wait(timeout=3)

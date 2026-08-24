@@ -379,8 +379,9 @@ def test_has_regions_requires_all_nonempty():
 
 def test_scan_by_region_grabs_union_once_and_offsets(monkeypatch):
     """One grab_region of the union box; each entry matches on its own crop
-    with an origin offset back into window space."""
+    with an origin offset back into window (client) space (CORE-006)."""
     grabs = []
+    monkeypatch.setattr(poller_engine.capture, "get_client_size", lambda h: (200, 200))
     monkeypatch.setattr(poller_engine.capture, "is_foreground", lambda h: True)
     monkeypatch.setattr(poller_engine.capture, "grab_region",
                         lambda h, r: grabs.append(r) or np.zeros((30, 30, 3), dtype=np.uint8))
@@ -396,17 +397,28 @@ def test_scan_by_region_grabs_union_once_and_offsets(monkeypatch):
     ]
     assert poller_engine.scan_by_region(123, entries, match=fake_match) is False
     assert grabs == [(10, 20, 40, 50)]  # union box, captured once
-    # entry a's top-left is the union origin; entry b is offset by (10, 10)
-    assert seen[0] == ("a", (0, 0), (20, 20))
-    assert seen[1] == ("b", (10, 10), (20, 20))
+    # CORE-006: origin is each region's ABSOLUTE client top-left, so the click
+    # lands at client coordinates, not crop-relative offsets.
+    assert seen[0] == ("a", (10, 20), (20, 20))
+    assert seen[1] == ("b", (20, 30), (20, 20))
 
 
 def test_scan_by_region_capture_failure_returns_none(monkeypatch):
     """A transient grab_region failure is None, matching scan_targets' contract."""
     def boom(hwnd, region):
         raise RuntimeError("window gone")
+    monkeypatch.setattr(poller_engine.capture, "get_client_size", lambda h: (200, 200))
     monkeypatch.setattr(poller_engine.capture, "is_foreground", lambda h: True)
     monkeypatch.setattr(poller_engine.capture, "grab_region", boom)
+    entries = [{"name": "a", "threshold": 0.75, "region": [0, 0, 10, 10]}]
+    assert poller_engine.scan_by_region(123, entries) is None
+
+
+def test_scan_by_region_client_size_failure_returns_none(monkeypatch):
+    """CORE-009: a get_client_size failure must fail closed (None), never
+    substitute fabricated bounds that would admit out-of-client regions."""
+    monkeypatch.setattr(poller_engine.capture, "get_client_size",
+                        lambda h: (_ for _ in ()).throw(RuntimeError("gone")))
     entries = [{"name": "a", "threshold": 0.75, "region": [0, 0, 10, 10]}]
     assert poller_engine.scan_by_region(123, entries) is None
 
@@ -415,6 +427,7 @@ def test_scan_by_region_capture_failure_returns_none(monkeypatch):
 
 def test_scan_by_region_foreground_uses_fast_path(monkeypatch):
     grabbed, safe = [], []
+    monkeypatch.setattr(poller_engine.capture, "get_client_size", lambda h: (200, 200))
     monkeypatch.setattr(poller_engine.capture, "is_foreground", lambda h: True)
     monkeypatch.setattr(poller_engine.capture, "grab_region",
                         lambda h, r: grabbed.append(r) or np.zeros((10, 10, 3), dtype=np.uint8))
@@ -427,6 +440,7 @@ def test_scan_by_region_foreground_uses_fast_path(monkeypatch):
 
 def test_scan_by_region_occluded_uses_printwindow_path(monkeypatch):
     grabbed, safe = [], []
+    monkeypatch.setattr(poller_engine.capture, "get_client_size", lambda h: (200, 200))
     monkeypatch.setattr(poller_engine.capture, "is_foreground", lambda h: False)
     monkeypatch.setattr(poller_engine.capture, "grab_region",
                         lambda h, r: grabbed.append(r) or np.zeros((10, 10, 3), dtype=np.uint8))
@@ -440,6 +454,7 @@ def test_scan_by_region_occluded_uses_printwindow_path(monkeypatch):
 def test_scan_by_region_occluded_capture_failure_returns_none(monkeypatch):
     def boom(hwnd, region):
         raise RuntimeError("window gone")
+    monkeypatch.setattr(poller_engine.capture, "get_client_size", lambda h: (200, 200))
     monkeypatch.setattr(poller_engine.capture, "is_foreground", lambda h: False)
     monkeypatch.setattr(poller_engine.capture, "grab_client_region", boom)
     entries = [{"name": "a", "threshold": 0.75, "region": [0, 0, 10, 10]}]
@@ -466,6 +481,7 @@ def test_autocontinue_scan_occluded_uses_printwindow(monkeypatch):
 def test_autocontinue_scan_foreground_uses_fast_path(monkeypatch):
     import autocontinue
     grabbed, safe = [], []
+    monkeypatch.setattr(autocontinue.capture, "get_client_size", lambda h: (200, 200))
     monkeypatch.setattr(autocontinue.capture, "is_foreground", lambda h: True)
     monkeypatch.setattr(autocontinue.capture, "grab_region",
                         lambda h, r: grabbed.append(r) or np.zeros((10, 10, 3), dtype=np.uint8))

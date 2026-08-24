@@ -443,7 +443,8 @@ def _pid_cmdline(pid):
     """
     ps_cmd = (
         "Get-CimInstance Win32_Process -Filter \"ProcessId = %d\" | "
-        "Select-Object -ExpandProperty CommandLine" % int(pid)
+        "Select-Object ProcessId, CommandLine | "
+        "ConvertTo-Json -Compress" % int(pid)
     )
     try:
         state, entries = _probe_entries(ps_cmd)
@@ -451,12 +452,43 @@ def _pid_cmdline(pid):
         return None
     if state != "ok" or not entries:
         return None
+    if len(entries) != 1 or entries[0][0] != int(pid):
+        return None
     return entries[0][1]
 
 
+def _handle_ownership(h):
+    """Tri-state ownership of a pinned process handle (CORE-013).
+
+    Returns 'owned'   - the pinned instance runs OUR script
+             'foreign' - PROVEN to be a different process: the image is not an
+                         AutoHotkey binary, or it is an AutoHotkey whose command
+                         line is not ours. Windows cannot reuse a live PID, so a
+                         proven-foreign occupant means the previously-scanned
+                         owned instance has already exited.
+             'unknown' - ownership could not be proven either way (probe
+                         failure); callers must fail closed.
+    """
+    try:
+        img = win32process.GetModuleFileNameEx(h, 0)
+    except Exception:
+        return "unknown"
+    if not img or os.path.basename(img).lower() not in AHK_IMAGE_NAMES:
+        return "foreign"
+    try:
+        pid = win32process.GetProcessId(h)
+    except Exception:
+        return "unknown"
+    cmd = _pid_cmdline(pid)
+    if cmd is None:
+        return "unknown"
+    if _cmdline_launches_our_script(cmd):
+        return "owned"
+    return "foreign"
+
+
 def _handle_is_our_ahk(h):
-    """Authoritative ownership proof for the PINNED handle about to be
-    terminated (T-CORE-001 / CORE-001).
+    """Boolean ownership proof for the pinned handle (CORE-013).
 
     The old code only checked that the opened instance was SOME AutoHotkey
     binary. A PID reused by a foreign AHK script would pass that image check
@@ -464,20 +496,7 @@ def _handle_is_our_ahk(h):
     command-line probe on THAT instance; a reused PID fails the script check
     and is never terminated.
     """
-    try:
-        img = win32process.GetModuleFileNameEx(h, 0)
-    except Exception:
-        return False
-    if not img or os.path.basename(img).lower() not in AHK_IMAGE_NAMES:
-        return False
-    try:
-        pid = win32process.GetProcessId(h)
-    except Exception:
-        return False
-    cmd = _pid_cmdline(pid)
-    if cmd is None:
-        return False
-    return _cmdline_launches_our_script(cmd)
+    return _handle_ownership(h) == "owned"
 
 
 def _find_our_pids(force=False):
@@ -589,21 +608,21 @@ def _stop_pids(pids, wait_ms=500):
             failed = True
             continue
         try:
-            # T-CORE-001 / CORE-001: re-verify THIS pinned instance runs OUR
-            # script, not merely any AutoHotkey binary. A reused PID pointing at
-            # a foreign AHK script must never be terminated.
-            if not _handle_is_our_ahk(h):
-                # Not ours (PID reused / foreign AHK). If the original process is
-                # already gone there is nothing for us to stop.
-                try:
-                    code = win32process.GetExitCodeProcess(h)
-                except pywintypes.error:
-                    code = 259
+            # CORE-013: tri-state ownership of the pinned instance.
+            own = _handle_ownership(h)
+            if own == "foreign":
+                # PROVEN foreign occupant on a reused PID: the original scanned
+                # owned instance is already gone (Windows reuses a PID only
+                # after it exits). Leave the foreign process untouched and
+                # count this target complete - not a failure to stop the old
+                # owned runtime.
                 win32api.CloseHandle(h)
-                if code != 259:  # original exited, foreign survived - not our concern
-                    continue
-                # Still-active foreign process occupying our PID: we cannot prove
-                # our own instance is gone, so this is a KILL_FAILED.
+                continue
+            if own == "unknown":
+                # Cannot prove ours NOR foreign: cannot prove the original is
+                # gone. Fail closed - never terminate on an unverifiable
+                # identity, and never report a clean stop on an unproven one.
+                win32api.CloseHandle(h)
                 failed = True
                 continue
         except pywintypes.error:

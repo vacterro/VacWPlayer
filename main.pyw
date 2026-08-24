@@ -62,9 +62,62 @@ from locales import Locale
 
 CONFIG_FILE = os.path.join(BASE, "config.json")
 CONFIG_LOCAL_FILE = os.path.join(BASE, "config.local.json")
+# W2-003: crash-recoverable transaction journal for the two-half persistence
+# (config.local.json written first, config.json last). A hard process
+# termination between the two atomic replacements leaves this journal; startup
+# resolves it by committing the FULL candidate pair, never a hybrid revision.
+_TXN_FILE = CONFIG_LOCAL_FILE + ".txn"
 GENERAL = "General"
 
+
+def _txn_write(stable_bytes, local_bytes):
+    """Atomically persist the pending two-half transaction (W2-003)."""
+    import base64
+    try:
+        payload = json.dumps({
+            "stable": base64.b64encode(stable_bytes).decode("ascii"),
+            "local": base64.b64encode(local_bytes).decode("ascii"),
+        })
+        tmp = _TXN_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(payload)
+        os.replace(tmp, _TXN_FILE)
+    except OSError:
+        pass  # journal failure: degrade gracefully (local is volatile/expendable)
+
+
+def _txn_clear():
+    try:
+        os.remove(_TXN_FILE)
+    except OSError:
+        pass
+
+
+def _txn_recover():
+    """W2-003: resolve a crash between the local and stable writes. The journal
+    carries the full candidate pair; commit both halves atomically so startup
+    observes a consistent state (all B or all A), never a hybrid."""
+    import base64
+    try:
+        with open(_TXN_FILE, encoding="utf-8") as f:
+            payload = json.load(f)
+        stable_bytes = base64.b64decode(payload["stable"])
+        local_bytes = base64.b64decode(payload["local"])
+    except (OSError, ValueError, KeyError, TypeError):
+        _txn_clear()
+        return
+    try:
+        config_store.atomic_write_bytes(CONFIG_FILE, stable_bytes,
+                                        promote_bak=False)
+        config_store.atomic_write_bytes(CONFIG_LOCAL_FILE, local_bytes,
+                                        promote_bak=False)
+    except OSError:
+        return  # keep journal; retry on next startup
+    _txn_clear()
+
 config_warning = None
+# W2-007: visible local volatile-state degradation ("degraded" | "restored").
+local_warning = None
 # Write guard (T-135): while the source config could not be read safely, the
 # app runs on in-memory defaults but MUST NOT overwrite the source. None =
 # writable; otherwise the reason the guard is armed. Cleared only by an
@@ -156,8 +209,11 @@ def _migrate_legacy_config(raw):
 
 
 def load_config():
-    global config_warning, config_write_blocked, local_write_blocked
+    global config_warning, config_write_blocked, local_write_blocked, local_warning
     config_write_blocked = None
+    # W2-003: resolve any interrupted two-half transaction before reading, so
+    # startup never merges halves from two different committed states.
+    _txn_recover()
     cfg = default_config()
     data, err = config_store.read_raw(CONFIG_FILE)
     if err is None:
@@ -192,10 +248,14 @@ def load_config():
     local_data, local_err = config_store.read_raw(CONFIG_LOCAL_FILE)
     if local_err == "corrupt":
         local_write_blocked = "corrupt"
-        print("config_store: config.local.json corrupt, ignoring runtime state",
-              file=sys.stderr)
+        if not _recover_local_from_bak():
+            print("config_store: config.local.json corrupt, ignoring runtime state",
+                  file=sys.stderr)
     elif local_err == "io_error":
+        # W2-007: permission/unreadable stays FAIL-CLOSED - never auto-replace a
+        # file we cannot even read.
         local_write_blocked = "io_error"
+        local_warning = "degraded"
         print("config_store: config.local.json unreadable, ignoring runtime state",
               file=sys.stderr)
     elif local_err == "missing":
@@ -204,12 +264,36 @@ def load_config():
         local_problems = config_store.validate_local_config(local_data)
         if local_problems:
             local_write_blocked = "invalid"
-            for p in local_problems:
-                print("config_store: config.local.json ignored: %s" % p, file=sys.stderr)
+            if not _recover_local_from_bak():
+                for p in local_problems:
+                    print("config_store: config.local.json ignored: %s" % p,
+                          file=sys.stderr)
         else:
             local_write_blocked = None  # healthy: writable
             cfg = config_store.merge_volatile(cfg, local_data)
     return cfg
+
+
+def _recover_local_from_bak():
+    """W2-007: restore a VALIDATED config.local.json.bak over the corrupt or
+    semantically-invalid live local file. Returns True on recovery; on failure
+    surfaces a visible degraded state instead of silently locking persistence."""
+    global local_write_blocked, local_warning
+    bak = CONFIG_LOCAL_FILE + config_store.BAK_SUFFIX
+    data, err = config_store.read_raw(bak)
+    if err is not None or config_store.validate_local_config(data):
+        local_warning = "degraded"
+        return False
+    try:
+        config_store.atomic_write(CONFIG_LOCAL_FILE, data, promote_bak=False)
+    except OSError:
+        local_warning = "degraded"
+        return False
+    local_write_blocked = None
+    local_warning = "restored"
+    print("config_store: config.local.json restored from validated .bak",
+          file=sys.stderr)
+    return True
 
 
 def _recover_corrupt_config():
@@ -338,6 +422,10 @@ def save_config(config, bypass_guard=False):
     if not local_changed and not stable_changed:
         # PERF-004: both halves byte-identical -> no-op, no filesystem churn.
         return True
+    # W2-003: persist the pending transaction BEFORE any half is written, so a
+    # hard crash between the two atomic writes is recovered to the full pair.
+    _txn_write(stable_new_bytes if stable_changed else stable_cur_bytes,
+               local_new_bytes if local_changed else local_cur_bytes)
     local_written = False
     try:
         # Local (volatile) half FIRST, stable half LAST (T-161).
@@ -363,7 +451,9 @@ def save_config(config, bypass_guard=False):
                 local_write_blocked = "partial_commit"
                 print("config_store: FATAL - rollback failed after partial "
                       "write; write guards armed", file=sys.stderr)
+        _txn_clear()
         return False
+    _txn_clear()
     return True
 
 
@@ -449,6 +539,11 @@ class VacWPlayer:
         self.root.dnd_bind("<<Drop>>", self._on_file_drop)
         self.root.bind("<<AutoSave>>", self._on_auto_save)
         self.root.bind("<<ApplyStart>>", lambda e: self.apply_and_start())
+        # W2-001: Death/Buy autobuy edits regenerate the runtime from the
+        # LAST-ACCEPTED main config - a dedicated event so the Death Apply and
+        # Buy autosave never run the whole-main collect_config commit that would
+        # promote unrelated main-tab drafts.
+        self.root.bind("<<DeathBuyRefresh>>", self._on_death_buy_apply)
         self._auto_save_timer = None
         self._show_config_warning()
 
@@ -537,18 +632,12 @@ class VacWPlayer:
         ahk_generator.cleanup_temp_ahk_files()
         self.root.after(100, self.apply_and_start)
 
-        toggles = self.config.get("toggles", {})
-        if toggles.get("exit_when_bs_gone", True):
-            exes = [toggles.get("target_exe") or "HD-Player.exe"]
-            # T-CORE-006: target-gone safety shutdown must force=True so
-            # stop_everything() always runs even if persistence fails.
-            single_instance.start_target_watchdog(
-                exes,
-                lambda: self.root.after(0, self.quit_app, None, None, True),
-                interval_sec=3.0,
-                grace_ticks=2,
-                min_uptime_sec=15.0)
-
+        self._target_watchdog = None
+        self._target_watchdog_exes = None
+        # W2-002: the watchdog is owned here and reconciled after every accepted
+        # main-config transition (Apply/import) so ON/OFF and target_exe changes
+        # take effect live - never frozen at startup.
+        self._reconcile_target_watchdog()
         self.root.after(3000, self._engine_watchdog)
 
     # --- tabs ------------------------------------------------------------------
@@ -813,6 +902,9 @@ class VacWPlayer:
             return
         self.config = load_config()  # read-back; re-arms guard if disk invalid
         self._rebuild_ui()
+        # W2-002: an accepted import is a main-config transition - reconcile the
+        # target watchdog against the imported ON/OFF/target_exe state.
+        self._reconcile_target_watchdog()
         self.status_lbl.config(text=Locale.tr("import_ok"), fg=TOKENS["success"])
 
     def import_config(self):
@@ -877,6 +969,20 @@ class VacWPlayer:
                           fallback="config.json could not be read (I/O/permission error). "
                                    "Settings are shown from defaults and saving is disabled "
                                    "until the file is fixed or a backup is imported."))
+        # W2-007: surface local volatile-state degradation/recovery visibly -
+        # a locked save caused by the "expendable" local file must not be silent.
+        if local_warning == "restored":
+            messagebox.showinfo(
+                Locale.tr("config_restored_title", fallback="Local State Restored"),
+                Locale.tr("config_local_restored",
+                          fallback="config.local.json was invalid; restored from its backup (.bak)."))
+        elif local_warning == "degraded":
+            messagebox.showwarning(
+                Locale.tr("config_error_title", fallback="Config Error"),
+                Locale.tr("config_local_degraded",
+                          fallback="config.local.json is corrupt/unreadable and no usable "
+                                   "backup exists. Volatile runtime state is ignored and saving "
+                                   "is disabled until the file is fixed or reset."))
 
     # T-CORE-005: the exact set of tabs owned by main-config import.
     # Death/Buy/Auto/Accept/Surrender tabs own independent engine configs
@@ -894,7 +1000,11 @@ class VacWPlayer:
         main-owned tabs. Independent engine tabs retain their objects, runners,
         pending state, and tab order.
         """
-        # Destroy and recreate only main-owned tabs in-place.
+        # Destroy and recreate only main-owned tabs in-place. CORE-005: each
+        # recreated tab is INSERTED at its canonical _tab_specs position -
+        # notebook.add() appended, scrambling the order so _restore_active_tab
+        # resolved the persisted numeric index against the wrong layout.
+        position = {attr: i for i, (attr, _k, _f) in enumerate(self._tab_specs)}
         for attr, key, factory in self._tab_specs:
             if attr not in self._MAIN_OWNED_TABS:
                 continue
@@ -905,7 +1015,7 @@ class VacWPlayer:
                 setattr(self, attr, None)
             # Recreate this tab with the factory.
             new_tab = factory()
-            self.notebook.add(new_tab, text=Locale.tr(key))
+            self.notebook.insert(position[attr], new_tab, text=Locale.tr(key))
             setattr(self, attr, new_tab)
         self._refresh_mode_box()
         self._restore_active_tab()
@@ -944,6 +1054,30 @@ class VacWPlayer:
                                fallback="Config locked (corrupt/unreadable); fix config or import a backup"),
                 fg=TOKENS["danger"])
             return
+        self._engine_should_run = True
+        self.status_lbl.config(text=Locale.tr("generating"), fg=TOKENS["warning"])
+        threading.Thread(target=self._apply_worker, args=(candidate, epoch),
+                         daemon=True).start()
+
+    def _on_death_buy_apply(self, _event=None):
+        """W2-001: dedicated AHK refresh for Death/Buy autobuy edits.
+
+        Death/Buy autosave autobuy/quickbuy fields into deathwatch_config.json,
+        which ahk_builder._gen_autobuy re-reads at every generation. This handler
+        regenerates the runtime from the LAST-ACCEPTED main config (never the
+        mutable editor draft) WITHOUT collect_config(), so a Death Apply or Buy
+        autosave cannot promote unrelated main-tab drafts. Reuses the
+        _apply_worker(candidate, epoch) pattern: same lock serialisation, same
+        epoch gate, same generate_and_run.
+        """
+        if self._applying:
+            return
+        self._applying = True
+        epoch = self._engine_epoch
+        self._applying_epoch = epoch
+        base = (self._active_runtime_config or self._last_applied_config
+                or self.config)
+        candidate = copy.deepcopy(base)
         self._engine_should_run = True
         self.status_lbl.config(text=Locale.tr("generating"), fg=TOKENS["warning"])
         threading.Thread(target=self._apply_worker, args=(candidate, epoch),
@@ -1018,6 +1152,10 @@ class VacWPlayer:
         self.status_lbl.config(text=self._short_status(msg),
                                fg=TOKENS["success"] if ok else TOKENS["danger"])
         self._update_ahk_dot(running)
+        if ok:
+            # W2-002: an accepted Apply is a main-config transition - reconcile
+            # the target watchdog against the newly applied ON/OFF/target_exe.
+            self._reconcile_target_watchdog()
         self._applying = False
         self._applying_epoch = None
 
@@ -1028,18 +1166,64 @@ class VacWPlayer:
         msg = str(msg)
         return msg if len(msg) <= limit else msg[:limit - 1] + "…"
 
+    def _reconcile_target_watchdog(self):
+        """W2-002: reconcile the target-gone watchdog against the CURRENT
+        accepted main-config state. Called at startup and after every accepted
+        main-config transition (Apply success / import success).
+
+        OFF cancels the running watcher; ON starts or retargets exactly one
+        watcher. Old generations are invalidated so a superseded watcher can
+        never fire shutdown after replacement."""
+        toggles = self.config.get("toggles", {})
+        want = bool(toggles.get("exit_when_bs_gone", True))
+        exes = [toggles.get("target_exe") or "HD-Player.exe"]
+        current = getattr(self, "_target_watchdog", None)
+        current_exes = getattr(self, "_target_watchdog_exes", None)
+        if current is not None:
+            if not want or current_exes != exes:
+                current.stop()
+                self._target_watchdog = None
+                self._target_watchdog_exes = None
+            else:
+                return
+        if want:
+            self._target_watchdog = single_instance.start_target_watchdog(
+                exes,
+                lambda: self.root.after(0, self.quit_app, None, None, True),
+                interval_sec=3.0, grace_ticks=2, min_uptime_sec=15.0)
+            self._target_watchdog_exes = exes
+
     def stop_engine(self):
         self._engine_should_run = False
-        # PERF-002/W2-001: increment epoch so any in-flight Apply/watchdog
-        # worker sees its token expired. The blocking stop_ahk() runs on
-        # the Tk thread here (Stop is user-initiated and at most 10 s) but
-        # the epoch increment is atomic so concurrent workers abort before
-        # they reach their own generate_and_run.
+        self.status_lbl.config(text=Locale.tr("stopping", fallback="Stopping…"),
+                               fg=TOKENS["warning"])
+        # PERF-002: the blocking stop_ahk identity probe (10s PowerShell timeout
+        # + retry) runs off-Tk. The UI paints "Stopping…" immediately and the
+        # worker marshals the authoritative result back via root.after, so a
+        # degraded identity path can never freeze the window.
         with self._engine_lock:
             self._engine_epoch += 1
-            self._active_runtime_config = None  # W2-010
-            res = ahk_generator.stop_ahk()
+            epoch = self._engine_epoch
+
+        def _worker():
+            try:
+                with self._engine_lock:
+                    res = ahk_generator.stop_ahk()
+            except Exception as e:
+                print("stop_engine worker failed: %s" % e, file=sys.stderr)
+                res = "UNKNOWN_IDENTITY"
+            try:
+                self.root.after(0, self._stop_engine_done, res, epoch)
+            except tk.TclError:
+                pass
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _stop_engine_done(self, res, epoch):
+        if epoch != self._engine_epoch:
+            return  # superseded by a newer stop/apply - its result will land
         if res in ("STOPPED", "ALREADY_STOPPED"):
+            self._active_runtime_config = None  # CORE-003: clear only after proven stop
             self.status_lbl.config(text=Locale.tr("engine_stopped"), fg=TOKENS["textPrimary"])
             self._update_ahk_dot(False)
             try:
@@ -1052,7 +1236,8 @@ class VacWPlayer:
                 print("config_store: WARNING - PvP runtime inactive write failed: "
                       "%s" % e, file=sys.stderr)
         else:
-            self.status_lbl.config(text="Stop Unknown/Failed", fg=TOKENS["error"])
+            self.status_lbl.config(text=Locale.tr("stop_failed", fallback="Stop Unknown/Failed"),
+                                   fg=TOKENS.get("error", "#f00"))
             ahk_is = ahk_generator.is_running()
             if ahk_is is None:
                 self._update_ahk_dot("unknown")
@@ -1258,18 +1443,11 @@ class VacWPlayer:
     def stop_everything(self):
         self._engine_should_run = False
         # Reliable shutdown: serialise against in-flight _apply_worker /
-        # _watchdog_worker AND the watchdog's restart probe. Without the lock +
-        # epoch bump a worker that is mid generate_and_run (or a probe that
-        # already decided to restart) can relaunch wr_runtime.ahk AFTER
-        # stop_ahk() kills it, orphaning it in the tray once the app exits.
-        # Bumping the epoch under the lock makes every later worker abort before
-        # it reaches its own generate_and_run; the lock itself makes stop_ahk()
-        # run only AFTER any in-flight generate_and_run has finished, so we kill
-        # the runtime it launched instead of racing it.
+        # _watchdog_worker AND the watchdog's restart probe.
+        ahk_stopped = False
         try:
             with self._engine_lock:
                 self._engine_epoch += 1
-                self._active_runtime_config = None
                 # T-CORE: keep our own runtime dead even if an identity scan
                 # flaps once - retry the stop so a transient UNKNOWN/KILL_FAILED
                 # cannot leave wr_runtime.ahk alive in the tray.
@@ -1281,19 +1459,28 @@ class VacWPlayer:
                     state, pids = ahk_generator._find_our_pids(force=True)
                     if pids:
                         ahk_generator._force_kill_ahk_processes(pids)
+                ahk_stopped = res in ("STOPPED", "ALREADY_STOPPED")
         except Exception as e:
             print("stop_everything: AHK stop failed: %s" % e, file=sys.stderr)
-        self._update_ahk_dot(False)
-        if self.tab_death:
-            self.tab_death.stop_all()
-        if self.tab_auto:
-            self.tab_auto.stop_all()
-        if self.tab_accept:
-            self.tab_accept.stop_all()
-        if self.tab_surrender:
-            self.tab_surrender.stop_all()
+        if ahk_stopped:
+            self._active_runtime_config = None  # CORE-003: clear only after proven stop
+        # CORE-003: aggregate child monitor stops; only paint OFF what is
+        # proven stopped. A failed stop keeps its monitor ON/error state live
+        # instead of representing a surviving process as OFF.
+        children_stopped = True
+        for tab in (self.tab_death, self.tab_auto, self.tab_accept,
+                    self.tab_surrender):
+            if tab is not None:
+                if not tab.stop_all():
+                    children_stopped = False
+        if ahk_stopped and children_stopped:
+            self._update_ahk_dot(False)
+        else:
+            ahk_is = ahk_generator.is_running()
+            self._update_ahk_dot(ahk_is if ahk_is is not None else "unknown")
         # Exit cleanup: remove orphaned temp files
         ahk_generator.cleanup_temp_ahk_files()
+        return ahk_stopped and children_stopped
 
     # --- tray -------------------------------------------------------------------
     def _tray_image(self):

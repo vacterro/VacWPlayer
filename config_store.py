@@ -127,7 +127,7 @@ def _check_toggles(problems, toggles):
     """Every KNOWN toggle must carry the type its UI/runtime variable assumes.
     Unknown keys are left alone: they may be forward-compatible flags no
     current consumer reads (T-136)."""
-    from tabs.main_tab import TOGGLE_DEFAULTS  # lazy: keeps CLI imports light
+    from config_contracts import TOGGLE_DEFAULTS  # lazy: keeps CLI imports light
     for key, default in TOGGLE_DEFAULTS.items():
         if key not in toggles:
             continue

@@ -182,6 +182,7 @@ class _FakeRunner:
 
     def start(self, args=None):
         self.started += 1
+        return True  # CORE-011: real ProcessRunner.start returns spawn success
 
     def stop(self):
         self.stopped += 1

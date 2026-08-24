@@ -8,6 +8,8 @@ BASE = Path(__file__).resolve().parent.parent
 if str(BASE) not in sys.path:
     sys.path.insert(0, str(BASE))
 
+import pytest
+
 import single_instance as si
 
 
@@ -210,6 +212,28 @@ def test_kill_previous_holder_rejects_reused_foreign_ahk(monkeypatch, capsys):
     assert "identity not proven" in capsys.readouterr().err
 
 
+# --- W2-006: pid-publish failure must fail closed, not silently start ---------
+
+def test_ensure_single_instance_fails_closed_when_pid_publish_fails(monkeypatch):
+    """A mutex-holder whose pid file can never be written (disk full / denied)
+    must not start: the just-acquired authoritative mutex is released and
+    startup raises BEFORE any runtime side effects - otherwise a replace=True
+    run could never reclaim the lock through the missing pid hint."""
+    closed = []
+    monkeypatch.setattr(si.win32event, "CreateMutex", lambda *a: 5)
+    monkeypatch.setattr(si.win32api, "GetLastError", lambda: 0)
+    monkeypatch.setattr(si, "_write_pid", lambda name: False)
+    monkeypatch.setattr(si.win32api, "CloseHandle",
+                        lambda h: closed.append(h) or None)
+    try:
+        with pytest.raises(RuntimeError):
+            si.ensure_single_instance("accept")
+    finally:
+        if 5 in si._handles:
+            si._handles.remove(5)
+    assert closed == [5], "just-acquired mutex must be released on publish failure"
+
+
 def test_set_timer_resolution_survives_winmm_failure(monkeypatch):
     """A host that refuses timeBeginPeriod must not crash the engine bootstrap."""
 
@@ -329,12 +353,16 @@ def test_parent_watchdog_terminates_on_parent_death(monkeypatch):
 
 
 def test_parent_watchdog_keeps_watching_while_parent_alive(monkeypatch):
-    """A non-signaled parent (WAIT_TIMEOUT) must NOT terminate the engine."""
+    """A live parent (the blocking wait does not return) must NOT terminate
+    the engine."""
+    import time as _time
     exited = []
     monkeypatch.setattr(si.win32api, "OpenProcess", lambda *a: 7)
-    monkeypatch.setattr(si.win32event, "WaitForSingleObject", lambda h, t: 0x102)
+    # PERF-006: the watcher now blocks on the pinned handle. A live parent
+    # means the wait never returns - simulate with a sleep beyond the join.
+    monkeypatch.setattr(si.win32event, "WaitForSingleObject",
+                        lambda h, t: _time.sleep(5.0) or 0x102)
     monkeypatch.setattr(si.win32api, "CloseHandle", lambda h: None)
-    monkeypatch.setattr(si.time, "sleep", lambda s: None)
     monkeypatch.setattr(si.os, "_exit",
                         lambda c: exited.append(c) or (_ for _ in ()).throw(SystemExit))
 
@@ -343,37 +371,51 @@ def test_parent_watchdog_keeps_watching_while_parent_alive(monkeypatch):
     assert exited == [], "engine must NOT exit while parent is still alive"
 
 
-# --- CORE-003: target absence must not be poisoned by inaccessible PIDs ---
+# --- CORE-004 / PERF-001: target absence tri-state + early-exit scan ---
 
-def test_target_absent_despite_inaccessible_unrelated_pid(monkeypatch):
-    """A target that exited while one unrelated protected PID stays
-    inaccessible must be reported absent, not UNKNOWN (CORE-003)."""
-    monkeypatch.setattr(si, "_process_names",
-                        lambda: ({"protected.exe"}, False))
-    assert si._target_any_alive(["HD-Player.exe"]) is False
+def test_target_absent_incomplete_scan_returns_unknown(monkeypatch):
+    """CORE-004: when the target is absent but the scan is incomplete (some PID
+    unobservable), the result must be None/UNKNOWN, not False. Partial
+    observation cannot prove authoritative absence."""
+    monkeypatch.setattr(si, "_running_pids", lambda: [1, 2])
+    monkeypatch.setattr(si, "_image_name",
+                        lambda pid: {1: "protected.exe", 2: None}.get(pid))
+    assert si._target_any_alive(["HD-Player.exe"]) is None
 
 
 def test_target_observation_failure_stays_unknown(monkeypatch):
     """A genuinely failed scan (EnumProcesses unavailable) stays UNKNOWN."""
-    monkeypatch.setattr(si, "_process_names", lambda: None)
+    monkeypatch.setattr(si, "_running_pids", lambda: None)
     assert si._target_any_alive(["HD-Player.exe"]) is None
 
 
-def test_target_watchdog_fires_when_target_gone_but_scan_incomplete(monkeypatch):
-    """End-to-end (CORE-003): once the target was seen alive, its exit must
-    fire the shutdown even though the next scan is incomplete (an unrelated
-    protected PID could not be opened)."""
+def test_target_early_exit_on_first_match(monkeypatch):
+    """PERF-001: the first proven target match must return True immediately
+    without scanning remaining PIDs."""
+    scanned = []
+    monkeypatch.setattr(si, "_running_pids", lambda: [1, 2, 3])
+    monkeypatch.setattr(si, "_image_name",
+                        lambda pid: scanned.append(pid) or
+                        {1: "other.exe", 2: "hd-player.exe", 3: "other2.exe"}.get(pid))
+    assert si._target_any_alive(["HD-Player.exe"]) is True
+    assert scanned == [1, 2]  # stopped at PID 2 (match), never scanned PID 3
+
+
+def test_target_watchdog_fires_when_target_gone(monkeypatch):
+    """End-to-end (CORE-004): once the target was seen alive, fully-observed
+    absence ticks fire the shutdown after the configured grace period."""
     import time as _time
     real_sleep = _time.sleep
     fired = []
     exited = []
     sleeps_append = []
-    # First observation: target present (seen_alive). Then: target gone while
-    # the scan reports one unrelated PID it could not inspect (complete=False).
-    snap = [({"hd-player.exe", "other.exe"}, True)] + \
-           [({"other.exe"}, False)] * 20
+    # One PID observed per scan. First scan: target present. Then: target gone
+    # but the scan is fully observed (complete=True) -> False advances the
+    # disappearance counter and eventually fires.
+    snap = ["hd-player.exe"] + ["other.exe"] * 20
     it = iter(snap)
-    monkeypatch.setattr(si, "_process_names", lambda: next(it))
+    monkeypatch.setattr(si, "_running_pids", lambda: [1])
+    monkeypatch.setattr(si, "_image_name", lambda pid: next(it))
     monkeypatch.setattr(si.time, "sleep", lambda s: sleeps_append.append(s))
     monkeypatch.setattr(si.os, "_exit",
                         lambda c: exited.append(c) or (_ for _ in ()).throw(SystemExit))
@@ -385,3 +427,59 @@ def test_target_watchdog_fires_when_target_gone_but_scan_incomplete(monkeypatch)
     while fired != [1] and _time.time() < deadline:
         real_sleep(0.01)
     assert len(fired) == 1
+
+
+def test_target_watchdog_incomplete_scan_does_not_advance(monkeypatch):
+    """CORE-004: repeated UNKNOWN (incomplete-scan) observations must NOT
+    advance the disappearance counter, so the watchdog never fires on
+    observations that cannot prove absence."""
+    import time as _time
+    real_sleep = _time.sleep
+    fired = []
+    exited = []
+    sleeps_append = []
+    # First scan: target present. Then: every later scan is incomplete
+    # (the single PID is unobservable -> None) -> pending_ticks stays 0.
+    calls = [0]
+    monkeypatch.setattr(si, "_running_pids", lambda: [1])
+    monkeypatch.setattr(
+        si, "_image_name",
+        lambda pid: (calls.__setitem__(0, calls[0] + 1) or
+                     ("hd-player.exe" if calls[0] == 1 else None)))
+    monkeypatch.setattr(si.time, "sleep", lambda s: sleeps_append.append(s))
+    monkeypatch.setattr(si.os, "_exit",
+                        lambda c: exited.append(c) or (_ for _ in ()).throw(SystemExit))
+
+    si.start_target_watchdog(["HD-Player.exe"], lambda: fired.append(1),
+                             interval_sec=3.0, grace_ticks=2,
+                             min_uptime_sec=6.0, hard_exit_timeout_sec=4.0)
+    real_sleep(0.3)
+    assert fired == [] and exited == [], "UNKNOWN observations must not fire"
+
+
+def test_target_watchdog_cancel_stops_firing(monkeypatch):
+    """W2-002: a cancelled watcher generation must not fire on_gone nor
+    hard-exit after replacement - old generations are inert."""
+    import time as _time
+    real_sleep = _time.sleep
+    fired = []
+    exited = []
+    sleeps_append = []
+    # Target seen alive once, then fully-observed absent - without cancellation
+    # this would fire after grace_ticks. Real interval sleep (NOT patched) so
+    # stop() below deterministically lands before the first fire cycle.
+    calls = [0]
+    monkeypatch.setattr(si, "_running_pids", lambda: [1])
+    monkeypatch.setattr(
+        si, "_image_name",
+        lambda pid: (calls.__setitem__(0, calls[0] + 1) or
+                     ("hd-player.exe" if calls[0] == 1 else "other.exe")))
+    monkeypatch.setattr(si.os, "_exit",
+                        lambda c: exited.append(c) or (_ for _ in ()).throw(SystemExit))
+
+    handle = si.start_target_watchdog(["HD-Player.exe"], lambda: fired.append(1),
+                                      interval_sec=3.0, grace_ticks=2,
+                                      min_uptime_sec=0.0, hard_exit_timeout_sec=4.0)
+    handle.stop()
+    real_sleep(0.3)
+    assert fired == [] and exited == [], "cancelled watcher must be inert"

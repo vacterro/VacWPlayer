@@ -7,6 +7,7 @@ from theme import (VintageButton, VintageLabel, VintageEntry,
                    TOKENS, FONT_SM, make_check)
 from tabs.death_tab import ToolTip
 from locales import Locale
+from config_contracts import TOGGLE_DEFAULTS
 
 EMULATOR_EXES = [
     "HD-Player.exe",
@@ -49,26 +50,6 @@ def detect_running_emulators():
     if names is None:
         return []  # enumeration failed -> nothing confidently detected
     return [e for e in EMULATOR_EXES if e.lower() in names]
-
-TOGGLE_DEFAULTS = {
-    "mouse_remap": True,
-    "mouse_move_instead_hold": False,
-    "mouse_toggle_hold": False,
-    "release_toggle_on_keys": False,
-    "untoggle_keys": "a,v",
-    "keep_movement_on_death": False,
-    "rmb_hold_pvp": True,
-    "space_spam": True,
-    "space_interval": 128,
-    "anti_afk_hotkey": True,
-    "anti_afk_interval": 5000,
-    "stop_key": "s",
-    "manual_aim_block": True,
-    "guard_outside_game": True,
-    "cursor_outside_mode": "pause",
-    "exit_when_bs_gone": True,
-    "target_exe": "HD-Player.exe",
-}
 
 # Cursor-outside spam behavior (T-203): raw config value -> locale key.
 CURSOR_MODES = [

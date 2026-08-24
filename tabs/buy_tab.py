@@ -19,7 +19,19 @@ class BuyTab(tk.Frame):
 
     def _do_save(self):
         self._save_timer = None
-        self.save(silent=True)
+        if self.save(silent=True):
+            self._refresh_ahk()
+
+    def _refresh_ahk(self):
+        """W2-001: autobuy/quickbuy fields are consumed by
+        ahk_builder._gen_autobuy at AHK generation time - a persisted Buy edit
+        must regenerate the running script. Fires the dedicated <<DeathBuyRefresh>>
+        event (bound in main.pyw to the autobuy refresh, never the full main
+        config apply)."""
+        try:
+            self.event_generate("<<DeathBuyRefresh>>")
+        except tk.TclError:
+            pass
 
     def __init__(self, parent):
         super().__init__(parent, bg=TOKENS["background"])

@@ -277,7 +277,10 @@ class SurrenderTab(tk.Frame):
                 return
             # A successful save validated + wrote the config: it is now usable.
             self._config_usable = True
-            self._safe_start()
+            if not self._safe_start():
+                # CORE-011: spawn failed - persist OFF.
+                self.monitor_var.set(False)
+                self.save_monitor_state()
         else:
             stopped = self.runner.stop()
             # W2-006: only persist monitor_enabled=False when proven exit.
@@ -295,11 +298,12 @@ class SurrenderTab(tk.Frame):
                     canonical_default(self.CONFIG_NAME), config_name=self.CONFIG_NAME)
 
     def stop_all(self):
-        self.runner.stop()
+        stopped = self.runner.stop()
         try:
-            self.monitor_var.set(False)
+            self.monitor_var.set(False if stopped else True)
         except Exception as e:
             print("surrender_tab: reset monitor toggle failed: %s" % e, file=sys.stderr)
+        return stopped
 
     def _tick(self):
         if not self.winfo_exists():

@@ -97,9 +97,13 @@ def update_json(path, mutate, canonical_default=None, config_name=None):
     Returns True only when a write landed.
     """
     data, status = read_json(path)
+    source_raw = None
     if status == "ok":
         if config_name is not None and engine_config.semantic_problems(data, config_name):
             return False
+        # PERF-003: snapshot the canonical source BEFORE mutation so an
+        # unchanged result can skip the atomic write/backup entirely.
+        source_raw = (json.dumps(data, indent=2) + "\n").encode("utf-8")
     elif status == "missing" and canonical_default is not None:
         data = copy.deepcopy(canonical_default)
     else:
@@ -107,6 +111,12 @@ def update_json(path, mutate, canonical_default=None, config_name=None):
     mutate(data)
     if config_name is not None and engine_config.semantic_problems(data, config_name):
         return False
+    # PERF-003: mutation left the document byte-identical to the validated
+    # source -> a legitimate no-op; True still means the durable state is
+    # satisfied, with zero filesystem churn.
+    if source_raw is not None and \
+            (json.dumps(data, indent=2) + "\n").encode("utf-8") == source_raw:
+        return True
     return save_json(path, data)
 
 
@@ -132,13 +142,21 @@ def remove_template_by_identity(templates, identity):
         if isinstance(t, dict) and all(t.get(k) == identity.get(k) for k in identity):
             del templates[i]
             return True
-    # 2) fallback: (name, file) visual identity
+    # 2) fallback: (name, file) visual identity. Delete only when exactly one
+    #    live entry matches; ambiguity (multiple templates share name+file with
+    #    different non-identifying fields) must return False and force a UI
+    #    refresh rather than guess which one the user meant (CORE-010).
     name = identity.get("name")
     file_ = identity.get("file")
+    matched = None
     for i, t in enumerate(templates):
         if isinstance(t, dict) and t.get("name") == name and t.get("file") == file_:
-            del templates[i]
-            return True
+            if matched is not None:
+                return False  # ambiguous: multiple candidates, refuse to guess
+            matched = i
+    if matched is not None:
+        del templates[matched]
+        return True
     return False
 
 

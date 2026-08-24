@@ -184,7 +184,7 @@ def update_keys(blocked_keys=None):
     Recovery preserved (T-089): if the hook thread is not alive (died or never
     started), there is nothing live to update, so we fall back to a full
     start() reinstall exactly as before."""
-    global _blocked_vk, _block_until, _block_until_released_vk
+    global _blocked_vk, _block_until
     if _thread is None or not _thread.is_alive():
         start(blocked_keys)
         return

@@ -621,6 +621,14 @@ def _gen_header(a, target_exe, combos, afk, toggles):
             a.append("global P_afk_DetectorFault := false")
     a.append("")
     a.append("global ParentPID := %1%")
+    a.append("global hParent := 0")
+    # W2-005: pin the ORIGINAL parent process instance with a SYNCHRONIZE handle
+    # (0x00100000) so a recycled numeric PID can never keep the runtime alive
+    # under an unowned parent. Handle-open failure fails CLOSED: never run
+    # without a proven parent.
+    a.append('hParent := DllCall("OpenProcess", "UInt", 0x00100000, "Int", 0, "UInt", ParentPID, "Ptr")')
+    a.append("if (!hParent)")
+    a.append("    ExitApp")
     a.append('ahkPid := DllCall("GetCurrentProcessId")')
     a.append('FileDelete, %A_ScriptDir%\\.ahk.pid')
     a.append('FileAppend, %ahkPid%, %A_ScriptDir%\\.ahk.pid')
@@ -711,10 +719,17 @@ def _gen_autobuy(a, target_exe, config):
 
 def _gen_watchdog(a):
     """Watchdog timer + MouseIsOver helper."""
+    # W2-005: poll the PINNED parent handle (not the recyclable PID) with
+    # WaitForSingleObject timeout 0. WAIT_OBJECT_0 (0) means the ORIGINAL
+    # parent process exited -> close the handle and ExitApp. WAIT_TIMEOUT
+    # (0x102) = still alive. The handle is closed inline (an OnExit sub would
+    # not terminate: AHK v1 does not exit when ExitApp fires from a timer with
+    # an OnExit handler registered).
     a.append("Watchdog:")
-    a.append("    Process, Exist, %ParentPID%")
-    a.append("    if (!ErrorLevel)")
+    a.append('    if (DllCall("WaitForSingleObject", "Ptr", hParent, "UInt", 0) = 0) {')
+    a.append('        DllCall("CloseHandle", "Ptr", hParent)')
     a.append("        ExitApp")
+    a.append("    }")
     a.append("return")
     a.append("")
     a.append("MouseIsOver(WinTitle) {")
@@ -1119,6 +1134,8 @@ def _gen_hotkeys(a, target_exe, toggles, combos, minimap, afk_k):
                 a.append("    " + _carry_set(trig, True))
             a.append('    if (!WinActive("ahk_exe ' + target_exe + '"))')
             a.append("        return")
+            a.append("    if (!_ClientSafe(" + str(x) + ", " + str(y) + "))")
+            a.append("        return")
             a.append('    MouseGetPos, _mm_x, _mm_y')
             a.append('    MouseMove, ' + str(x) + ', ' + str(y) + ', 0')
             a.append('    SendInput {Blind}{LButton}')
@@ -1430,16 +1447,18 @@ def _gen_afk_farm(a, target_exe, config, afk, afk_k):
             slot_name = p["name"]
             should_move = slot_name in move_slots
             a.append("        " + cond + " (P_afk_PosIndex = " + str(idx) + ") {")
-            a.append("            MouseMove, " + str(p["x"]) + ", " + str(p["y"]) + ", 0")
+            a.append("            if (_ClientSafe(" + str(p["x"]) + ", " + str(p["y"]) + ")) {")
+            a.append("                MouseMove, " + str(p["x"]) + ", " + str(p["y"]) + ", 0")
             if should_move:
-                a.append("            SendEvent {Blind}{LButton}")
-                a.append("            Sleep, 50")
-                a.append("            SendEvent {RButton down}")
-                a.append("            Sleep, 50")
-                a.append("            SendEvent {RButton up}")
+                a.append("                SendEvent {Blind}{LButton}")
+                a.append("                Sleep, 50")
+                a.append("                SendEvent {RButton down}")
+                a.append("                Sleep, 50")
+                a.append("                SendEvent {RButton up}")
             else:
-                a.append("            SendEvent {Blind}{LButton}")
-        a.append("        }")
+                a.append("                SendEvent {Blind}{LButton}")
+            a.append("            }")
+            a.append("        }")
         a.append("        MouseMove, _af_mx, _af_my, 0")
         a.append("        P_afk_PosIndex := Mod(P_afk_PosIndex + 1, " + str(len(positions)) + ")")
         a.append("        return")
@@ -1494,6 +1513,20 @@ def _gen_helper_funcs(a, combos, afk_k, target_exe, toggles):
     a.append("        SendEvent {RButton down}")
     a.append("    else")
     a.append("        SendEvent {RButton up}")
+    a.append("}")
+    a.append("")
+    a.append("_ClientSafe(x, y) {")
+    a.append("    ; CORE-008: fail-closed physical-input gate. Resolve the ACTIVE")
+    a.append("    ; window's client rectangle immediately before moving/clicking;")
+    a.append("    ; skip the action unless the point is inside. Config coordinates")
+    a.append("    ; can go stale after a resize/resolution change - never move the")
+    a.append("    ; real cursor or click outside the game.")
+    a.append("    WinGet, hWnd, ID, A")
+    a.append("    VarSetCapacity(RECT, 16)")
+    a.append('    DllCall("GetClientRect", "Ptr", hWnd, "Ptr", &RECT)')
+    a.append("    cw := NumGet(RECT, 8, \"Int\")")
+    a.append("    ch := NumGet(RECT, 12, \"Int\")")
+    a.append("    return (x >= 0 and x < cw and y >= 0 and y < ch)")
     a.append("}")
     a.append("")
     a.append("ReleaseMoveToggle() {")

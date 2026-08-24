@@ -164,7 +164,10 @@ class AutoContinueTab(tk.Frame):
             if not self.save():
                 self.monitor_var.set(False)  # persistence failed - don't start
                 return
-            self.runner.start(["--replace"])
+            if not self.runner.start(["--replace"]):
+                # CORE-011: spawn failed - persist OFF.
+                self.monitor_var.set(False)
+                self.save_monitor_state()
         else:
             stopped = self.runner.stop()
             # W2-006: only persist monitor_enabled=False when proven exit.
@@ -182,11 +185,12 @@ class AutoContinueTab(tk.Frame):
                     canonical_default(self.CONFIG_NAME), config_name=self.CONFIG_NAME)
 
     def stop_all(self):
-        self.runner.stop()
+        stopped = self.runner.stop()
         try:
-            self.monitor_var.set(False)
+            self.monitor_var.set(False if stopped else True)
         except Exception as e:
             print("auto_tab: reset monitor toggle failed: %s" % e, file=sys.stderr)
+        return stopped
 
     def _tick(self):
         if not self.winfo_exists():

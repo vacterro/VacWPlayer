@@ -321,7 +321,11 @@ def _pvp_trigger_vk():
             return vk
     except (OSError, ValueError):
         pass
-    # Fallback: derive from config.json (pre-Apply or file missing).
+    # Fallback: derive from the EFFECTIVE config - stable config.json merged
+    # with the volatile config.local.json (champion enabled_/toggle_ flags),
+    # exactly as the GUI loads it. The stable half intentionally omits those
+    # flags, so reading it alone would re-enable a PvP slot disabled in local
+    # (CORE-015). Malformed/unreadable local state fails closed.
     try:
         with open(os.path.join(BASE, "config.json"), encoding="utf-8") as f:
             data = json.load(f)
@@ -329,6 +333,15 @@ def _pvp_trigger_vk():
         return None
     if not isinstance(data, dict) or config_store.validate_config(data):
         return None
+    try:
+        with open(os.path.join(BASE, "config.local.json"), encoding="utf-8") as f:
+            local = json.load(f)
+    except (OSError, ValueError):
+        local = {}
+    if config_store.validate_local_config(local):
+        return None  # CORE-015: malformed local -> fail closed, never default-True
+    if isinstance(local, dict) and local:
+        data = config_store.merge_volatile(data, local)
     try:
         combos, _ = ahk_builder._active_combos(data)
     except Exception:
@@ -407,7 +420,11 @@ def _set_block(sec):
         key_blocker.unblock()
 
 
-def handle_death(hwnd, cfg, templates):
+def handle_death(hwnd, cfg, templates, hwnd_title="", hwnd_pid=0):
+    """Death event handler (CORE-007: carries expected title+PID identity so
+    post-wait actions can revalidate the HWND against the original target -
+    a reused numeric handle after a long respawn wait must never be treated as
+    the game window."""
     print("death detected")
 
     pedal_block_sec = cfg.get("pedal_block_sec", 1.0)
@@ -448,9 +465,15 @@ def handle_death(hwnd, cfg, templates):
         wait = max(0.0, min(wait, cfg["max_death_wait_sec"]))
 
         work_hwnd = None
+        work_title = None
+        work_pid = 0
         if cfg.get("switch_to_work_window") and cfg.get("work_window_title"):
             try:
-                work_hwnd = capture.find_window(cfg["work_window_title"])
+                # W2-009: bind the work window to title+PID identity so a reused
+                # HWND after the respawn wait is never minimized.
+                work_hwnd, work_pid = capture.find_window_identity(
+                    cfg["work_window_title"])
+                work_title = cfg["work_window_title"]
             except RuntimeError:
                 print(f"work window '{cfg['work_window_title']}' not found, skipping switch")
 
@@ -475,8 +498,13 @@ def handle_death(hwnd, cfg, templates):
         print("phase-0 finished, pedals unblocked")
 
     if work_hwnd:
-        window_ctl.switch_to(work_hwnd)
-        print(f"switched to work window '{cfg['work_window_title']}'")
+        # W2-009: revalidate the work window identity before touching it.
+        if work_title and capture.is_same_window(work_hwnd, work_title, work_pid):
+            window_ctl.switch_to(work_hwnd)
+            print(f"switched to work window '{cfg['work_window_title']}'")
+        else:
+            print(f"work window '{cfg['work_window_title']}' changed identity, skipping switch")
+            work_hwnd = None
         
     print(f"waiting {wait:.1f}s, spilling pedals suppressed")
     if wants_block:
@@ -499,7 +527,12 @@ def handle_death(hwnd, cfg, templates):
         return
         
     if work_hwnd:
-        window_ctl.minimize(work_hwnd)
+        # W2-009: revalidate identity again before the post-wait minimize - the
+        # work window may have closed and had its HWND reused during the wait.
+        if work_title and capture.is_same_window(work_hwnd, work_title, work_pid):
+            window_ctl.minimize(work_hwnd)
+        else:
+            print(f"work window '{cfg['work_window_title']}' changed identity, skipping minimize")
 
     # === PHASE 3: Block during restore to catch pedal spam ===
     _set_block(pedal_block_sec if wants_block else 0)
@@ -507,6 +540,13 @@ def handle_death(hwnd, cfg, templates):
     # PHASE 3 try/finally: separate guard so a failure in
     # maximize_and_focus or resurrect actions never leaks the block.
     try:
+        # CORE-007: the target may have closed and had its numeric HWND reused
+        # during the long respawn wait. Revalidate title+PID identity before any
+        # restore/focus/click/cursor action; a mismatch/UNKNOWN aborts the death
+        # event without delivering input to an unrelated window.
+        if hwnd_pid and not capture.is_same_window(hwnd, hwnd_title, hwnd_pid):
+            print("game window identity changed during wait - aborting resurrect actions")
+            return
         window_ctl.maximize_and_focus(hwnd)
         print("restored and focused")
 
@@ -638,7 +678,7 @@ def main(replace=False):
                         try:
                             candidate_templates = digit_reader.load_templates(
                                 os.path.join(BASE, candidate_cfg["digit_templates_dir"]))
-                        except OSError as e:
+                        except (OSError, ValueError, cv2.error) as e:
                             print("WARN: config change rejected: digit templates "
                                   "load failed (%s); keeping previous" % e)
                             reject = True
@@ -705,7 +745,7 @@ def main(replace=False):
 
                 if is_dead and not was_dead:
                     was_dead = True
-                    handle_death(hwnd, cfg, templates)
+                    handle_death(hwnd, cfg, templates, hwnd_title, hwnd_pid)
                 elif not is_dead and was_dead:
                     was_dead = False
                     print("respawn confirmed")
