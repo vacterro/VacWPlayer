@@ -271,6 +271,25 @@ def _restore_previous_script(prev_bytes):
     os.replace(tmp, AHK_PATH)
 
 
+def _inject_preflight_timer(probe):
+    """PERF-001: place the self-exit SetTimer INSIDE AHK's auto-execute section.
+
+    AHK v1 only arms a SetTimer if the command executes before the first
+    label/hotkey boundary. The old code inserted it immediately AFTER the first
+    label's colon (i.e. past that boundary), so the timer was never armed and the
+    probe always ran until the 1.5 s communicate timeout and was force-killed.
+    Inserting it BEFORE the first label lets the probe self-exit at ~600 ms.
+    """
+    import re
+    lines = probe.split("\n")
+    for i, line in enumerate(lines):
+        if re.match(r"^[A-Za-z_]\w*:\s*$", line.strip()):
+            lines.insert(i, "SetTimer, _WRA_PreflightExit, -600")
+            return "\n".join(lines)
+    # No label found (degenerate probe): append so it still self-terminates.
+    return probe + "\nSetTimer, _WRA_PreflightExit, -600\n"
+
+
 def _preflight_script(exe, script):
     """Best-effort AHK load-time check of a candidate on a temp copy.
 
@@ -294,13 +313,10 @@ def _preflight_script(exe, script):
                           "; preflight: pid-file write disabled")
     probe = probe.replace("FileAppend, %ahkPid%, %A_ScriptDir%\\.ahk.pid",
                           "; preflight: pid-file write disabled")
-    # Inject the timer command before the first label so AHK v1 arms it during
-    # auto-execute (before the first label /EndSection boundary).
-    probe = probe.replace(":\n", ":\nSetTimer, _WRA_PreflightExit, -600\n", 1)
-    # If no label was found (unlikely for a real generated script), append at
-    # the end as a fallback so the probe still self-terminates.
-    if "SetTimer, _WRA_PreflightExit" not in probe:
-        probe += "\nSetTimer, _WRA_PreflightExit, -600\n"
+    # PERF-001: inject the self-exit timer BEFORE the first generated label so AHK
+    # v1 arms it during the auto-execute section, instead of after the label's
+    # colon (past the boundary) where it was never armed.
+    probe = _inject_preflight_timer(probe)
     probe += "_WRA_PreflightExit:\nExitApp\n"
     try:
         fd, tmp = tempfile.mkstemp(suffix=".ahk", dir=BASE)
@@ -407,9 +423,61 @@ def _probe_entries(ps_cmd):
             return "failed", []
         pid = item.get("ProcessId")
         cmd = item.get("CommandLine")
-        if isinstance(pid, int) and isinstance(cmd, str):
-            entries.append((pid, cmd))
+        # T-CORE-002: every item must have an integer (non-bool) ProcessId
+        # and a string CommandLine. A dict with invalid fields is a malformed
+        # observation - the ENTIRE probe is FAILED, never partially accepted.
+        if not isinstance(pid, int) or isinstance(pid, bool):
+            return "failed", []
+        if not isinstance(cmd, str):
+            return "failed", []
+        entries.append((pid, cmd))
     return "ok", entries
+
+
+def _pid_cmdline(pid):
+    """Command line of a single PID, or None on failure (T-CORE-001 / CORE-001).
+
+    Used to re-verify a pinned handle's identity: we read the PID from the
+    handle and query THAT instance, so a reused PID cannot swap in a foreign
+    command line between the handle open and this probe.
+    """
+    ps_cmd = (
+        "Get-CimInstance Win32_Process -Filter \"ProcessId = %d\" | "
+        "Select-Object -ExpandProperty CommandLine" % int(pid)
+    )
+    try:
+        state, entries = _probe_entries(ps_cmd)
+    except Exception:
+        return None
+    if state != "ok" or not entries:
+        return None
+    return entries[0][1]
+
+
+def _handle_is_our_ahk(h):
+    """Authoritative ownership proof for the PINNED handle about to be
+    terminated (T-CORE-001 / CORE-001).
+
+    The old code only checked that the opened instance was SOME AutoHotkey
+    binary. A PID reused by a foreign AHK script would pass that image check
+    and get killed. Here we read the PID from the handle and re-run the
+    command-line probe on THAT instance; a reused PID fails the script check
+    and is never terminated.
+    """
+    try:
+        img = win32process.GetModuleFileNameEx(h, 0)
+    except Exception:
+        return False
+    if not img or os.path.basename(img).lower() not in AHK_IMAGE_NAMES:
+        return False
+    try:
+        pid = win32process.GetProcessId(h)
+    except Exception:
+        return False
+    cmd = _pid_cmdline(pid)
+    if cmd is None:
+        return False
+    return _cmdline_launches_our_script(cmd)
 
 
 def _find_our_pids(force=False):
@@ -486,13 +554,18 @@ def _stop_pids(pids, wait_ms=500):
     pointing at a foreign process is never terminated. All termination happens
     through the handle, never by stale PID number.
 
-    Returns "STOPPED" when all targeted owned instances are proven exited,
-    "KILL_FAILED" when any could not be terminated or proven exited, or
-    None when there were no pids to stop.
+    T-CORE-001: every verified PID counts toward the result. OpenProcess
+    access-denied (cannot prove exit), TerminateProcess failure, WAIT_TIMEOUT
+    (still active), wait error, or still-active after wait is KILL_FAILED.
+    Only proof of exit (exit code != STILL_ACTIVE after wait) is success.
+    Handles are kept open through proof of exit so the process instance is
+    pinned. Returns "STOPPED" when all targeted owned instances are proven
+    exited, "KILL_FAILED" when any could not be terminated or proven exited,
+    or None when there were no pids to stop.
     """
     if not pids:
         return None
-    handles = []
+    failed = False
     for pid in pids:
         try:
             h = win32api.OpenProcess(
@@ -500,18 +573,43 @@ def _stop_pids(pids, wait_ms=500):
                 | win32con.PROCESS_QUERY_LIMITED_INFORMATION,
                 False, pid)
         except pywintypes.error:
-            continue  # already gone or access denied - not ours to kill
+            # Cannot open: may be gone (success) or access denied (KILL_FAILED).
+            # Since we verified this is our AHK script, access denied is a real
+            # failure - we cannot prove exit and must not pretend we did.
+            try:
+                h_check = win32api.OpenProcess(
+                    win32con.PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+                code = win32process.GetExitCodeProcess(h_check)
+                win32api.CloseHandle(h_check)
+                if code != 259:  # already exited -> success
+                    continue
+            except Exception:
+                pass
+            # Cannot determine exit status -> KILL_FAILED
+            failed = True
+            continue
         try:
-            img = win32process.GetModuleFileNameEx(h, 0)
-            if not img or os.path.basename(img).lower() not in AHK_IMAGE_NAMES:
+            # T-CORE-001 / CORE-001: re-verify THIS pinned instance runs OUR
+            # script, not merely any AutoHotkey binary. A reused PID pointing at
+            # a foreign AHK script must never be terminated.
+            if not _handle_is_our_ahk(h):
+                # Not ours (PID reused / foreign AHK). If the original process is
+                # already gone there is nothing for us to stop.
+                try:
+                    code = win32process.GetExitCodeProcess(h)
+                except pywintypes.error:
+                    code = 259
                 win32api.CloseHandle(h)
-                continue  # reused PID -> foreign process, refuse to kill
+                if code != 259:  # original exited, foreign survived - not our concern
+                    continue
+                # Still-active foreign process occupying our PID: we cannot prove
+                # our own instance is gone, so this is a KILL_FAILED.
+                failed = True
+                continue
         except pywintypes.error:
             win32api.CloseHandle(h)
+            failed = True
             continue
-        handles.append(h)
-    failed = False
-    for h in handles:
         try:
             win32api.TerminateProcess(h, 0)
         except pywintypes.error as e:
@@ -525,8 +623,9 @@ def _stop_pids(pids, wait_ms=500):
         # Wait BEFORE closing so we can prove exit; keep handle open through wait.
         try:
             rc = win32event.WaitForSingleObject(h, max(0, int(wait_ms)))
-            if rc not in (0, 0x102):  # WAIT_OBJECT_0 or WAIT_TIMEOUT
+            if rc != 0:  # WAIT_OBJECT_0 = proven exited; WAIT_TIMEOUT or error = KILL_FAILED
                 failed = True
+                print(f"ahk_generator: wait for exit returned rc={rc:#x}")
         except pywintypes.error:
             failed = True
         try:
@@ -534,6 +633,25 @@ def _stop_pids(pids, wait_ms=500):
         except Exception:
             pass
     return "KILL_FAILED" if failed else "STOPPED"
+
+
+def _force_kill_ahk_processes(pids):
+    """Nuclear fallback: taskkill /F for PIDs that survived TerminateProcess.
+    Only called on VERIFIED PIDs. Returns True if all targets confirmed dead."""
+    all_dead = True
+    for pid in pids:
+        if not _pid_alive(pid):
+            continue
+        try:
+            subprocess.run(
+                ["taskkill", "/F", "/PID", str(pid)],
+                capture_output=True, creationflags=0x08000000, timeout=5)
+        except Exception:
+            pass
+        time.sleep(0.2)
+        if _pid_alive(pid):
+            all_dead = False
+    return all_dead
 
 
 def is_running():
@@ -549,10 +667,22 @@ def is_running():
     running.
 
     T-W2-PERF-003: if we have a trusted launched handle whose process is still
-    alive (poll() is None), return True without any spawn.
+    alive (poll() is None), AND the launched PID is in our verified set or the
+    launched handle's pid was used for the last verified scan, return True
+    without any spawn.
+
+    T-CORE-003: the fast-path launched handle also checks that the PID matches
+    the tracked set - a PID reused by a foreign process between the handle's
+    poll() and our cache would otherwise pass.
     """
     global _last_launched_proc
-    # Cheap path: trusted launched handle still alive.
+    # PERF-002 / T-W2-PERF-003: the retained Popen handle IS the exact process
+    # instance VacWPlayer launched (subprocess.Popen pins the real child). A live
+    # handle cannot be "reused" out from under us by Windows, so an alive handle
+    # is authoritative liveness for OUR runtime - no second scan needed. This is
+    # the fast path that lets an identical Apply return "Running (unchanged)"
+    # without spawning PowerShell/CIM. Command-line discovery is reserved for when
+    # the trusted handle is absent/dead (orphan recovery, GUI restart).
     if _last_launched_proc is not None:
         try:
             if _last_launched_proc.poll() is None:
@@ -592,7 +722,7 @@ def stop_ahk():
     the runtime may still be alive and the application must not pretend to have
     stopped it, nor launch a replacement as if zero were proven.
     """
-    global _last_scan_pids
+    global _last_scan_pids, _last_launched_proc, _last_launched_script_hash
     tracked = _read_pidfile()
     state, pids = _find_our_pids(force=True)
     if state == "failed":
@@ -603,8 +733,30 @@ def stop_ahk():
     if tracked is not None and tracked not in pids:
         tracked = None
     orphans = [p for p in pids if p != tracked]
-    _stop_pids([tracked] if tracked else [])
-    _stop_pids(orphans)
+    # T-CORE-001: combine tracked+orphan results. Both must succeed for the
+    # entire stop to be considered successful. KILL_FAILED means at least one
+    # verified target could not be proven exited.
+    tracked_result = _stop_pids([tracked] if tracked else [])
+    orphan_result = _stop_pids(orphans)
+    if tracked_result == "KILL_FAILED" or orphan_result == "KILL_FAILED":
+        # Escalation: taskkill /F fallback for hung processes
+        all_pids = ([tracked] if tracked else []) + orphans
+        if _force_kill_ahk_processes(all_pids):
+            # Escalation succeeded — clean up evidence
+            print("ahk_generator: taskkill escalation succeeded", file=sys.stderr)
+            try:
+                os.remove(PID_PATH)
+            except OSError:
+                pass
+            _last_scan_pids = []
+            _last_launched_proc = None
+            _last_launched_script_hash = None
+            return "STOPPED"
+        # Ownership evidence is RETAINED: PID file, verified cache, and
+        # launched handle are NOT cleared so a failed stop cannot erase
+        # ownership while a live runtime remains.
+        print("ahk_generator: kill failed even after taskkill escalation", file=sys.stderr)
+        return "KILL_FAILED"
     try:
         os.remove(PID_PATH)
     except OSError:
@@ -612,7 +764,39 @@ def stop_ahk():
     _last_scan_pids = []
     # T-W2-PERF-003: drop the cached handle on stop/restart so the next
     # liveness check uses a fresh source of truth.
-    global _last_launched_proc, _last_launched_script_hash
     _last_launched_proc = None
     _last_launched_script_hash = None
     return "ALREADY_STOPPED" if not pids else "STOPPED"
+
+
+def cleanup_stale_before_start():
+    """Pre-launch cleanup: kill any orphaned wr_runtime.ahk from previous session.
+    Called once at app startup before the first apply_and_start()."""
+    state, pids = _find_our_pids(force=True)
+    if state == "failed" or not pids:
+        return
+    print("ahk_generator: killing %d orphaned runtime(s) from previous session"
+          % len(pids), file=sys.stderr)
+    result = _stop_pids(pids)
+    if result == "KILL_FAILED":
+        _force_kill_ahk_processes(pids)
+    try:
+        os.remove(PID_PATH)
+    except OSError:
+        pass
+    _reset_scan_cache()
+
+
+def cleanup_temp_ahk_files():
+    """Remove orphaned tmp*.ahk preflight probe files from project dir."""
+    import glob
+    removed = 0
+    for f in glob.glob(os.path.join(BASE, "tmp*.ahk")):
+        try:
+            os.remove(f)
+            removed += 1
+        except OSError:
+            pass
+    if removed:
+        print("ahk_generator: cleaned up %d orphaned tmp*.ahk files" % removed,
+              file=sys.stderr)

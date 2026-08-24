@@ -1,4 +1,5 @@
 import subprocess
+import threading
 import tkinter as tk
 from tkinter import ttk, messagebox
 
@@ -18,19 +19,36 @@ EMULATOR_EXES = [
     "dnplayer.exe",
 ]
 
+def _enumerate_running_exes():
+    """Single tasklist enumeration (one subprocess) returning the set of running
+    process image names (lowercased). Replaces the old loop that spawned one
+    `tasklist` per emulator EXE (N subprocesses, each blocking). Returns None on
+    any failure so callers can treat the result as UNKNOWN rather than a false
+    absence."""
+    try:
+        out = subprocess.check_output(
+            ["tasklist", "/FO", "CSV", "/NH"],
+            creationflags=subprocess.CREATE_NO_WINDOW,
+            text=True, timeout=10)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
+        return None
+    names = set()
+    for line in out.splitlines():
+        # CSV row: "ImageName","PID","Session Name","Session#","Mem Usage"
+        name = line.split('","')[0].strip().strip('"')
+        if name:
+            names.add(name.lower())
+    return names
+
+
 def detect_running_emulators():
-    found = []
-    for exe in EMULATOR_EXES:
-        try:
-            out = subprocess.check_output(
-                ["tasklist", "/FI", "IMAGENAME eq " + exe, "/NH"],
-                creationflags=subprocess.CREATE_NO_WINDOW,
-                text=True)
-            if exe.lower() in out.lower():
-                found.append(exe)
-        except subprocess.CalledProcessError:
-            pass
-    return found
+    """Return the subset of EMULATOR_EXES currently running. One tasklist
+    enumeration (T-W2-PERF-003) instead of N; never blocks the caller beyond a
+    single bounded subprocess."""
+    names = _enumerate_running_exes()
+    if names is None:
+        return []  # enumeration failed -> nothing confidently detected
+    return [e for e in EMULATOR_EXES if e.lower() in names]
 
 TOGGLE_DEFAULTS = {
     "mouse_remap": True,
@@ -184,6 +202,13 @@ class MainTab(tk.Frame):
         self.var_afk_ms = tk.IntVar(value=int(toggles["anti_afk_interval"]))
         self.var_afk_ms.trace_add("write", self._auto_save)
         VintageEntry(row2, textvariable=self.var_afk_ms, width=6).pack(side="left", padx=2)
+        # W2-008: remember the last *valid* numeric value we actually persisted,
+        # seeded from the loaded config. When the field is mid-edit (empty or
+        # partial), get_toggles() must keep this instead of falling back to the
+        # canonical default - otherwise an autosave during editing silently
+        # resets the persisted value to the default (data loss of last good).
+        self._last_valid_space_ms = int(toggles["space_interval"])
+        self._last_valid_afk_ms = int(toggles["anti_afk_interval"])
         self._lbl_exe = VintageLabel(row2, text=Locale.tr("exe_lbl"), font=FONT_SM)
         self._lbl_exe.pack(side="left", padx=(6, 0))
         self._locale_widgets.append(("lbl", self._lbl_exe, "exe_lbl"))
@@ -276,26 +301,56 @@ class MainTab(tk.Frame):
             self._syncing_mouse = False
 
     def _detect_exe(self):
-        found = detect_running_emulators()
-        if not found:
-            messagebox.showinfo(Locale.tr("detect_title"), Locale.tr("detect_none"))
+        # T-W2-PERF-003: run the (single) enumeration off the Tk thread so the
+        # GUI never freezes, and gate the button while a detection is in flight.
+        if getattr(self, "_detecting", False):
             return
-        if len(found) == 1:
-            self.var_exe.set(found[0])
-        else:
-            self.var_exe.set(found[0])
-            messagebox.showinfo(Locale.tr("detect_title"),
-                Locale.tr("detect_running") % (", ".join(found), found[0]))
+        self._detecting = True
+        try:
+            self.exe_detect.config(state="disabled")
+        except Exception:
+            pass
+
+        def _run():
+            found = detect_running_emulators()
+
+            def _apply():
+                try:
+                    if not found:
+                        messagebox.showinfo(Locale.tr("detect_title"), Locale.tr("detect_none"))
+                        return
+                    if len(found) == 1:
+                        self.var_exe.set(found[0])
+                    else:
+                        self.var_exe.set(found[0])
+                        messagebox.showinfo(Locale.tr("detect_title"),
+                            Locale.tr("detect_running") % (", ".join(found), found[0]))
+                finally:
+                    self._detecting = False
+                    try:
+                        self.exe_detect.config(state="normal")
+                    except Exception:
+                        pass
+
+            try:
+                self.after(0, _apply)
+            except tk.TclError:
+                pass  # widget destroyed before we could schedule
+
+        threading.Thread(target=_run, daemon=True).start()
 
     def get_toggles(self):
         try:
             space_ms = int(self.var_space_ms.get())
+            self._last_valid_space_ms = space_ms
         except (tk.TclError, ValueError):
-            space_ms = TOGGLE_DEFAULTS["space_interval"]
+            # W2-008: retain the last valid value; never fall back to default.
+            space_ms = self._last_valid_space_ms
         try:
             afk_ms = int(self.var_afk_ms.get())
+            self._last_valid_afk_ms = afk_ms
         except (tk.TclError, ValueError):
-            afk_ms = TOGGLE_DEFAULTS["anti_afk_interval"]
+            afk_ms = self._last_valid_afk_ms
         return {
             "mouse_remap": self.var_remap.get(),
             "mouse_move_instead_hold": self.var_move_instead_hold.get(),

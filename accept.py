@@ -43,7 +43,7 @@ def _scan(hwnd, cfg, targets):
     return False
 
 
-def targets_usable(targets):
+def targets_usable(targets, cfg=None):
     """True when at least one template was loaded successfully (T-W2-006)."""
     return bool(targets)
 

@@ -31,8 +31,10 @@ def _reload(cfg, targets):
     return "reloaded config (%d templates, mode=%s)" % (len(targets), mode)
 
 
-def targets_usable(targets):
-    """True when at least one loaded target is present (T-W2-006)."""
+def targets_usable(targets, cfg=None):
+    """True when at least one loaded target is present (T-W2-006). Kept for
+    backward-compat with run_poller's (targets, cfg) call shape; surrender
+    now uses _targets_usable_with_cfg (mode-aware) instead."""
     return bool(targets)
 
 
@@ -52,27 +54,21 @@ def _scan(hwnd, cfg, targets):
     return False
 
 
-def targets_usable_with_cfg(targets, cfg):
-    """W2-006: usable only when at least one target matches configured action."""
+def _targets_usable_with_cfg(targets, cfg):
+    """W2-003: usable only when at least one target matches configured action."""
     auto_accept = cfg.get("auto_accept", True)
     action = "accept" if auto_accept else "decline"
     return bool([e for e in targets if e.get("action") == action])
 
 
 def main(replace=False):
-    def _usable(targets):
-        # run_poller calls usable(targets) at startup before cfg is available
-        # for the predicate; we need a simple bool(targets) check there and
-        # the mode-aware check happens implicitly through _scan filtering.
-        return bool(targets)
-
     poller_engine.run_poller(
         "surrender", CONFIG_PATH, "surrender_config.json",
         build_targets=build_templates,
         scan_targets=_scan,
         startup=_startup,
         reload_msg=_reload,
-        usable=_usable,
+        usable=_targets_usable_with_cfg,
         replace=replace,
     )
 

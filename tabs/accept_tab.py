@@ -5,7 +5,7 @@ from theme import VintageSunken, VintageButton, VintageLabel, VintageEntry, TOKE
 from vintage_widgets import VintageWindowPicker
 from process_runner import ProcessRunner
 from locales import Locale
-from tabs.tab_config import load_json, update_json
+from tabs.tab_config import load_json, update_json, remove_template_by_identity
 from engine_config import canonical_default
 
 BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -26,7 +26,7 @@ class AcceptTab(tk.Frame):
     def __init__(self, parent):
         super().__init__(parent, bg=TOKENS["background"])
         self.cfg_path = os.path.join(BASE, self.CONFIG_NAME)
-        cfg = load_json(self.cfg_path, self.CONFIG_NAME)
+        cfg, _status = load_json(self.cfg_path, self.CONFIG_NAME)
 
         form = tk.Frame(self, bg=TOKENS["background"])
         form.pack(fill="x", padx=4, pady=(4, 2))
@@ -144,11 +144,17 @@ class AcceptTab(tk.Frame):
 
     def _refresh_tree(self):
         self.tree.delete(*self.tree.get_children())
-        cfg = load_json(self.cfg_path, self.CONFIG_NAME)
+        self._row_identities = {}
+        cfg, _status = load_json(self.cfg_path, self.CONFIG_NAME)
         for i, t in enumerate(cfg.get("templates", [])):
-            self.tree.insert("", "end", iid=str(i),
+            iid = str(i)
+            self.tree.insert("", "end", iid=iid,
                              text=t.get("name", "?"),
                              values=(t.get("file", ""), t.get("threshold", "")))
+            # W2-006: bind the row to a VALUE identity (full dict snapshot),
+            # never to its positional index, so a concurrent external config
+            # change cannot make us delete the wrong item later.
+            self._row_identities[iid] = dict(t)
 
     def add_template(self):
         from tkinter import filedialog, simpledialog
@@ -179,11 +185,23 @@ class AcceptTab(tk.Frame):
         if not sel:
             messagebox.showinfo(Locale.tr("remove_lbl"), Locale.tr("remove_need_tpl"))
             return
-        idx = int(sel[0])
+        iid = sel[0]
+        identity = self._row_identities.get(iid)
+        if identity is None:
+            # Row identity went stale (e.g. external change between render and
+            # click). Refuse to guess by position - just resync the view.
+            self._refresh_tree()
+            return
+        removed = {"ok": False}
         update_json(self.cfg_path,
-                    lambda c: c["templates"].__delitem__(idx)
-                    if 0 <= idx < len(c["templates"]) else None,
+                    lambda c: removed.__setitem__(
+                        "ok", remove_template_by_identity(c.get("templates", []), identity)),
                     canonical_default(self.CONFIG_NAME), config_name=self.CONFIG_NAME)
+        if not removed["ok"]:
+            messagebox.showinfo(
+                Locale.tr("remove_lbl"),
+                Locale.tr("remove_not_found",
+                          fallback="Template no longer present; list refreshed."))
         self._refresh_tree()
 
     def toggle_monitor(self):
@@ -193,12 +211,15 @@ class AcceptTab(tk.Frame):
                 return
             self.runner.start(["--replace"])
         else:
-            self.runner.stop()
-            # W2-002: stopping is authoritative - never lie about runtime state.
-            # On save failure keep checkbox False and show a warning; do NOT
-            # restart the runner or revert the checkbox to True.
-            if not self.save_monitor_state():
-                self.status_var.set(Locale.tr("save_failed", fallback="Stopped (state not persisted)"))
+            stopped = self.runner.stop()
+            # W2-006: only persist monitor_enabled=False when proven exit.
+            if stopped:
+                if not self.save_monitor_state():
+                    self.status_var.set(Locale.tr("save_failed", fallback="Stopped (state not persisted)"))
+            else:
+                # W2-006: stop failed, child still live, retain ON state.
+                self.monitor_var.set(True)
+                self.status_var.set(Locale.tr("stop_failed", fallback="StopFailed (still running)"))
 
     def save_monitor_state(self):
         return update_json(self.cfg_path,
@@ -242,5 +263,5 @@ class AcceptTab(tk.Frame):
                 print(f"Accept save skipped (invalid input): {e}", file=sys.stderr)
             else:
                 messagebox.showerror(Locale.tr("invalid_value"), str(e))
-            return
+            return False
         return ok

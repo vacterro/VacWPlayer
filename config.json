@@ -26,7 +26,7 @@
             "keys_wave": "q,e,r,{Space}",
             "move_when_pressed_wave": false,
             "trigger_jungle": "F14",
-            "keys_jungle": "q,q,e,q,w,q,{Space}",
+            "keys_jungle": "r,q,w,e,{Space}",
             "move_when_pressed_jungle": false,
             "trigger_pvp": "F15,Mbutton",
             "keys_pvp": "{Space},q,e,w",

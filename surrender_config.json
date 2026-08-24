@@ -8,12 +8,14 @@
     {
       "name": "Accept",
       "file": "templates/sur_accept.png",
-      "threshold": 0.75
+      "threshold": 0.75,
+      "action": "accept"
     },
     {
       "name": "Decline",
       "file": "templates/sur_decline.png",
-      "threshold": 0.75
+      "threshold": 0.75,
+      "action": "decline"
     }
   ]
 }

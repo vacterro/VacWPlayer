@@ -6,7 +6,7 @@ from theme import VintageSunken, VintageButton, VintageLabel, VintageEntry, TOKE
 from vintage_widgets import VintageWindowPicker
 from process_runner import ProcessRunner
 from locales import Locale
-from tabs.tab_config import load_json, update_json
+from tabs.tab_config import load_json, update_json, resolve_monitor_state, remove_template_by_identity
 from engine_config import canonical_default
 
 BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -31,6 +31,10 @@ class SurrenderTab(tk.Frame):
         super().__init__(parent, bg=TOKENS["background"])
         self.cfg_path = os.path.join(BASE, self.CONFIG_NAME)
 
+        # T-CORE-012: materialize a missing canonical file before honoring the
+        # monitor flag. If that materialization FAILS, the file stays absent and
+        # the config is NOT usable - the engine child must never be launched
+        # against a missing/unvalidated file (its load_config() would FATAL).
         if not os.path.exists(self.cfg_path):
             update_json(self.cfg_path, lambda c: None,
                         canonical_default(self.CONFIG_NAME), config_name=self.CONFIG_NAME)
@@ -41,13 +45,13 @@ class SurrenderTab(tk.Frame):
 
         self._locale_widgets = []
 
-        # T-CORE-012: missing => canonical default; corrupt/invalid => OFF.
-        if cfg_status == "missing":
-            mon_enabled = canonical_default(self.CONFIG_NAME).get("monitor_enabled", False)
-        elif cfg_status in ("corrupt", "io_error", "semantic_invalid", "wrong_shape"):
-            mon_enabled = False
-        else:
-            mon_enabled = cfg.get("monitor_enabled", False)
+        # CORE-012: resolve the monitor flag + usability from the load status.
+        # Only "ok" (present + validated, or successfully materialized)
+        # authorizes the engine child to start; "missing" after a failed
+        # materialization forces OFF and marks the config NOT usable.
+        mon_enabled, self._config_usable = resolve_monitor_state(
+            cfg_status, cfg,
+            canonical_default(self.CONFIG_NAME).get("monitor_enabled", False))
         self.monitor_var = tk.BooleanVar(value=mon_enabled)
         self.monitor_var.trace_add("write", self._auto_save)
         self.chk_monitor = tk.Checkbutton(
@@ -158,7 +162,7 @@ class SurrenderTab(tk.Frame):
         self._refresh_tree()
         self._tick()
         if self.monitor_var.get():
-            self.runner.start(["--replace"])
+            self._safe_start()
 
     def apply_locale(self):
         for kind, widget, key in self._locale_widgets:
@@ -176,11 +180,17 @@ class SurrenderTab(tk.Frame):
 
     def _refresh_tree(self):
         self.tree.delete(*self.tree.get_children())
-        cfg = load_json(self.cfg_path, self.CONFIG_NAME)
+        self._row_identities = {}
+        cfg, _status = load_json(self.cfg_path, self.CONFIG_NAME)
         for i, t in enumerate(cfg.get("templates", [])):
-            self.tree.insert("", "end", iid=str(i),
+            iid = str(i)
+            self.tree.insert("", "end", iid=iid,
                              text=t.get("name", "?"),
                              values=(t.get("file", ""), t.get("threshold", "")))
+            # W2-006: bind the row to a VALUE identity (full dict snapshot),
+            # never to its positional index, so a concurrent external config
+            # change cannot make us delete the wrong item later.
+            self._row_identities[iid] = dict(t)
 
     def add_template(self):
         from tkinter import filedialog, simpledialog
@@ -221,18 +231,43 @@ class SurrenderTab(tk.Frame):
         if not sel:
             messagebox.showinfo(Locale.tr("remove_need"), Locale.tr("remove_need"))
             return
-        idx = int(sel[0])
+        iid = sel[0]
+        identity = self._row_identities.get(iid)
+        if identity is None:
+            # Row identity went stale (e.g. external change between render and
+            # click). Refuse to guess by position - just resync the view.
+            self._refresh_tree()
+            return
+        removed = {"ok": False}
         update_json(self.cfg_path,
-                    lambda c: c["templates"].pop(idx)
-                    if 0 <= idx < len(c["templates"]) else None,
+                    lambda c: removed.__setitem__(
+                        "ok", remove_template_by_identity(c.get("templates", []), identity)),
                     canonical_default(self.CONFIG_NAME), config_name=self.CONFIG_NAME)
+        if not removed["ok"]:
+            messagebox.showinfo(
+                Locale.tr("remove_need"),
+                Locale.tr("remove_not_found",
+                          fallback="Template no longer present; list refreshed."))
         self._refresh_tree()
+
+    def _safe_start(self):
+        """CORE-012 gate: only launch the engine child when the on-disk config
+        is present and validated (self._config_usable). Returns the start()
+        result, or False when the config is not usable (no child is spawned)."""
+        if not self._config_usable:
+            self.status_var.set(Locale.tr("config_not_ready",
+                                          fallback="Config not ready"))
+            self.monitor_var.set(False)
+            return False
+        return self.runner.start(["--replace"])
 
     def _trigger_apply(self):
         if not self.save():
             return  # nothing was persisted - don't touch the engine (T-142)
+        # A successful save validated + wrote the config: it is now usable.
+        self._config_usable = True
         if self.monitor_var.get():
-            self.runner.start(["--replace"])
+            self._safe_start()
         # W2-003: Surrender engine owns only its own config/process - no global ApplyStart.
 
     def toggle_monitor(self):
@@ -240,12 +275,19 @@ class SurrenderTab(tk.Frame):
             if not self.save():
                 self.monitor_var.set(False)  # persistence failed - don't start
                 return
-            self.runner.start(["--replace"])
+            # A successful save validated + wrote the config: it is now usable.
+            self._config_usable = True
+            self._safe_start()
         else:
-            self.runner.stop()
-            # W2-002: stopping is authoritative - never lie about runtime state.
-            if not self.save_monitor_state():
-                self.status_var.set(Locale.tr("save_failed", fallback="Stopped (state not persisted)"))
+            stopped = self.runner.stop()
+            # W2-006: only persist monitor_enabled=False when proven exit.
+            if stopped:
+                if not self.save_monitor_state():
+                    self.status_var.set(Locale.tr("save_failed", fallback="Stopped (state not persisted)"))
+            else:
+                # W2-006: stop failed, child still live, retain ON state.
+                self.monitor_var.set(True)
+                self.status_var.set(Locale.tr("stop_failed", fallback="StopFailed (still running)"))
 
     def save_monitor_state(self):
         return update_json(self.cfg_path,
@@ -283,5 +325,5 @@ class SurrenderTab(tk.Frame):
                 print(f"Surrender save skipped (invalid input): {e}", file=sys.stderr)
             else:
                 messagebox.showerror(Locale.tr("invalid_value"), str(e))
-            return
+            return False
         return ok

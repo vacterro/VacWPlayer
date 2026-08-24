@@ -79,6 +79,51 @@ def pick_window_title_blocking(timeout_sec=15):
         time.sleep(0.02)
     return None
 
+def _await_click_edge(get_state, cancel, deadline, get_pos=None, poll=0.02, stale=None):
+    """Wait for a fresh left-button PRESS edge, ignoring the click that may have
+    launched the picker (CORE-010). Returns the cursor position at the edge, or
+    None on cancel / timeout / stale.
+
+    The Pick button is itself clicked with the LEFT mouse button, and that press
+    is still physically held for a few ms when the worker thread starts. Sampling
+    the button's CURRENT state would capture that launching click (over the
+    picker UI, not a target window). So a press is only accepted once the button
+    has been observed RELEASED at least once - i.e. a deliberate, later click on
+    a real window.
+
+    `stale()` - if provided and returns True, the wait is abandoned immediately
+    (T-W2-PERF-006): a newer pick was started, so this worker must not outlive
+    its generation.
+
+    get_state() -> bool: True while the left button is down.
+    get_pos()  -> (x, y): cursor position at the edge (defaults to
+    win32gui.GetCursorPos)."""
+    if get_pos is None:
+        get_pos = win32gui.GetCursorPos
+    released_seen = False
+    prev_down = False
+    while time.time() < deadline:
+        if cancel.is_set():
+            return None
+        if stale is not None and stale():
+            return None
+        down = False
+        try:
+            down = bool(get_state())
+        except Exception:
+            pass
+        if not down:
+            released_seen = True
+        if released_seen and not prev_down and down:
+            try:
+                return get_pos()
+            except Exception:
+                return None
+        prev_down = down
+        time.sleep(poll)
+    return None
+
+
 class VintageWindowPicker(tk.Frame):
     def __init__(self, parent, label, initial_title, label_key=None):
         super().__init__(parent, bg=TOKENS["background"])
@@ -89,8 +134,11 @@ class VintageWindowPicker(tk.Frame):
         VintageEntry(self, textvariable=self.title_var, width=22).pack(side="left", padx=2)
         self.pick_btn = VintageButton(self, text=Locale.tr("pick_btn"), command=self._start_pick, width=10)
         self.pick_btn.pack(side="left", padx=2)
-        # W2-012: generation token to invalidate stale workers.
+        # W2-012: generation token + cancel event for stale workers.
         self._gen = 0
+        self._cancel = threading.Event()
+        # W2-012: cancel in-flight workers on destroy.
+        self.bind("<Destroy>", self._on_destroy)
 
     def apply_locale(self):
         if self.label_key:
@@ -100,19 +148,55 @@ class VintageWindowPicker(tk.Frame):
     def get(self):
         return self.title_var.get()
 
+    def _on_destroy(self, event=None):
+        """W2-012: signal all in-flight workers to stop; they must not
+        call after() on a destroyed widget."""
+        self._cancel.set()
+        self._gen = -1  # invalidate any queued callbacks
+
     def _start_pick(self):
-        # W2-012: bump generation so any in-flight worker from a previous click
-        # will see its token expired and skip writing the result.
+        # W2-012: bump generation and reset cancel so any in-flight worker
+        # from a previous click sees its token expired and skips writing.
+        self._cancel.clear()
         self._gen += 1
         gen = self._gen
         self.pick_btn.label.config(text=Locale.tr("pick_prompt"))
         threading.Thread(target=self._worker, args=(gen,), daemon=True).start()
 
     def _worker(self, gen):
-        title = pick_window_title_blocking()
-        # W2-012: only apply if this is still the current generation.
-        if hasattr(self, "_gen") and self._gen == gen:
-            self.after(0, lambda: self._finish(title))
+        # W2-012: long-blocking call with periodic cancel check.
+        # CORE-010: ignore the Pick-button press that launched us - wait for a
+        # fresh click edge on a target window instead of grabbing the launcher.
+        deadline = time.time() + 15.0
+
+        def _get_state():
+            return bool(win32api.GetAsyncKeyState(win32con.VK_LBUTTON) & 0x8000)
+
+        # T-W2-PERF-006: a newer pick (or destroy) must invalidate THIS worker's
+        # long blocking wait instantly, not just the final _apply write.
+        def _stale():
+            return self._gen != gen or self._cancel.is_set()
+
+        pt = _await_click_edge(_get_state, self._cancel, deadline, stale=_stale)
+        if self._gen != gen or self._cancel.is_set():
+            return
+        title = None
+        if pt is not None:
+            try:
+                hwnd = win32gui.WindowFromPoint(pt)
+                if hwnd:
+                    root_hwnd = win32gui.GetAncestor(hwnd, win32con.GA_ROOT)
+                    title = win32gui.GetWindowText(root_hwnd or hwnd) or None
+            except Exception:
+                pass
+        # W2-012: recheck generation on the Tk thread, not only before scheduling.
+        def _apply():
+            if self._gen == gen and not self._cancel.is_set():
+                self._finish(title)
+        try:
+            self.after(0, _apply)
+        except tk.TclError:
+            pass  # widget destroyed before we could schedule
 
     def _finish(self, title):
         self.pick_btn.label.config(text=Locale.tr("pick_btn_2"))

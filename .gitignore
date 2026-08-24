@@ -30,9 +30,12 @@ Thumbs.db
 .freebuff/
 backups/
 config.local.json
+.workbuddy-ai/
 
 # generated
 wr_runtime.ahk
 # tool output
 templates/burst_death/
 .ahk.pid
+.runtime_pvp_trigger_inactive
+.pytest_bt/

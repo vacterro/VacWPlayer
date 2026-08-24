@@ -4,6 +4,7 @@ import os
 import sys
 
 import cv2
+import numpy as np
 
 import capture
 import poller_engine
@@ -54,7 +55,7 @@ def _build_targets(cfg):
     return buttons, group_by_region(buttons)
 
 
-def targets_usable(targets):
+def targets_usable(targets, cfg=None):
     """True when the rebuilt target set carries at least one usable button
     (template loaded). Driven by run_poller's `usable` hook (T-138):
     startup with zero usable targets is a deterministic FATAL, and a hot
@@ -73,15 +74,25 @@ def _reload(cfg, targets):
 
 def _scan(hwnd, cfg, targets):
     """W2-PERF-004: one full-frame capture per poll regardless of region count.
+    W2-008: validates all regions against current client size before any
+    BitBlt/crop/match - out-of-client regions are silently skipped.
     Background path uses a single PrintWindow + one BGR->gray conversion,
     then slices region crops from the coherent frame. Foreground retains
     cheap region BitBlt but still converts each region to gray only once."""
     buttons, region_groups = targets
+    # W2-008: resolve current client size once and filter out-of-bounds regions.
+    try:
+        cw, ch = capture.get_client_size(hwnd)
+    except Exception:
+        cw, ch = 9999, 9999  # if we can't query, don't filter
     foreground = capture.is_foreground(hwnd)
     if foreground:
         # Foreground: cheap region BitBlt per group, one gray conversion per group.
         for region, group in region_groups.items():
             x0, y0, x1, y1 = region
+            # W2-008: reject region not wholly inside current client area.
+            if not (0 <= x0 < x1 <= cw and 0 <= y0 < y1 <= ch):
+                continue
             bgr_crop = capture.grab_region(hwnd, region)
             gray_crop = cv2.cvtColor(bgr_crop, cv2.COLOR_BGR2GRAY)
             for b in group:
@@ -92,15 +103,23 @@ def _scan(hwnd, cfg, targets):
                     window_ctl.click_at(hwnd, cx, cy, button="left")
                     return True
     else:
-        # Background: one full PrintWindow + one full BGR->gray, then slice.
+        # Background: ONE PrintWindow, raw BGRA (no full-frame gray conversion).
+        # Crop each region FIRST, then convert only that crop to gray
+        # (T-W2-PERF-004): a 200x200 region no longer drags the whole 1280x720
+        # frame through cvtColor.
         try:
-            full_bgr = capture.grab(hwnd)
+            full_rgba = capture.grab_rgba(hwnd)
         except RuntimeError:
             return None
-        full_gray = cv2.cvtColor(full_bgr, cv2.COLOR_BGR2GRAY)
         for region, group in region_groups.items():
             x0, y0, x1, y1 = region
-            gray_crop = full_gray[y0:y1, x0:x1]
+            # W2-008: reject region not wholly inside current client area.
+            if not (0 <= x0 < x1 <= cw and 0 <= y0 < y1 <= ch):
+                continue
+            crop = np.ascontiguousarray(full_rgba[y0:y1, x0:x1])
+            if crop.shape[0] < 1 or crop.shape[1] < 1:
+                continue  # empty crop after resize/bounds mismatch
+            gray_crop = cv2.cvtColor(crop, cv2.COLOR_BGRA2GRAY)
             for b in group:
                 cx, cy = (x0 + x1) // 2, (y0 + y1) // 2
                 score = match_score(gray_crop, b["tmpl"])

@@ -46,7 +46,11 @@ def reload_candidate(config_path, config_name):
     problems = engine_config.semantic_problems(data, config_name)
     if problems:
         return None, "; ".join(problems[:2])
-    return data, None
+    # CORE-008: hot reload returns the NORMALIZED config (legacy Accept/Decline
+    # template names get an explicit `action`) so the running engine's targets
+    # carry actions - otherwise a reload of a legacy config would silently drop
+    # all targets and idle as a no-op.
+    return engine_config.normalize_surrender_actions(data, config_name), None
 
 
 def build_scaled_templates(cfg, base_dir):
@@ -70,6 +74,10 @@ def build_scaled_templates(cfg, base_dir):
             "templates": scaled_templates,
             "threshold": float(entry.get("threshold", 0.75)),
         })
+        # W2-003: preserve action field through the config->runtime boundary
+        # so surrender's mode-aware _scan can filter by configured action.
+        if "action" in entry:
+            loaded[-1]["action"] = entry["action"]
         if entry.get("region") is not None:
             loaded[-1]["region"] = entry["region"]
     return loaded
@@ -130,11 +138,24 @@ def scan_by_region(hwnd, entries, match=click_template_match):
     accept/surrender contract), it falls back to PrintWindow + crop
     (grab_client_region) so the engine never matches - let alone clicks -
     foreign pixels.
+
+    W2-008: rejects entries whose region is not wholly inside the current
+    client area before any BitBlt/crop/match.
     """
-    x0 = min(e["region"][0] for e in entries)
-    y0 = min(e["region"][1] for e in entries)
-    x1 = max(e["region"][2] for e in entries)
-    y1 = max(e["region"][3] for e in entries)
+    # W2-008: filter out-of-client entries before computing the union box.
+    try:
+        cw, ch = capture.get_client_size(hwnd)
+    except Exception:
+        cw, ch = 9999, 9999
+    valid = [e for e in entries
+             if (0 <= e["region"][0] < e["region"][2] <= cw
+                 and 0 <= e["region"][1] < e["region"][3] <= ch)]
+    if not valid:
+        return False
+    x0 = min(e["region"][0] for e in valid)
+    y0 = min(e["region"][1] for e in valid)
+    x1 = max(e["region"][2] for e in valid)
+    y1 = max(e["region"][3] for e in valid)
     try:
         if capture.is_foreground(hwnd):
             img = capture.grab_region(hwnd, (x0, y0, x1, y1))
@@ -143,7 +164,7 @@ def scan_by_region(hwnd, entries, match=click_template_match):
     except RuntimeError:
         return None
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    for entry in entries:
+    for entry in valid:
         r = entry["region"]
         crop = gray[r[1] - y0:r[3] - y0, r[0] - x0:r[2] - x0]
         if crop.shape[0] < 1 or crop.shape[1] < 1:
@@ -153,17 +174,34 @@ def scan_by_region(hwnd, entries, match=click_template_match):
     return False
 
 
+def _target_signature(cfg):
+    """PERF-003: immutable fingerprint of the fields consumed by build_targets.
+    Used to skip expensive resource rebuilds when only metadata changed.
+    Callers supply their own implementation via the target_sig parameter."""
+    import hashlib
+    # Include template-relevant fields only; metadata fields like
+    # poll_interval_sec, click_cooldown_sec, window_title are excluded.
+    templates = cfg.get("templates", [])
+    buttons = cfg.get("buttons", [])
+    sig_data = json.dumps({"templates": templates, "buttons": buttons},
+                          sort_keys=True, default=str)
+    return hashlib.sha256(sig_data.encode()).hexdigest()
+
+
 def run_poller(name, config_path, config_name, build_targets, scan_targets,
                startup, reload_msg, poll_default=1.0, cooldown_default=3.0,
-               replace=False, usable=None):
+               replace=False, usable=None, target_sig=None):
     """Run the shared poll loop. scan_targets returns True (clicked), False (no
     match) or None (transient capture failure - retry after the poll interval).
 
-    `usable(targets)` is an optional safety gate (T-138): when provided, a
+    `usable(targets, cfg)` is an optional safety gate (T-138): when provided, a
     target set it rejects is never committed. At startup a rejected set is a
     deterministic FATAL (SystemExit 1) - an engine with zero usable targets
     must not idle forever. On hot reload a rejected set keeps the last-good
     config and targets transactionally, warning once instead of losing work.
+    The predicate receives the CANDIDATE cfg so it can gate mode-aware usability
+    (e.g. surrender declining-only when auto_accept is off) against the config
+    the candidate would actually run (CORE-007).
 
     T-W2-001: validate config and resources BEFORE acquiring the single-instance
     mutex so a bad candidate cannot destructively replace a healthy running engine.
@@ -174,7 +212,8 @@ def run_poller(name, config_path, config_name, build_targets, scan_targets,
     # usability - only then acquire the mutex so we never kill a healthy holder
     # over a bad candidate (T-W2-001).
     try:
-        cfg = load_config(config_path, config_name)
+        cfg, candidate_revision = engine_config.load_config_revision(
+            config_path, config_name)
     except SystemExit:
         raise
     except Exception:
@@ -184,23 +223,34 @@ def run_poller(name, config_path, config_name, build_targets, scan_targets,
     except Exception:
         print("FATAL: failed to build targets for %s - not starting" % config_name)
         raise SystemExit(1)
-    if usable is not None and not usable(targets):
+    if usable is not None and not usable(targets, cfg):
         print("FATAL: no usable targets in %s - not starting" % config_name)
         raise SystemExit(1)
+
+    # W2-004/CORE-006: candidate_revision is already bound to the exact bytes
+    # parsed above (load_config_revision pins it to the open file handle), so the
+    # reload tracker seeds from the file state we validated - not a fresh stat
+    # taken after a possible concurrent rewrite.
 
     # Candidate is ready: now acquire ownership and start runtime side effects.
     single_instance.ensure_single_instance(name, replace=replace)
     single_instance.start_parent_watchdog()
     window_ctl.set_dpi_aware()
 
-    cfg_last_mtime = os.path.getmtime(config_path)
+    # W2-004: initialise from the candidate's proven revision token.
+    cfg_last_revision = (candidate_revision
+                         if candidate_revision
+                         else engine_config.config_revision(config_path))
     hwnd = None
+    hwnd_title = None
+    hwnd_pid = 0
     loaded_window_title = cfg["window_title"]
     print(startup(cfg, targets))
 
     while True:
         try:
-            cfg_last_mtime, changed = engine_config.mtime_changed(config_path, cfg_last_mtime)
+            cfg_last_revision, changed = engine_config.mtime_changed(
+                config_path, cfg_last_revision)
             if changed:
                 # T-191: a hot reload that cannot validate is REJECTED whole
                 # (keep last-good, warn once) - never a SystemExit that kills
@@ -210,26 +260,63 @@ def run_poller(name, config_path, config_name, build_targets, scan_targets,
                     print("WARN: config change rejected: %s; "
                           "keeping last-good" % reload_err)
                 else:
-                    new_targets = build_targets(new_cfg)
-                    if usable is not None and not usable(new_targets):
-                        # transactional hot reload (T-138): an unusable rebuild is
-                        # dropped whole; the engine keeps running the last-good set.
-                        print("config change ignored: no usable targets in %s; "
-                              "keeping last-good config" % config_name)
+                    # PERF-003: skip expensive resource rebuild when only
+                    # metadata (poll_interval, cooldown, window_title) changed;
+                    # the new config is committed in either branch below.
+                    _sig_fn = target_sig or _target_signature
+                    if (_sig_fn(new_cfg) == _sig_fn(cfg)):
+                        # PERF-003: target-defining fields unchanged - but
+                        # CORE-007: still gate usability against the CANDIDATE
+                        # config, because a metadata-only reload can flip mode
+                        # (e.g. auto_accept) to one whose targets no longer
+                        # match, which would silently commit a permanent no-op.
+                        if usable is not None and not usable(targets, new_cfg):
+                            print("config change ignored: no usable targets in %s; "
+                                  "keeping last-good config" % config_name)
+                        else:
+                            cfg = new_cfg
                     else:
-                        cfg = new_cfg
-                        targets = new_targets
-                        if cfg["window_title"] != loaded_window_title:
-                            loaded_window_title = cfg["window_title"]
-                            hwnd = None
-                            print("window title changed, now watching '%s'" % loaded_window_title)
-                        msg = reload_msg(cfg, targets)
-                        if msg:
-                            print(msg)
+                        # W2-005: catch expected resource/OpenCV build failures
+                        # around hot-reload so a corrupt template or resource
+                        # error never kills a healthy last-good engine.
+                        try:
+                            new_targets = build_targets(new_cfg)
+                        except (OSError, ValueError, cv2.error) as e:
+                            print("WARN: config change rejected: resource build "
+                                  "failed (%s); keeping last-good" % e)
+                            continue
+                        if usable is not None and not usable(new_targets, new_cfg):
+                            print("config change ignored: no usable targets in %s; "
+                                  "keeping last-good config" % config_name)
+                        else:
+                            cfg = new_cfg
+                            targets = new_targets
 
-            if not hwnd or not win32gui.IsWindow(hwnd):
+                    # CORE-005: a window-title change must invalidate the
+                    # captured hwnd unconditionally - a metadata-only reload
+                    # (identical targets, new title) previously kept polling
+                    # the now-stale handle because this check lived inside the
+                    # rebuild branch and never ran for the signature-skip path.
+                    if cfg["window_title"] != loaded_window_title:
+                        loaded_window_title = cfg["window_title"]
+                        hwnd = None
+                        print("window title changed, now watching '%s'" % loaded_window_title)
+                    msg = reload_msg(cfg, targets)
+                    if msg:
+                        print(msg)
+
+            # W2-002: bind the handle to the target's title + owning PID. IsWindow
+            # alone is insufficient - a destroyed target whose numeric handle is
+            # reclaimed by a foreign window still passes IsWindow and would
+            # otherwise be scanned/clicked. A title or PID mismatch means the
+            # handle was reused; drop it and re-acquire.
+            if not capture.is_same_window(hwnd, hwnd_title, hwnd_pid):
+                hwnd = None
+            if not hwnd:
                 try:
-                    hwnd = capture.find_window(cfg["window_title"])
+                    hwnd, hwnd_pid = capture.find_window_identity(
+                        cfg["window_title"])
+                    hwnd_title = cfg["window_title"]
                     print("acquired hwnd=%s" % hwnd)
                 except RuntimeError:
                     time.sleep(1.0)

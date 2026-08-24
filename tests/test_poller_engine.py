@@ -36,8 +36,27 @@ def _cfg(window_title="GameWindow"):
             "click_cooldown_sec": 3.0}
 
 
+def _patch_window_identity(monkeypatch, find_callback=None, hwnd=12345, pid=999):
+    """W2-002: stub the HWND identity binding so the default test window is
+    treated as a stable, never-reused handle. Real identity logic is covered by
+    the dedicated handle-reuse tests in test_window_identity.py.
+
+    When ``find_callback`` is supplied it is invoked for each re-acquire (so a
+    test's find_window stub keeps recording into its find_calls list)."""
+    monkeypatch.setattr(poller_engine.capture, "is_same_window",
+                        lambda h, t, p: True)
+    if find_callback is not None:
+        def _find_identity(title):
+            return find_callback(title), pid
+        monkeypatch.setattr(poller_engine.capture, "find_window_identity",
+                            _find_identity)
+    else:
+        monkeypatch.setattr(poller_engine.capture, "find_window_identity",
+                            lambda t: (hwnd, pid))
+
+
 def _run(monkeypatch, cfg=None, scan_result=False, mtime=(1.0, False),
-         find_ok=True, stop_after=3):
+         find_ok=True, stop_after=3, target_sig=None):
     cfg = cfg or _cfg()
     sleep = SleepSentinel(stop_after)
     find_calls = []
@@ -64,7 +83,8 @@ def _run(monkeypatch, cfg=None, scan_result=False, mtime=(1.0, False),
     monkeypatch.setattr(poller_engine.single_instance, "start_parent_watchdog",
                         lambda: None)
     monkeypatch.setattr(poller_engine.window_ctl, "set_dpi_aware", lambda: None)
-    monkeypatch.setattr(poller_engine, "load_config", lambda p, n: cfg)
+    monkeypatch.setattr(poller_engine.engine_config, "load_config_revision",
+                        lambda p, n: (cfg, (1, 1)))
     monkeypatch.setattr(poller_engine, "reload_candidate",
                         lambda p, n: (cfg, None))
     monkeypatch.setattr(poller_engine.os.path, "getmtime", lambda p: 1.0)
@@ -73,12 +93,14 @@ def _run(monkeypatch, cfg=None, scan_result=False, mtime=(1.0, False),
     monkeypatch.setattr(poller_engine.capture, "find_window", _find)
     monkeypatch.setattr(poller_engine.win32gui, "IsWindow", lambda h: True)
     monkeypatch.setattr(poller_engine.capture, "is_minimized", lambda h: False)
+    _patch_window_identity(monkeypatch, find_callback=_find)
 
     poller_engine.run_poller(
         "test", "cfg.json", "cfg.json",
         build_targets=_build, scan_targets=_scan,
         startup=lambda c, t: "started", reload_msg=lambda c, t: None,
-        poll_default=1.0, cooldown_default=3.0)
+        poll_default=1.0, cooldown_default=3.0,
+        target_sig=target_sig)
 
     return sleep, {"find": find_calls, "scan": scan_calls["n"],
                    "build": build_calls["n"]}
@@ -102,11 +124,21 @@ def test_grab_failure_retries_keeps_hwnd(monkeypatch):
 
 
 def test_config_reload_rebuilds_targets(monkeypatch):
-    _, calls = _run(monkeypatch, mtime=(2.0, True))
+    # PERF-003: force rebuild by passing target_sig that always reports changed.
+    _counter = [0]
+    def _always_changed(cfg):
+        _counter[0] += 1
+        return str(_counter[0])
+    _, calls = _run(monkeypatch, mtime=(2.0, True), target_sig=_always_changed)
     assert calls["build"] >= 2
 
 
 def test_window_title_change_reacquires_hwnd(monkeypatch):
+    # CORE-005: a metadata-only reload (identical targets, new window_title)
+    # must invalidate the stale hwnd and re-acquire against the new title. Uses
+    # the DEFAULT target signature so this exercises the signature-skip hot
+    # path that previously kept polling the old handle (the _always_changed
+    # workaround masked the bug by forcing a full rebuild every reload).
     cfg_seq = [_cfg("A"), _cfg("B")]
     load_calls = []
 
@@ -134,7 +166,8 @@ def test_window_title_change_reacquires_hwnd(monkeypatch):
     monkeypatch.setattr(poller_engine.single_instance, "start_parent_watchdog",
                         lambda: None)
     monkeypatch.setattr(poller_engine.window_ctl, "set_dpi_aware", lambda: None)
-    monkeypatch.setattr(poller_engine, "load_config", _load)
+    monkeypatch.setattr(poller_engine.engine_config, "load_config_revision",
+                        lambda p, n: (_load(p, n), (1, 1)))
     monkeypatch.setattr(poller_engine, "reload_candidate",
                         lambda p, n: (_load(p, n), None))
     monkeypatch.setattr(poller_engine.os.path, "getmtime", lambda p: 1.0)
@@ -142,15 +175,78 @@ def test_window_title_change_reacquires_hwnd(monkeypatch):
     monkeypatch.setattr(poller_engine.capture, "find_window", _find)
     monkeypatch.setattr(poller_engine.win32gui, "IsWindow", lambda h: True)
     monkeypatch.setattr(poller_engine.capture, "is_minimized", lambda h: False)
+    _patch_window_identity(monkeypatch, find_callback=_find)
 
     poller_engine.run_poller(
         "test", "cfg.json", "cfg.json",
         build_targets=lambda c: ["t1"], scan_targets=lambda h, c, t: False,
         startup=lambda c, t: "started", reload_msg=lambda c, t: None)
 
-    # title change -> hwnd dropped and re-acquired against the new title
+    # title A -> B with identical targets (default signature, metadata-only
+    # reload) must drop the stale handle and re-acquire against the new title
     assert find_calls[0] == "A"
     assert "B" in find_calls
+
+
+def test_window_title_metadata_only_reload_invalidates_hwnd(monkeypatch):
+    """CORE-005 direct regression: with the default target signature and
+    identical target-defining fields, a window_title-only change goes through
+    the signature-skip path (no build_targets call) yet MUST still drop the
+    stale hwnd and re-acquire against the new title. The pre-fix code skipped
+    the title check entirely on this path, so find_window("B") was never
+    called and the engine kept polling the old handle."""
+    cfg_seq = [_cfg("A"), _cfg("B")]
+    load_calls = []
+    build_calls = {"n": 0}
+
+    def _load(p, n):
+        idx = min(len(cfg_seq) - 1, len(load_calls))
+        load_calls.append(idx)
+        return cfg_seq[idx]
+
+    state = {"calls": 0}
+
+    def _changed(p, m):
+        state["calls"] += 1
+        return (2.0, state["calls"] == 2)
+
+    find_calls = []
+
+    def _find(title):
+        find_calls.append(title)
+        return 12345
+
+    def _build(c):
+        build_calls["n"] += 1
+        return ["t1"]
+
+    monkeypatch.setattr(poller_engine.time, "sleep", SleepSentinel(3))
+    monkeypatch.setattr(poller_engine.single_instance, "ensure_single_instance",
+                        lambda *a, **k: None)
+    monkeypatch.setattr(poller_engine.single_instance, "start_parent_watchdog",
+                        lambda: None)
+    monkeypatch.setattr(poller_engine.window_ctl, "set_dpi_aware", lambda: None)
+    monkeypatch.setattr(poller_engine.engine_config, "load_config_revision",
+                        lambda p, n: (_load(p, n), (1, 1)))
+    monkeypatch.setattr(poller_engine, "reload_candidate",
+                        lambda p, n: (_load(p, n), None))
+    monkeypatch.setattr(poller_engine.os.path, "getmtime", lambda p: 1.0)
+    monkeypatch.setattr(poller_engine.engine_config, "mtime_changed", _changed)
+    monkeypatch.setattr(poller_engine.capture, "find_window", _find)
+    monkeypatch.setattr(poller_engine.win32gui, "IsWindow", lambda h: True)
+    monkeypatch.setattr(poller_engine.capture, "is_minimized", lambda h: False)
+    _patch_window_identity(monkeypatch, find_callback=_find)
+
+    poller_engine.run_poller(
+        "test", "cfg.json", "cfg.json",
+        build_targets=_build, scan_targets=lambda h, c, t: False,
+        startup=lambda c, t: "started", reload_msg=lambda c, t: None)
+
+    # The metadata-only reload took the signature-skip path...
+    assert build_calls["n"] == 1  # only the startup build, never a rebuild
+    # ...yet the stale hwnd was invalidated and re-acquired against "B".
+    assert find_calls[0] == "A"
+    assert find_calls[-1] == "B"
 
 
 def test_acquire_failure_retries(monkeypatch):
@@ -178,7 +274,8 @@ def test_lost_window_resets_and_reacquires(monkeypatch):
     monkeypatch.setattr(poller_engine.single_instance, "start_parent_watchdog",
                         lambda: None)
     monkeypatch.setattr(poller_engine.window_ctl, "set_dpi_aware", lambda: None)
-    monkeypatch.setattr(poller_engine, "load_config", lambda p, n: _cfg())
+    monkeypatch.setattr(poller_engine.engine_config, "load_config_revision",
+                        lambda p, n: (_cfg(), (1, 1)))
     monkeypatch.setattr(poller_engine.os.path, "getmtime", lambda p: 1.0)
     monkeypatch.setattr(poller_engine.engine_config, "mtime_changed",
                         lambda p, m: (1.0, False))
@@ -191,6 +288,7 @@ def test_lost_window_resets_and_reacquires(monkeypatch):
     monkeypatch.setattr(poller_engine.capture, "find_window", _find)
     monkeypatch.setattr(poller_engine.win32gui, "IsWindow", lambda h: True)
     monkeypatch.setattr(poller_engine.capture, "is_minimized", lambda h: False)
+    _patch_window_identity(monkeypatch, find_callback=_find)
 
     poller_engine.run_poller(
         "test", "cfg.json", "cfg.json",
@@ -216,13 +314,15 @@ def test_poll_loop_reraises_non_window_error(monkeypatch):
     monkeypatch.setattr(poller_engine.single_instance, "start_parent_watchdog",
                         lambda: None)
     monkeypatch.setattr(poller_engine.window_ctl, "set_dpi_aware", lambda: None)
-    monkeypatch.setattr(poller_engine, "load_config", lambda p, n: _cfg())
+    monkeypatch.setattr(poller_engine.engine_config, "load_config_revision",
+                        lambda p, n: (_cfg(), (1, 1)))
     monkeypatch.setattr(poller_engine.os.path, "getmtime", lambda p: 1.0)
     monkeypatch.setattr(poller_engine.engine_config, "mtime_changed",
                         lambda p, m: (1.0, False))
     monkeypatch.setattr(poller_engine.capture, "find_window", lambda t: 12345)
     monkeypatch.setattr(poller_engine.win32gui, "IsWindow", lambda h: True)
     monkeypatch.setattr(poller_engine.capture, "is_minimized", lambda h: False)
+    _patch_window_identity(monkeypatch)
 
     with pytest.raises(ValueError):
         poller_engine.run_poller(
@@ -352,8 +452,8 @@ def test_autocontinue_scan_occluded_uses_printwindow(monkeypatch):
     grabbed_full, grabbed_region = [], []
     monkeypatch.setattr(autocontinue.capture, "is_foreground", lambda h: False)
     monkeypatch.setattr(autocontinue.capture, "get_client_size", lambda h: (10, 10))
-    monkeypatch.setattr(autocontinue.capture, "grab",
-                        lambda h: grabbed_full.append(h) or np.zeros((10, 10, 3), dtype=np.uint8))
+    monkeypatch.setattr(autocontinue.capture, "grab_rgba",
+                        lambda h: grabbed_full.append(h) or np.zeros((10, 10, 4), dtype=np.uint8))
     monkeypatch.setattr(autocontinue.capture, "grab_region",
                         lambda h, r: grabbed_region.append(r) or np.zeros((10, 10, 3), dtype=np.uint8))
     monkeypatch.setattr(autocontinue, "match_score", lambda crop, tmpl: 0.0)
@@ -419,7 +519,8 @@ def _run_poller_min(monkeypatch, cfg=None):
     monkeypatch.setattr(poller_engine.single_instance, "start_parent_watchdog",
                         lambda: None)
     monkeypatch.setattr(poller_engine.window_ctl, "set_dpi_aware", lambda: None)
-    monkeypatch.setattr(poller_engine, "load_config", lambda p, n: cfg)
+    monkeypatch.setattr(poller_engine.engine_config, "load_config_revision",
+                        lambda p, n: (cfg, (1, 1)))
     monkeypatch.setattr(poller_engine, "reload_candidate",
                         lambda p, n: (cfg, None))
     monkeypatch.setattr(poller_engine.os.path, "getmtime", lambda p: 1.0)
@@ -428,6 +529,7 @@ def _run_poller_min(monkeypatch, cfg=None):
     monkeypatch.setattr(poller_engine.capture, "find_window", lambda t: 12345)
     monkeypatch.setattr(poller_engine.win32gui, "IsWindow", lambda h: True)
     monkeypatch.setattr(poller_engine.capture, "is_minimized", lambda h: False)
+    _patch_window_identity(monkeypatch)
 
 
 def test_startup_zero_usable_targets_fatal(monkeypatch):
@@ -437,7 +539,7 @@ def test_startup_zero_usable_targets_fatal(monkeypatch):
             "test", "cfg.json", "cfg.json",
             build_targets=lambda c: [], scan_targets=lambda h, c, t: False,
             startup=lambda c, t: "started", reload_msg=lambda c, t: None,
-            usable=lambda t: bool(t))
+            usable=lambda t, c=None: bool(t))
     assert ex.value.code == 1
 
 
@@ -459,11 +561,16 @@ def test_reload_unusable_targets_keeps_last_good(monkeypatch):
 
     monkeypatch.setattr(poller_engine.engine_config, "mtime_changed",
                         lambda p, m: (2.0, state.__setitem__("calls", state["calls"] + 1) or state["calls"] == 1))
+    # PERF-003: force rebuild by passing target_sig that always reports changed.
+    _sig_counter = [0]
+    def _always_changed(cfg):
+        _sig_counter[0] += 1
+        return str(_sig_counter[0])
     poller_engine.run_poller(
         "test", "cfg.json", "cfg.json",
         build_targets=_build, scan_targets=_scan,
         startup=lambda c, t: "started", reload_msg=lambda c, t: None,
-        usable=lambda t: bool(t))
+        usable=lambda t, c=None: bool(t), target_sig=_always_changed)
     assert serves["n"] >= 2  # reload was attempted and targets were rebuilt
     assert all(t == ["t1"] for t in seen)  # scans never saw the unusable []
 

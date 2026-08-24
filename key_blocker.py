@@ -70,7 +70,7 @@ def _hook_proc(nCode, wParam, lParam):
                     return 1
                 else:
                     return 1
-            if time.time() < _block_until:
+            if time.monotonic() < _block_until:
                 return 1
     return user32.CallNextHookEx(None, nCode, wParam, lParam)
 
@@ -161,7 +161,7 @@ def block_pedals_for(seconds):
     a pre-death combo this stops that spam from competing with quick-buy
     during the window right after death."""
     global _block_until
-    _block_until = time.time() + seconds
+    _block_until = time.monotonic() + seconds  # PERF-005: monotonic
 
 
 def unblock():
@@ -169,6 +169,31 @@ def unblock():
     global _block_until
     _block_until = 0.0
 
+
+
+def update_keys(blocked_keys=None):
+    """PERF-005: swap the live hook's blocked-key set in place - NO teardown.
+
+    The low-level hook proc reads the module global `_blocked_vk` on every
+    keypress, so reassigning that global is atomic under the GIL and takes
+    effect on the very next event. This replaces the old
+    key_blocker.stop()+start() reload, which tore down and reinstalled the hook
+    (a ~1s reinstall window plus a brief gap where blocking was off) on every
+    blocked-keys config change.
+
+    Recovery preserved (T-089): if the hook thread is not alive (died or never
+    started), there is nothing live to update, so we fall back to a full
+    start() reinstall exactly as before."""
+    global _blocked_vk, _block_until, _block_until_released_vk
+    if _thread is None or not _thread.is_alive():
+        start(blocked_keys)
+        return
+    new_set = {VK_MAP[k] for k in (blocked_keys or []) if k in VK_MAP}
+    if new_set != _blocked_vk:
+        _blocked_vk = new_set  # atomic reference swap; next keypress sees new set
+    # Drop timed/release blocks tied to keys we no longer block.
+    _block_until = 0.0
+    _block_until_released_vk.intersection_update(new_set)
 
 
 def stop():

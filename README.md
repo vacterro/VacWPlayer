@@ -29,7 +29,7 @@ AHK" with a UI, no hand-editing scripts.
 - **Minimap tab** — click-to-move hotkeys bound to lane positions, rows reorderable.
 - **Champion mode** — dropdown picks exactly one live combo set, so F13–F15 never collide.
 - **Per-step delays** — `key:ms` syntax, e.g. `q,e:120,{Space}:200`.
-- **Tray icon** — X hides to tray, engine keeps running; Quit stops everything.
+- **Tray icon** — X hides to tray and stops the engine (wr_runtime.ahk exits with the window); Quit stops everything and exits.
 - **Wiki** — architecture, config reference, tabs guide: `docs/wiki/`.
 
 ## Requirements

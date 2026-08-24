@@ -135,12 +135,79 @@ def test_kill_previous_holder_kills_verified_holder(monkeypatch):
     monkeypatch.setattr("builtins.open", lambda path, *a, **k: F())
     monkeypatch.setattr(si.win32api, "OpenProcess", lambda *a: 9)
     monkeypatch.setattr(si.win32process, "GetModuleFileNameEx", lambda *a: "C:\\Python\\python.exe")
+    monkeypatch.setattr(si.win32process, "GetProcessId", lambda h: 123)
     monkeypatch.setattr(si.win32api, "TerminateProcess", lambda *a: killed.append("KILL"))
     monkeypatch.setattr(si.win32event, "WaitForSingleObject", lambda *a: None)
     monkeypatch.setattr(si.win32api, "CloseHandle", lambda *a: None)
 
     si._kill_previous_holder("accept")
     assert killed == ["KILL"]
+
+
+def test_kill_previous_holder_rejects_reused_foreign_python(monkeypatch, capsys):
+    """CORE-001: a PID reused by a foreign python.exe (our managed process
+    exited, Windows recycled the PID) must NOT be terminated. Ownership is
+    re-verified against the pinned handle, and the foreign command line fails
+    the script check."""
+    killed = []
+    monkeypatch.setattr(si.os.path, "isfile", lambda p: True)
+    # The (reused) pid's command line is NOT our script -> ownership fails.
+    monkeypatch.setattr(si, "_pid_runs_our_script", lambda pid, name: False)
+
+    class F:
+        def read(self):
+            return "123"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return None
+
+    monkeypatch.setattr("builtins.open", lambda path, *a, **k: F())
+    monkeypatch.setattr(si.win32api, "OpenProcess", lambda *a: 9)
+    # Foreign python image - passes the image gate, must still be refused.
+    monkeypatch.setattr(si.win32process, "GetModuleFileNameEx",
+                        lambda *a: "C:\\Python\\python.exe")
+    monkeypatch.setattr(si.win32process, "GetProcessId", lambda h: 123)
+    monkeypatch.setattr(si.win32api, "TerminateProcess", lambda *a: killed.append("KILL"))
+    monkeypatch.setattr(si.win32event, "WaitForSingleObject", lambda *a: None)
+    monkeypatch.setattr(si.win32api, "CloseHandle", lambda *a: None)
+
+    si._kill_previous_holder("accept")
+    assert "KILL" not in killed
+    assert "identity not proven" in capsys.readouterr().err
+
+
+def test_kill_previous_holder_rejects_reused_foreign_ahk(monkeypatch, capsys):
+    """CORE-001: a PID reused by a foreign AutoHotkey process must NOT be
+    terminated. Image-name equality is not ownership."""
+    killed = []
+    monkeypatch.setattr(si.os.path, "isfile", lambda p: True)
+    monkeypatch.setattr(si, "_pid_runs_our_script", lambda pid, name: False)
+
+    class F:
+        def read(self):
+            return "123"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return None
+
+    monkeypatch.setattr("builtins.open", lambda path, *a, **k: F())
+    monkeypatch.setattr(si.win32api, "OpenProcess", lambda *a: 9)
+    monkeypatch.setattr(si.win32process, "GetModuleFileNameEx",
+                        lambda *a: "C:\\Other\\AutoHotkeyU64.exe")
+    monkeypatch.setattr(si.win32process, "GetProcessId", lambda h: 123)
+    monkeypatch.setattr(si.win32api, "TerminateProcess", lambda *a: killed.append("KILL"))
+    monkeypatch.setattr(si.win32event, "WaitForSingleObject", lambda *a: None)
+    monkeypatch.setattr(si.win32api, "CloseHandle", lambda *a: None)
+
+    si._kill_previous_holder("accept")
+    assert "KILL" not in killed
+    assert "identity not proven" in capsys.readouterr().err
 
 
 def test_set_timer_resolution_survives_winmm_failure(monkeypatch):
@@ -239,3 +306,82 @@ def test_watchdog_fires_callback_once_then_bounded_hard_exit(monkeypatch):
     assert len(fired) == 1           # callback invoked exactly once
     assert exited == [0]             # hard-exit fallback still lands
     assert 4.0 in sleeps            # bounded cleanup window observed
+
+
+# --- CORE-002: parent watchdog must terminate the engine on parent death ---
+
+def test_parent_watchdog_terminates_on_parent_death(monkeypatch):
+    """A normal parent death must exit the engine process, not merely return
+    from the watcher thread (CORE-002). Returning would strand an orphaned
+    engine still holding its mutex and firing input after a GUI crash."""
+    exited = []
+    monkeypatch.setattr(si.win32api, "OpenProcess", lambda *a: 7)
+    # WAIT_OBJECT_0 on the first check -> parent is gone.
+    monkeypatch.setattr(si.win32event, "WaitForSingleObject", lambda h, t: 0)
+    monkeypatch.setattr(si.win32api, "CloseHandle", lambda h: None)
+    monkeypatch.setattr(si.time, "sleep", lambda s: None)
+    monkeypatch.setattr(si.os, "_exit",
+                        lambda c: exited.append(c) or (_ for _ in ()).throw(SystemExit))
+
+    t = si.start_parent_watchdog(interval_sec=1.0)
+    t.join(timeout=2.0)
+    assert exited == [0], "engine must os._exit(0) when parent dies"
+
+
+def test_parent_watchdog_keeps_watching_while_parent_alive(monkeypatch):
+    """A non-signaled parent (WAIT_TIMEOUT) must NOT terminate the engine."""
+    exited = []
+    monkeypatch.setattr(si.win32api, "OpenProcess", lambda *a: 7)
+    monkeypatch.setattr(si.win32event, "WaitForSingleObject", lambda h, t: 0x102)
+    monkeypatch.setattr(si.win32api, "CloseHandle", lambda h: None)
+    monkeypatch.setattr(si.time, "sleep", lambda s: None)
+    monkeypatch.setattr(si.os, "_exit",
+                        lambda c: exited.append(c) or (_ for _ in ()).throw(SystemExit))
+
+    t = si.start_parent_watchdog(interval_sec=1.0)
+    t.join(timeout=1.0)
+    assert exited == [], "engine must NOT exit while parent is still alive"
+
+
+# --- CORE-003: target absence must not be poisoned by inaccessible PIDs ---
+
+def test_target_absent_despite_inaccessible_unrelated_pid(monkeypatch):
+    """A target that exited while one unrelated protected PID stays
+    inaccessible must be reported absent, not UNKNOWN (CORE-003)."""
+    monkeypatch.setattr(si, "_process_names",
+                        lambda: ({"protected.exe"}, False))
+    assert si._target_any_alive(["HD-Player.exe"]) is False
+
+
+def test_target_observation_failure_stays_unknown(monkeypatch):
+    """A genuinely failed scan (EnumProcesses unavailable) stays UNKNOWN."""
+    monkeypatch.setattr(si, "_process_names", lambda: None)
+    assert si._target_any_alive(["HD-Player.exe"]) is None
+
+
+def test_target_watchdog_fires_when_target_gone_but_scan_incomplete(monkeypatch):
+    """End-to-end (CORE-003): once the target was seen alive, its exit must
+    fire the shutdown even though the next scan is incomplete (an unrelated
+    protected PID could not be opened)."""
+    import time as _time
+    real_sleep = _time.sleep
+    fired = []
+    exited = []
+    sleeps_append = []
+    # First observation: target present (seen_alive). Then: target gone while
+    # the scan reports one unrelated PID it could not inspect (complete=False).
+    snap = [({"hd-player.exe", "other.exe"}, True)] + \
+           [({"other.exe"}, False)] * 20
+    it = iter(snap)
+    monkeypatch.setattr(si, "_process_names", lambda: next(it))
+    monkeypatch.setattr(si.time, "sleep", lambda s: sleeps_append.append(s))
+    monkeypatch.setattr(si.os, "_exit",
+                        lambda c: exited.append(c) or (_ for _ in ()).throw(SystemExit))
+
+    si.start_target_watchdog(["HD-Player.exe"], lambda: fired.append(1),
+                             interval_sec=3.0, grace_ticks=2,
+                             min_uptime_sec=6.0, hard_exit_timeout_sec=4.0)
+    deadline = _time.time() + 3.0
+    while fired != [1] and _time.time() < deadline:
+        real_sleep(0.01)
+    assert len(fired) == 1

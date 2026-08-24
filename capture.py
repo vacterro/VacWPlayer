@@ -2,6 +2,7 @@ import ctypes
 import logging
 import win32con
 import win32gui
+import win32process
 import win32ui
 import numpy as np
 
@@ -16,6 +17,53 @@ def find_window(title: str = "HD-Player") -> int:
     if not hwnd:
         raise RuntimeError(f"window not found: {title}")
     return hwnd
+
+
+def window_pid(hwnd: int) -> int:
+    """Return the process id that owns `hwnd` (0 if it cannot be determined)."""
+    try:
+        _, pid = win32process.GetWindowThreadProcessId(hwnd)
+        return pid
+    except Exception:
+        return 0
+
+
+def window_title(hwnd: int) -> str:
+    """Return the current text of `hwnd`'s title bar ('' on failure)."""
+    try:
+        return win32gui.GetWindowText(hwnd)
+    except Exception:
+        return ""
+
+
+def window_identity(hwnd: int):
+    """Return (title, pid) for `hwnd`; either may be empty/0 on failure."""
+    return window_title(hwnd), window_pid(hwnd)
+
+
+def find_window_identity(title: str = "HD-Player"):
+    """Like find_window() but also returns the owning process id, so callers can
+    bind the acquired handle to a stable identity (title + PID) and later detect
+    when the numeric handle has been reclaimed by a *different* window (W2-002)."""
+    hwnd = find_window(title)
+    return hwnd, window_pid(hwnd)
+
+
+def is_same_window(hwnd: int, expected_title: str, expected_pid: int) -> bool:
+    """W2-002: True ONLY when `hwnd` is a live window whose title AND owning pid
+    still match the captured identity.
+
+    ``win32gui.IsWindow`` alone is not enough: when the target window is
+    destroyed its numeric handle can be reclaimed by an unrelated foreign
+    window, which still passes IsWindow. Binding to title+PID catches that reuse
+    and forces a re-acquire instead of scanning/clicking the wrong window."""
+    if not hwnd or not win32gui.IsWindow(hwnd):
+        return False
+    try:
+        return (window_title(hwnd) == expected_title
+                and window_pid(hwnd) == expected_pid)
+    except Exception:
+        return False
 
 
 def is_minimized(hwnd: int) -> bool:
@@ -38,13 +86,13 @@ def get_client_size(hwnd: int) -> tuple[int, int]:
     return right - left, bottom - top
 
 
-def grab(hwnd: int) -> np.ndarray:
-    """Capture window client area via PrintWindow. Works even if occluded by other windows.
+def _printwindow_bgra(hwnd: int) -> np.ndarray:
+    """PrintWindow the client area and return the raw 4-channel BGRA frame
+    (no alpha drop, no BGR conversion). Region-only callers crop this FIRST and
+    convert just the crop - T-W2-PERF-004's win over converting the whole frame.
 
     Every GDI handle is acquired inside the same try whose finally releases
-    only what was actually created (T-147): a throw between GetWindowDC and
-    SelectObject can no longer leak the already-acquired DCs, and a
-    zero-size client is rejected before anything is allocated."""
+    only what was actually created (T-147)."""
     w, h = get_client_size(hwnd)
     if w <= 0 or h <= 0:
         raise RuntimeError("PrintWindow rejected: zero-size client area")
@@ -68,7 +116,7 @@ def grab(hwnd: int) -> np.ndarray:
         bmpinfo = bitmap.GetInfo()
         bmpstr = bitmap.GetBitmapBits(True)
         img = np.frombuffer(bmpstr, dtype=np.uint8).reshape((bmpinfo["bmHeight"], bmpinfo["bmWidth"], 4))
-        img = np.ascontiguousarray(img[:, :, :3])  # drop alpha, already BGR order for OpenCV
+        img = np.ascontiguousarray(img)  # keep 4 channels (BGRA)
     finally:
         if bitmap is not None:
             try:
@@ -94,6 +142,28 @@ def grab(hwnd: int) -> np.ndarray:
     if not ok:
         raise RuntimeError("PrintWindow failed (window minimized?)")
     return img
+
+
+def grab_rgba(hwnd: int) -> np.ndarray:
+    """Capture window client area via PrintWindow, returned as raw 4-channel BGRA.
+
+    Identical occlusion-safety to grab(); provided so region-only consumers can
+    crop FIRST and convert only the crop (T-W2-PERF-004), avoiding a full-frame
+    BGR->gray conversion they don't need."""
+    return _printwindow_bgra(hwnd)
+
+
+def grab(hwnd: int) -> np.ndarray:
+    """Capture window client area via PrintWindow. Works even if occluded by other windows.
+
+    Every GDI handle is acquired inside the same try whose finally releases
+    only what was actually created (T-147): a throw between GetWindowDC and
+    SelectObject can no longer leak the already-acquired DCs, and a
+    zero-size client is rejected before anything is allocated.
+
+    T-W2-PERF-004: implemented as grab_rgba() with the alpha channel dropped, so
+    the expensive GDI/PrintWindow work lives in exactly one place."""
+    return np.ascontiguousarray(grab_rgba(hwnd)[:, :, :3])  # drop alpha -> BGR for OpenCV
 
 
 def grab_region(hwnd: int, region: list[int]) -> np.ndarray:
@@ -148,10 +218,13 @@ def grab_client_region(hwnd: int, region: list[int]) -> np.ndarray:
     then crop the client-space `region` from it. Never reads foreign pixels
     even when another window overlaps the target - at the cost of a full
     PrintWindow re-render. Use it whenever the window may not be foreground
-    (the accept/surrender background contract)."""
-    img = grab(hwnd)
+    (the accept/surrender background contract).
+
+    T-W2-PERF-004: crops the raw BGRA frame BEFORE materializing a BGR copy, so
+    only the cropped pixels are converted - the full-frame numpy copy is gone."""
+    img = grab_rgba(hwnd)
     x0, y0, x1, y1 = region
-    return img[y0:y1, x0:x1]
+    return np.ascontiguousarray(img[y0:y1, x0:x1, :3])  # crop-first, then BGR
 
 
 if __name__ == "__main__":

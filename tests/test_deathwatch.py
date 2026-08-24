@@ -136,12 +136,21 @@ def test_resurrect_click_off_when_not_configured(monkeypatch):
 # --- T-204 cursor move + PvP restart -----------------------------------------
 
 def test_cursor_move_point_computed_from_client_pct(monkeypatch):
+    """T-CORE-011: cursor percentages derive from CLIENT area (not window
+    frame), converted to screen via GetClientRect + ClientToScreen."""
     hwnd = 999
-    monkeypatch.setattr(deathwatch.win32gui, "GetWindowRect",
-                        lambda h: (100, 200, 1900, 1080))  # w=1800, h=880
+    # GetClientRect always returns (0, 0, w, h) where w,h are client dimensions.
+    monkeypatch.setattr(deathwatch.win32gui, "GetClientRect",
+                        lambda h: (0, 0, 1800, 880))
+    # ClientToScreen(hwnd, (0,0)) returns the screen origin of the client area.
+    monkeypatch.setattr(deathwatch.win32gui, "ClientToScreen",
+                        lambda h, pt: (100, 200))
+    # client_w=1800, client_h=880, sx=100, sy=200
+    # 75% of 1800 = 1350, 25% of 880 = 220 -> screen (1450, 420)
     assert deathwatch._cursor_move_point(hwnd,
                                          {"cursor_move_x_pct": 75,
                                           "cursor_move_y_pct": 25}) == (1450, 420)
+    # 0% of 1800 = 0, 99% of 880 = 871 -> screen (100, 1071)
     assert deathwatch._cursor_move_point(hwnd,
                                          {"cursor_move_x_pct": 0,
                                           "cursor_move_y_pct": 99}) == (100, 1071)
@@ -210,8 +219,15 @@ def test_trigger_vk_mapping():
     assert deathwatch._trigger_vk(None) is None
 
 
-def test_pvp_trigger_vk_uses_first_trigger_of_active_pvp_combo(monkeypatch):
+def test_pvp_trigger_vk_uses_first_trigger_of_active_pvp_combo(monkeypatch, tmp_path):
     data = {"mode": "ryze", "champions": {"ryze": {}}}
+    # W2-003: isolate the sidecar paths from BASE so a stray .runtime marker in
+    # the dev checkout cannot make this test return None before it reaches the
+    # config.json fallback it is meant to exercise.
+    monkeypatch.setattr(deathwatch, "_RUNTIME_TRIGGER_PATH",
+                        str(tmp_path / ".runtime_pvp_trigger"))
+    monkeypatch.setattr(deathwatch, "_RUNTIME_TRIGGER_INACTIVE_PATH",
+                        str(tmp_path / ".runtime_pvp_trigger_inactive"))
     monkeypatch.setattr(deathwatch.config_store, "validate_config",
                         lambda d: False)
     monkeypatch.setattr(deathwatch.ahk_builder, "_active_combos",
@@ -221,7 +237,11 @@ def test_pvp_trigger_vk_uses_first_trigger_of_active_pvp_combo(monkeypatch):
     assert vk == 0x7E
 
 
-def test_pvp_trigger_vk_none_without_pvp_combo(monkeypatch):
+def test_pvp_trigger_vk_none_without_pvp_combo(monkeypatch, tmp_path):
+    monkeypatch.setattr(deathwatch, "_RUNTIME_TRIGGER_PATH",
+                        str(tmp_path / ".runtime_pvp_trigger"))
+    monkeypatch.setattr(deathwatch, "_RUNTIME_TRIGGER_INACTIVE_PATH",
+                        str(tmp_path / ".runtime_pvp_trigger_inactive"))
     monkeypatch.setattr(deathwatch.config_store, "validate_config",
                         lambda d: False)
     monkeypatch.setattr(deathwatch.ahk_builder, "_active_combos",
@@ -229,7 +249,11 @@ def test_pvp_trigger_vk_none_without_pvp_combo(monkeypatch):
     assert deathwatch._pvp_trigger_vk() is None
 
 
-def test_pvp_trigger_vk_none_when_config_invalid(monkeypatch):
+def test_pvp_trigger_vk_none_when_config_invalid(monkeypatch, tmp_path):
+    monkeypatch.setattr(deathwatch, "_RUNTIME_TRIGGER_PATH",
+                        str(tmp_path / ".runtime_pvp_trigger"))
+    monkeypatch.setattr(deathwatch, "_RUNTIME_TRIGGER_INACTIVE_PATH",
+                        str(tmp_path / ".runtime_pvp_trigger_inactive"))
     monkeypatch.setattr(deathwatch.config_store, "validate_config",
                         lambda d: True)
     monkeypatch.setattr(deathwatch.ahk_builder, "_active_combos",

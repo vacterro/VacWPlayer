@@ -178,12 +178,14 @@ class _FakeRunner:
     def __init__(self):
         self.started = 0
         self.stopped = 0
+        self.stop_result = True  # W2-006: default to successful stop
 
     def start(self, args=None):
         self.started += 1
 
     def stop(self):
         self.stopped += 1
+        return self.stop_result  # W2-006: return proven-stop bool
 
 
 _TAB_MODULES = {

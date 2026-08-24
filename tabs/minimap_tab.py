@@ -310,14 +310,19 @@ class MinimapTab(tk.Frame):
     def get_data(self):
         # Read current values from live vars
         for key, r in list(self._rows.items()):
+            # W2-008: on incomplete/non-numeric input, keep the last valid value
+            # already in self.slots (seeded from the loaded config) instead of
+            # silently resetting the persisted coordinate to 0.
             try:
                 x = int(r["x_var"].get())
+                self.slots[key]["x"] = x
             except (tk.TclError, ValueError):
-                x = 0
+                x = self.slots[key].get("x", 0)
             try:
                 y = int(r["y_var"].get())
+                self.slots[key]["y"] = y
             except (tk.TclError, ValueError):
-                y = 0
+                y = self.slots[key].get("y", 0)
             self.slots[key] = {
                 "trigger": r["trigger_var"].get().strip(),
                 "x": x,

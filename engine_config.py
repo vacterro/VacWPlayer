@@ -12,6 +12,7 @@ FATAL SystemExit policy.
 """
 
 import copy
+import json
 import logging
 import math
 import os
@@ -29,18 +30,58 @@ def setup_logging(level: int = logging.INFO) -> None:
     )
 
 
-def mtime_changed(path: str, last_mtime: float) -> tuple[float, bool]:
-    """Return (current_mtime, changed) for a config file's mtime probe.
-
-    A missing/unreadable file keeps the last known mtime and reports no
-    change: the engine keeps running on the config it already loaded
-    instead of erroring or reloading in a tight loop.
-    """
+def config_revision(path):
+    """Return the (mtime_ns, size) revision token for a config file, or None if
+    it cannot be stat'd (missing/unreadable)."""
     try:
-        cur = os.path.getmtime(path)
+        st = os.stat(path)
     except OSError:
-        return last_mtime, False
-    return cur, cur != last_mtime
+        return None
+    return (st.st_mtime_ns, st.st_size)
+
+
+def mtime_changed(path, last):
+    """Return (revision, changed) for a config file's revision token.
+
+    `last` is the revision token previously returned here - a (mtime_ns, size)
+    tuple - or None. CORE-006: BOTH mtime and size are compared, so a rewrite
+    that flips only one of them is still detected (the old code discarded size,
+    so same-mtime/size-flip rewrites ran stale). A missing/unreadable file keeps
+    the last known token and reports no change, so the engine keeps running on
+    the config it already loaded instead of erroring or reloading in a tight
+    loop.
+    """
+    rev = config_revision(path)
+    if rev is None:
+        return last, False
+    if last is None:
+        return rev, True
+    return rev, rev != last
+
+
+def load_config_revision(config_path, config_name):
+    """Read + validate a config and return (cfg, revision_token).
+
+    CORE-006: the revision token is bound to the EXACT bytes parsed. The file is
+    opened, os.fstat pins the (mtime_ns, size) token to that open handle, then
+    the bytes are read and parsed. There is no stat-after-read gap for a
+    concurrent rewrite to slip through, so run_poller / deathwatch never seed
+    their reload tracker from a file state different from the cfg they run -
+    the old read-then-stat ordering let a replacement during that gap bind a
+    post-rewrite token to pre-rewrite bytes (silent stale config)."""
+    try:
+        with open(config_path, "rb") as f:
+            st = os.fstat(f.fileno())
+            raw = f.read()
+    except OSError as e:
+        print("FATAL: failed to load %s: %s" % (config_name, e))
+        raise SystemExit(1)
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except ValueError as e:
+        print("FATAL: failed to parse %s: %s" % (config_name, e))
+        raise SystemExit(1)
+    return validate_engine_config(data, config_name), (st.st_mtime_ns, st.st_size)
 
 
 # Which single-instance/engine key map is real: blocked keys are F13-F24
@@ -62,16 +103,19 @@ ENGINE_DEFAULTS = {
         "templates": [],
     },
     "surrender_config.json": {
-        "monitor_enabled": False,
+        # T-CORE-015: shipped behavioral values - monitor enabled on first
+        # run (surrender monitors by default), auto_accept off (user must
+        # opt in).
+        "monitor_enabled": True,
         "window_title": "",
         "poll_interval_sec": 5.0,
         "click_cooldown_sec": 3.0,
-        "auto_accept": True,
+        "auto_accept": False,
         "templates": [
             {"name": "Accept", "file": "templates/sur_accept.png",
-             "threshold": 0.75},
+             "threshold": 0.75, "action": "accept"},
             {"name": "Decline", "file": "templates/sur_decline.png",
-             "threshold": 0.75},
+             "threshold": 0.75, "action": "decline"},
         ],
     },
     "autocontinue_config.json": {
@@ -313,7 +357,12 @@ def _collect_problems(cfg, name):
     if name == "autocontinue_config.json":
         _check_autocontinue_buttons()
     if name == "surrender_config.json":
-        # T-CORE-014: migrate legacy template names to explicit action field.
+        # T-CORE-015/CORE-008: legacy templates named Accept/Decline are migrated
+        # to an explicit `action` field by normalize_surrender_actions at the load
+        # boundary (so the mode-aware runtime actually matches them). Here we only
+        # VALIDATE: an explicit but invalid action is rejected, and a name that
+        # merely *contains* accept/decline (without being exactly one of them) is
+        # flagged ambiguous because normalization cannot decide for it.
         items = cfg.get("templates")
         if isinstance(items, list):
             for i, item in enumerate(items):
@@ -327,16 +376,10 @@ def _collect_problems(cfg, name):
                            i, action)
                     continue
                 low = name_val.lower()
-                migrated = False
-                if low == "accept":
-                    items[i]["action"] = "accept"
-                    migrated = True
-                elif low == "decline":
-                    items[i]["action"] = "decline"
-                    migrated = True
-                if not migrated and ("accept" in low or "decline" in low):
-                    _p("key 'templates'[%d].name %r is ambiguous; add explicit action",
-                       i, name_val)
+                if "accept" in low or "decline" in low:
+                    if low not in ("accept", "decline"):
+                        _p("key 'templates'[%d].name %r is ambiguous; add explicit action",
+                           i, name_val)
 
     # Deathwatch-specific fields - every consumed value is validated.
     _check_region("death_label_region")
@@ -348,8 +391,26 @@ def _collect_problems(cfg, name):
     _check_number("autobuy_then_mid_delay_sec", minimum=0)
     for key in ("switch_to_work_window", "click_mid_on_resurrect",
                 "lock_window_resurrect", "autobuy_after_b", "autobuy_then_mid",
-                "controlsend_z"):
+                "controlsend_z", "cursor_move_on_resurrect",
+                "pvp_after_resurrect"):
         _check_bool(key)
+
+    # T-CORE-010: validate the T-204 cursor-move fields that are consumed by
+    # physical-input code. Invalid values reaching _cursor_move_point or
+    # handle_death can crash the death event.
+    for key in ("cursor_move_x_pct", "cursor_move_y_pct"):
+        if key in cfg:
+            v = cfg[key]
+            if not isinstance(v, int) or isinstance(v, bool):
+                _p("key %r must be a non-bool integer (0-100), got %r", key, v)
+            elif not (0 <= v <= 100):
+                _p("key %r must be in 0..100, got %r", key, v)
+    if "cursor_move_hold_ms" in cfg:
+        v = cfg["cursor_move_hold_ms"]
+        if not isinstance(v, int) or isinstance(v, bool):
+            _p("key 'cursor_move_hold_ms' must be a non-bool integer >= 0, got %r", v)
+        elif v < 0:
+            _p("key 'cursor_move_hold_ms' must be >= 0, got %r", v)
 
     if "quickbuy_presses" in cfg:
         v = cfg["quickbuy_presses"]
@@ -377,6 +438,38 @@ def _collect_problems(cfg, name):
     return problems
 
 
+def normalize_surrender_actions(cfg: dict, config_name: str) -> dict:
+    """CORE-008: real legacy surrender action migration at the load boundary.
+
+    Legacy surrender configs named their templates 'Accept'/'Decline' (or
+    'sur_accept' etc.) without an explicit `action` field. The mode-aware runtime
+    matches on `action` (surrender._scan / _targets_usable_with_cfg), so those
+    targets were silently dropped - a permanent no-op engine. This mutates the
+    cfg IN PLACE to attach the explicit action for exact legacy names and returns
+    it, so every downstream consumer (engine startup AND hot reload) sees actions.
+
+    Ambiguous names (anything containing accept/decline but not exactly one of
+    them, e.g. 'auto_accept') are left alone and remain validation errors - this
+    function never invents an action it cannot be sure of.
+    """
+    if config_name != "surrender_config.json":
+        return cfg
+    items = cfg.get("templates")
+    if not isinstance(items, list):
+        return cfg
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if item.get("action") is not None:
+            continue
+        low = item.get("name", "").lower()
+        if low == "accept":
+            item["action"] = "accept"
+        elif low == "decline":
+            item["action"] = "decline"
+    return cfg
+
+
 def validate_engine_config(cfg: dict, config_name: str) -> dict:
     """Semantically validate an engine config after json.load; exit on any
     problem.
@@ -385,12 +478,16 @@ def validate_engine_config(cfg: dict, config_name: str) -> dict:
     error, not something the engine can keep running through, so it prints
     the same FATAL line and raises SystemExit(1). Total by construction -
     the problem-gatherer above never throws.
+
+    CORE-008: a validated surrender config is also normalized (legacy Accept/
+    Decline template names get an explicit `action`) before it is returned, so
+    the runtime never runs a config whose targets it cannot match.
     """
     problems = _collect_problems(cfg, config_name)
     if problems:
         print("FATAL: failed to load %s: %s" % (config_name, "; ".join(problems)))
         raise SystemExit(1)
-    return cfg
+    return normalize_surrender_actions(cfg, config_name)
 
 
 def semantic_problems(cfg: dict, config_name: str) -> list[str]:

@@ -5,7 +5,7 @@ from theme import VintageButton, TOKENS, FONT_MAIN
 from vintage_widgets import VintageWindowPicker, grid_row
 from process_runner import ProcessRunner
 from locales import Locale
-from tabs.tab_config import load_json, update_json
+from tabs.tab_config import load_json, update_json, resolve_monitor_state
 from engine_config import canonical_default
 
 
@@ -133,13 +133,38 @@ class DeathWatchTab(tk.Frame):
 
         self._locale_widgets = []
 
-        # T-CORE-012: missing => canonical default; corrupt/invalid => OFF.
+        # T-CORE-014 / CORE-012: a missing canonical file is materialized by
+        # writing the complete validated default BEFORE the runner can start
+        # (the child's load_config() would FATAL on a missing file). If that
+        # materialization FAILS, the config is NOT usable and the monitor is
+        # forced OFF - the engine child must never launch against a
+        # missing/unvalidated file.
         if cfg_status == "missing":
-            mon_enabled = canonical_default(self.CONFIG_NAME).get("monitor_enabled", False)
-        elif cfg_status in ("corrupt", "io_error", "semantic_invalid", "wrong_shape"):
-            mon_enabled = False
-        else:
-            mon_enabled = cfg.get("monitor_enabled", False)
+            try:
+                from tabs.tab_config import save_json
+                canonical = canonical_default(self.CONFIG_NAME)
+                if save_json(self.cfg_path, canonical):
+                    # Re-read the freshly materialized file to confirm it is
+                    # present and validated before trusting its monitor flag.
+                    cfg, cfg_status = load_json(self.cfg_path, self.CONFIG_NAME)
+                    if cfg_status != "ok":
+                        # Written file failed re-validation (shouldn't happen
+                        # for the canonical default) - keep it for the UI but do
+                        # NOT mark the config usable.
+                        cfg = canonical
+                else:
+                    # Materialization failed (disk/permission): file absent.
+                    cfg = canonical
+                    cfg_status = "missing"
+            except Exception as e:
+                print(f"death_tab: failed to materialize config: {e}", file=sys.stderr)
+                cfg = canonical_default(self.CONFIG_NAME)
+                cfg_status = "missing"
+        # CORE-012: resolve the monitor flag + usability from the load status.
+        # Only "ok" authorizes the engine child to start.
+        mon_enabled, self._config_usable = resolve_monitor_state(
+            cfg_status, cfg,
+            canonical_default(self.CONFIG_NAME).get("monitor_enabled", False))
         self.monitor_var = tk.BooleanVar(value=mon_enabled)
         self.chk_monitor = tk.Checkbutton(form, text=Locale.tr("enable_death_monitor"), variable=self.monitor_var,
                                           bg=TOKENS["background"], fg=TOKENS["textPrimary"], selectcolor=TOKENS["compareBack"],
@@ -275,7 +300,7 @@ class DeathWatchTab(tk.Frame):
 
         self._tick()
         if self.monitor_var.get():
-            self.runner.start(["--replace"])
+            self._safe_start()
 
     def apply_locale(self):
         for kind, widget, key in self._locale_widgets:
@@ -308,11 +333,24 @@ class DeathWatchTab(tk.Frame):
         self.window_picker.title_var.set(d["window_title"])
         self.work_window.title_var.set(d["work_window_title"])
 
+    def _safe_start(self):
+        """CORE-012 gate: only launch the engine child when the on-disk config
+        is present and validated (self._config_usable). Returns the start()
+        result, or False when the config is not usable (no child is spawned)."""
+        if not self._config_usable:
+            self.status_var.set(Locale.tr("config_not_ready",
+                                          fallback="Config not ready"))
+            self.monitor_var.set(False)
+            return False
+        return self.runner.start(["--replace"])
+
     def _trigger_apply(self):
         if not self.save():
             return  # nothing was persisted - don't touch the engine (T-142)
+        # A successful save validated + wrote the config: it is now usable.
+        self._config_usable = True
         if self.monitor_var.get():
-            self.runner.start(["--replace"])
+            self._safe_start()
         try:
             self.event_generate("<<ApplyStart>>")
         except tk.TclError:
@@ -323,12 +361,19 @@ class DeathWatchTab(tk.Frame):
             if not self.save():
                 self.monitor_var.set(False)  # persistence failed - don't start
                 return
-            self.runner.start(["--replace"])
+            # A successful save validated + wrote the config: it is now usable.
+            self._config_usable = True
+            self._safe_start()
         else:
-            self.runner.stop()
-            # W2-002: stopping is authoritative - never lie about runtime state.
-            if not self.save_monitor_state():
-                self.status_var.set(Locale.tr("save_failed", fallback="Stopped (state not persisted)"))
+            stopped = self.runner.stop()
+            # W2-006: only persist monitor_enabled=False when proven exit.
+            if stopped:
+                if not self.save_monitor_state():
+                    self.status_var.set(Locale.tr("save_failed", fallback="Stopped (state not persisted)"))
+            else:
+                # W2-006: stop failed, child still live, retain ON state.
+                self.monitor_var.set(True)
+                self.status_var.set(Locale.tr("stop_failed", fallback="StopFailed (still running)"))
 
     def save_monitor_state(self):
         return update_json(self.cfg_path,
@@ -382,5 +427,5 @@ class DeathWatchTab(tk.Frame):
                 print(f"DeathWatch save skipped (invalid input): {e}", file=sys.stderr)
             else:
                 messagebox.showerror(Locale.tr("invalid_value"), str(e))
-            return
+            return False
         return ok

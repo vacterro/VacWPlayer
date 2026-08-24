@@ -108,3 +108,58 @@ def update_json(path, mutate, canonical_default=None, config_name=None):
     if config_name is not None and engine_config.semantic_problems(data, config_name):
         return False
     return save_json(path, data)
+
+
+def remove_template_by_identity(templates, identity):
+    """W2-006: delete a template by VALUE identity, never by position.
+
+    ``identity`` is the full template dict snapshot captured when the row was
+    rendered. We match against the freshly-loaded on-disk list INSIDE the
+    update_json() RMW lambda, so an external change between the tree render and
+    the write cannot shift indices and delete the wrong item.
+
+    Match order:
+      1. exact full-snapshot equality (the precise row the user clicked),
+      2. fallback to (name, file) visual identity if the item was edited
+         externally in a non-identifying field (e.g. threshold).
+
+    Returns True iff an item was removed. Never raises.
+    """
+    if not isinstance(templates, list) or not isinstance(identity, dict):
+        return False
+    # 1) exact full-snapshot match
+    for i, t in enumerate(templates):
+        if isinstance(t, dict) and all(t.get(k) == identity.get(k) for k in identity):
+            del templates[i]
+            return True
+    # 2) fallback: (name, file) visual identity
+    name = identity.get("name")
+    file_ = identity.get("file")
+    for i, t in enumerate(templates):
+        if isinstance(t, dict) and t.get("name") == name and t.get("file") == file_:
+            del templates[i]
+            return True
+    return False
+
+
+def resolve_monitor_state(load_status, cfg, default_monitor_enabled=False):
+    """CORE-012 gate decision (pure, unit-testable).
+
+    Decide ``(mon_enabled, config_usable)`` from the post-materialization load
+    status and the loaded config dict. The engine child may only be started
+    when the on-disk config is present AND validated - never against a missing
+    (materialization failed) or corrupt/unvalidated file, because the child's
+    own ``load_config()`` would FATAL on it.
+
+    - ``"ok"``: config present + validated -> honor its monitor_enabled, usable.
+    - ``"missing"``: materialization failed, file still absent -> OFF, not usable.
+    - ``corrupt`` / ``io_error`` / ``semantic_invalid`` / ``wrong_shape``:
+      invalid config -> OFF, not usable.
+
+    ``cfg`` is the loaded dict (or ``{}`` when the load failed);
+    ``default_monitor_enabled`` is the canonical default's ``monitor_enabled``,
+    used only in the ``"ok"`` path when the key is absent.
+    """
+    if load_status == "ok":
+        return bool(cfg.get("monitor_enabled", default_monitor_enabled)), True
+    return False, False

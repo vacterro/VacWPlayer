@@ -121,6 +121,12 @@ class AFKFarmTab(tk.Frame):
         self.var_combo_ms = tk.IntVar(value=int(cfg["combo_interval"]))
         self.var_combo_ms.trace_add("write", self._auto_save)
         VintageEntry(form, textvariable=self.var_combo_ms, width=6).grid(row=r, column=1, sticky="w")
+        # W2-008: remember the last *valid* numeric value we actually persisted,
+        # seeded from the loaded config. When the field is mid-edit (empty or
+        # partial), get_data() must keep this instead of falling back to the
+        # canonical default.
+        self._last_valid_duration = int(cfg["move_duration"])
+        self._last_valid_combo_ms = int(cfg["combo_interval"])
 
         r += 1
         sep = tk.Frame(form, bg=TOKENS["borderMuted"], height=1)
@@ -229,12 +235,15 @@ class AFKFarmTab(tk.Frame):
     def get_data(self):
         try:
             duration = int(self.var_duration.get())
+            self._last_valid_duration = duration
         except (tk.TclError, ValueError):
-            duration = AFKFARM_DEFAULTS["move_duration"]
+            # W2-008: retain the last valid value; never fall back to default.
+            duration = self._last_valid_duration
         try:
             combo_ms = int(self.var_combo_ms.get())
+            self._last_valid_combo_ms = combo_ms
         except (tk.TclError, ValueError):
-            combo_ms = AFKFARM_DEFAULTS["combo_interval"]
+            combo_ms = self._last_valid_combo_ms
         slots = {}
         for key in SLOT_KEYS:
             slots[key] = {

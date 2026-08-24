@@ -584,17 +584,20 @@ def test_pump_eof_exited_child_normal_stop_no_terminate():
 
 
 def test_pump_stale_generation_events_ignored():
+    """PERF-001: stale generation events (eof, line slot) are ignored."""
     pr, status, check = _runner()
     child = _TrackedProc(alive=True)
     pr.proc = child
     pr._gen = 2  # current generation
     pr.q.put(("eof", 1))  # stale pump's event
-    pr.q.put(("line", 1))  # stale line event (format changed: line data in deque)
+    # PERF-001: stale line goes into the single-slot, not a deque.
     with pr._lock:
-        pr._line_buf.append("old line")
+        pr._latest_line = (1, "old line")
     pr.poll_log()
     assert pr.proc is child  # untouched by stale events
     assert child.termed is False
+    # The stale slot should have been consumed and cleared.
+    assert pr._latest_line is None
 
 
 def test_pump_emits_pump_error_when_stream_fails_while_alive():
@@ -657,7 +660,7 @@ def test_grab_client_region_crops_printwindow(monkeypatch):
     calls = []
     full = np.zeros((100, 200, 3), dtype=np.uint8)
     full[50:60, 30:40] = 7
-    monkeypatch.setattr(capture, "grab", lambda h: calls.append(h) or full)
+    monkeypatch.setattr(capture, "grab_rgba", lambda h: calls.append(h) or full)
     crop = capture.grab_client_region(123, [30, 50, 40, 60])
     assert calls == [123]
     assert crop.shape == (10, 10, 3)
@@ -667,7 +670,7 @@ def test_grab_client_region_crops_printwindow(monkeypatch):
 def test_grab_client_region_passthrough_failure(monkeypatch):
     def boom(hwnd):
         raise RuntimeError("minimized")
-    monkeypatch.setattr(capture, "grab", boom)
+    monkeypatch.setattr(capture, "grab_rgba", boom)
     try:
         capture.grab_client_region(1, [0, 0, 1, 1])
         raise AssertionError("should have raised")
@@ -1075,8 +1078,19 @@ def _run_deathwatch_reload(monkeypatch, make_candidate, stop_after=4):
     monkeypatch.setattr(deathwatch.window_ctl, "set_dpi_aware", lambda: None)
     monkeypatch.setattr(deathwatch.key_blocker, "start", lambda *a, **k: None)
     monkeypatch.setattr(deathwatch.key_blocker, "stop", lambda *a, **k: None)
-    monkeypatch.setattr(deathwatch, "load_config", _load)
     monkeypatch.setattr(deathwatch, "_reload_candidate", _load)
+
+    # CORE-006 changed the startup loader from deathwatch.load_config to
+    # engine_config.load_config_revision; patch the REAL loader so the shared
+    # load_calls counter still aligns (startup == call 1 -> real config,
+    # first hot reload == call 2 -> candidate). Returns the (cfg, revision)
+    # tuple the new loader is expected to produce.
+    def _load_revision(config_path, config_name):
+        state["load_calls"] += 1
+        cfg = real_cfg if state["load_calls"] == 1 else make_candidate()
+        return cfg, (state["load_calls"], 1)
+    monkeypatch.setattr(deathwatch.engine_config, "load_config_revision",
+                        _load_revision)
     monkeypatch.setattr(deathwatch.engine_config, "mtime_changed", _changed)
     monkeypatch.setattr(deathwatch.digit_reader, "load_templates",
                         lambda path: {"0": _LABEL_MARK}

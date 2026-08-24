@@ -593,6 +593,76 @@ def test_load_config_rejects_structural_garbage(monkeypatch, tmp_path, data):
     assert isinstance(cfg["combos"], list)
 
 
+# --- CORE-011: corrupt-primary recovery must migrate legacy backups ----------
+
+def test_recover_corrupt_config_migrates_legacy_bak(monkeypatch, tmp_path):
+    """A backup that is only valid AFTER legacy migration (mode="xin" with
+    legacy xin data) must restore successfully instead of forcing defaults and
+    the write guard (CORE-011)."""
+    import main as main_mod
+    cfg_file = tmp_path / "config.json"
+    main_mod.CONFIG_FILE = str(cfg_file)
+    main_mod.CONFIG_LOCAL_FILE = str(tmp_path / "config.local.json")
+    # Live config corrupt -> recovery path taken.
+    cfg_file.write_text("{corrupt", encoding="utf-8")
+    # The .bak carries legacy schema valid only after migration.
+    legacy = main_mod.default_config()
+    legacy["mode"] = "xin"
+    legacy["xin"] = {"enabled": True, "legacy_key": 99}
+    legacy["champions"] = {}  # ensure migration builds xin_zhao fresh
+    config_store.atomic_write(
+        str(cfg_file) + config_store.BAK_SUFFIX, legacy)
+
+    main_mod.config_warning = None
+    main_mod.config_write_blocked = None
+    cfg = main_mod._recover_corrupt_config()
+    assert main_mod.config_warning == "restored"
+    assert main_mod.config_write_blocked is None
+    assert cfg["mode"] == "xin_zhao"                       # legacy mode mapped
+    assert cfg["champions"]["xin_zhao"]["legacy_key"] == 99  # legacy data preserved
+
+
+def test_recover_corrupt_config_rejects_invalid_bak(monkeypatch, tmp_path):
+    """An invalid backup (even after migration) must stay rejected and untouched."""
+    import main as main_mod
+    cfg_file = tmp_path / "config.json"
+    main_mod.CONFIG_FILE = str(cfg_file)
+    main_mod.CONFIG_LOCAL_FILE = str(tmp_path / "config.local.json")
+    cfg_file.write_text("{corrupt", encoding="utf-8")
+    bad = main_mod.default_config()
+    bad["mode"] = 42  # not a legacy mode, not a valid mode -> still invalid
+    config_store.atomic_write(
+        str(cfg_file) + config_store.BAK_SUFFIX, bad)
+
+    main_mod.config_warning = None
+    main_mod.config_write_blocked = None
+    cfg = main_mod._recover_corrupt_config()
+    assert main_mod.config_warning == "corrupt"
+    assert main_mod.config_write_blocked == "corrupt"
+    assert cfg["mode"] == main_mod.default_config()["mode"]
+
+
+def test_load_config_corrupt_restores_legacy_bak(monkeypatch, tmp_path):
+    """End-to-end: corrupt primary + legacy backup must restore via load_config."""
+    import main as main_mod
+    cfg_file = tmp_path / "config.json"
+    main_mod.CONFIG_FILE = str(cfg_file)
+    main_mod.CONFIG_LOCAL_FILE = str(tmp_path / "config.local.json")
+    cfg_file.write_text("{corrupt", encoding="utf-8")
+    legacy = main_mod.default_config()
+    legacy["mode"] = "xin"
+    legacy["xin"] = {"enabled": True, "legacy_key": 7}
+    legacy["champions"] = {}
+    config_store.atomic_write(
+        str(cfg_file) + config_store.BAK_SUFFIX, legacy)
+
+    main_mod.config_warning = None
+    cfg = main_mod.load_config()
+    assert main_mod.config_warning == "restored"
+    assert cfg["mode"] == "xin_zhao"
+    assert cfg["champions"]["xin_zhao"]["legacy_key"] == 7
+
+
 def test_load_config_merge_survives_hostile_nested(monkeypatch, tmp_path):
     """Legacy migration surfaces (ryze/xin as non-dicts) must not crash the
     merge when the top-level shapes are valid."""
@@ -1340,7 +1410,7 @@ def test_watchdog_restarts_last_applied_not_editor_state(monkeypatch):
     resurrects the last APPLIED config, never mutable editor state - otherwise
     whether the edit goes live depends on whether AHK happened to crash
     (T-177)."""
-    import main as main_mod, copy
+    import main as main_mod, copy, threading
     w = object.__new__(main_mod.VacWPlayer)
     applied = {"mode": "general", "toggles": {},
                "combos": [{"trigger": "F13", "keys": "q", "interval": 50}]}
@@ -1359,13 +1429,16 @@ def test_watchdog_restarts_last_applied_not_editor_state(monkeypatch):
     w.status_lbl = type("S", (), {"config": lambda *a, **k: None})()
     w._watchdog_done = lambda ok, msg: None
     w._applying = False
+    w._engine_lock = threading.Lock()
+    w._engine_epoch = 0
+    w._active_runtime_config = None
     w._watchdog_worker()
     assert seen and seen[0]["combos"][0]["trigger"] == "F13"  # last-applied
 
 
 def test_apply_success_records_last_applied(monkeypatch):
     """Only a config that generate_and_run ACCEPTED becomes last-applied."""
-    import main as main_mod, copy
+    import main as main_mod, copy, threading
     w = object.__new__(main_mod.VacWPlayer)
     good = {"mode": "general", "toggles": {}, "combos": []}
     w.config = copy.deepcopy(good)
@@ -1381,13 +1454,16 @@ def test_apply_success_records_last_applied(monkeypatch):
     w.status_lbl = type("S", (), {"config": lambda *a, **k: None})()
     w._update_ahk_dot = lambda r: None
     w._applying = False
-    w._apply_worker(copy.deepcopy(good))
+    w._engine_lock = threading.Lock()
+    w._engine_epoch = 0
+    w._active_runtime_config = None
+    w._apply_worker(copy.deepcopy(good), w._engine_epoch)
     assert w._last_applied_config is not None
     assert w._last_applied_config["combos"] == []
 
 
 def test_apply_failure_keeps_previous_last_applied(monkeypatch):
-    import main as main_mod, copy
+    import main as main_mod, copy, threading
     w = object.__new__(main_mod.VacWPlayer)
     prev = {"mode": "general", "toggles": {}, "combos": [{"trigger": "F13"}]}
     w.config = {"mode": "general", "toggles": {}, "combos": []}
@@ -1403,7 +1479,10 @@ def test_apply_failure_keeps_previous_last_applied(monkeypatch):
     w.status_lbl = type("S", (), {"config": lambda *a, **k: None})()
     w._update_ahk_dot = lambda r: None
     w._applying = False
-    w._apply_worker(copy.deepcopy(w.config))
+    w._engine_lock = threading.Lock()
+    w._engine_epoch = 0
+    w._active_runtime_config = None
+    w._apply_worker(copy.deepcopy(w.config), w._engine_epoch)
     assert w._last_applied_config["combos"][0]["trigger"] == "F13"
 
 
@@ -1450,7 +1529,10 @@ def test_apply_worker_uses_frozen_candidate_not_mutable_draft(monkeypatch):
     w.status_lbl = type("S", (), {"config": lambda *a, **k: None})()
     w._update_ahk_dot = lambda r: None
     w._applying = False
-    w._apply_worker(copy.deepcopy(a_cfg))  # FROZEN candidate from apply_and_start
+    w._engine_lock = __import__("threading").Lock()
+    w._engine_epoch = 0
+    w._active_runtime_config = None
+    w._apply_worker(copy.deepcopy(a_cfg), w._engine_epoch)  # FROZEN candidate from apply_and_start
     assert seen[0]["combos"][0]["trigger"] == "F13"  # generated from A
     assert w._last_applied_config["combos"][0]["trigger"] == "F13"
     assert w.config["combos"][0]["trigger"] == "F14"  # draft B unchanged

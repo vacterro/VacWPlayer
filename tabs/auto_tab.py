@@ -28,6 +28,10 @@ class AutoContinueTab(tk.Frame):
         self.cfg_path = os.path.join(BASE, self.CONFIG_NAME)
         cfg, cfg_status = load_json(self.cfg_path, self.CONFIG_NAME)
         self.buttons = [dict(b) for b in cfg.get("buttons", canonical_default(self.CONFIG_NAME)["buttons"])]
+        # W2-005: whether the user has a pending button edit in the GUI. The
+        # engine may hot-reload buttons out-of-process, so a scalar/monitor save
+        # must only overwrite on-disk buttons when THIS tab actually changed them.
+        self._buttons_dirty = False
 
 
         form = tk.Frame(self, bg=TOKENS["background"])
@@ -144,6 +148,7 @@ class AutoContinueTab(tk.Frame):
         # Undo removes: restore the canonical buttons (deep-copied so the live
         # list never aliases the canonical source's region lists, T-141).
         self.buttons = copy.deepcopy(d["buttons"])
+        self._buttons_dirty = True  # explicit button change - must be persisted
         self._refresh_tree()
         self._auto_save()
 
@@ -161,10 +166,15 @@ class AutoContinueTab(tk.Frame):
                 return
             self.runner.start(["--replace"])
         else:
-            self.runner.stop()
-            # W2-002: stopping is authoritative - never lie about runtime state.
-            if not self.save_monitor_state():
-                self.status_var.set(Locale.tr("save_failed", fallback="Stopped (state not persisted)"))
+            stopped = self.runner.stop()
+            # W2-006: only persist monitor_enabled=False when proven exit.
+            if stopped:
+                if not self.save_monitor_state():
+                    self.status_var.set(Locale.tr("save_failed", fallback="Stopped (state not persisted)"))
+            else:
+                # W2-006: stop failed, child still live, retain ON state.
+                self.monitor_var.set(True)
+                self.status_var.set(Locale.tr("stop_failed", fallback="StopFailed (still running)"))
 
     def save_monitor_state(self):
         return update_json(self.cfg_path,
@@ -199,6 +209,7 @@ class AutoContinueTab(tk.Frame):
             messagebox.showinfo(Locale.tr("remove_lbl"), Locale.tr("remove_need"))
             return
         del self.buttons[int(sel[0])]
+        self._buttons_dirty = True  # pending button edit - must be persisted
         self._refresh_tree()
 
     def save(self, silent=False):
@@ -207,7 +218,16 @@ class AutoContinueTab(tk.Frame):
             cfg["window_title"] = self.window_picker.get()
             cfg["poll_interval_sec"] = float(self.poll_interval.get())
             cfg["click_cooldown_sec"] = float(self.click_cooldown.get())
-            cfg["buttons"] = [dict(b) for b in self.buttons]
+            # W2-005: only overwrite on-disk buttons when the GUI has a pending
+            # button edit. Otherwise preserve whatever is currently on disk - the
+            # autocontinue engine may have hot-reloaded buttons out-of-process, and
+            # a scalar/monitor save must not clobber them with this tab's stale
+            # startup snapshot.
+            # Fail-safe default: a missing/False flag means "no pending button
+            # edit", so on-disk buttons are preserved (W2-005 intent). This also
+            # keeps save() robust for partially-initialized harness instances.
+            if getattr(self, "_buttons_dirty", False):
+                cfg["buttons"] = [dict(b) for b in self.buttons]
         try:
             ok = update_json(self.cfg_path, mutate,
                              canonical_default(self.CONFIG_NAME), config_name=self.CONFIG_NAME)
@@ -216,5 +236,10 @@ class AutoContinueTab(tk.Frame):
                 print(f"AutoContinue save skipped (invalid input): {e}", file=sys.stderr)
             else:
                 messagebox.showerror(Locale.tr("invalid_value"), str(e))
-            return
+            return False
+        if ok:
+            # Persisted successfully: the on-disk buttons now match the GUI (either
+            # the pending edit was written, or the unchanged disk buttons were
+            # preserved), so there is no longer a pending button edit.
+            self._buttons_dirty = False
         return ok

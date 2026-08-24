@@ -19,7 +19,7 @@
 - **Vahekaart Minimap** – kliki-ja-liigu kiirklahvid seotud raja positsioonidega, read ümberjärjestatavad.
 - **Tšempioni režiim** (rippmenüü valib täpselt ühe aktiivse kombokomplekti), et F13–F15 ei satuks kunagi kangelaste vahel konflikti.
 - **Sammupõhised viivitused** – süntaks `klahv:ms`, nt `q,e:120,{Space}:200`.
-- **Süsteemisalve ikoon** – X peidab salve, mootor jätkab tööd; Quit peatab kõik.
+- **Süsteemisalve ikoon** – X peidab salve ja peatab mootori (wr_runtime.ahk väljub koos aknaga); Quit peatab kõik ja väljub.
 - **Wiki** – arhitektuur, seadete referents, tabide juhend: `docs/wiki/`.
 
 ## Nõuded
@@ -65,4 +65,4 @@ Viis konfiguratsiooni, igaühel üks töö: `config.json` (kombod, režiim, lül
 
 Komadega eraldatud klahvid. `{Space}`, `f`, tähed. Oskuste tähed q/w/e/r valatakse Shiftiga (enda peale valamine), kui "Shift-cast" pole välja lülitatud. Lisa `:ms` klahvile, et määrata selle sammu viivitus; vastasel juhul rakendub kombo intervall. Hoidke päästikut all, et tsüklit korrata.
 
-<!-- source-digest: README.md sha256:7e51a7b4419c7f3c -->
+<!-- source-digest: README.md sha256:5798da7d20fc2d7f -->

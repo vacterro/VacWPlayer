@@ -4,7 +4,7 @@ import threading
 import subprocess
 import queue
 import sys
-from collections import deque
+
 
 logger = logging.getLogger(__name__)
 
@@ -20,13 +20,12 @@ class ProcessRunner:
     or overwrite current UI state. The Popen object is captured locally and
     stored on the instance only after a successful spawn.
 
-    T-W2-PERF-001: line output is coalesced to the latest value via a bounded
-    deque (MAX_LINE_HISTORY=20) so a noisy child cannot grow memory without
-    bound. Control events (eof, pump_error) pass through unbounded because they
-    are terminal and few. poll_log() performs at most one visible .set() per
-    tick.
+    PERF-001: line output uses a single-slot overwrite (not a queue of
+    events). The pump thread atomically overwrites _latest_line under
+    lock; poll_log() consumes it once per tick. The queue only carries
+    terminal/control events (eof, pump_error). This gives O(1) memory and
+    O(1) poll cost regardless of line count.
     """
-    MAX_LINE_HISTORY = 20
 
     def __init__(self, script_name, status_var, last_line_var, check_var):
         self.script_path = os.path.join(BASE, script_name)
@@ -34,10 +33,10 @@ class ProcessRunner:
         self.last_line_var = last_line_var
         self.check_var = check_var
         self.proc = None
-        # Control events use an unbounded queue (few, terminal).
+        # PERF-001: only terminal/control events (eof, pump_error) use the queue.
         self.q = queue.Queue()
-        # Line output uses a bounded deque - only the latest N values matter.
-        self._line_buf = deque(maxlen=self.MAX_LINE_HISTORY)
+        # PERF-001: single-slot latest line: (gen, text) or None.
+        self._latest_line = None  # (gen, text) under _lock
         self._gen = 0
         self._lock = threading.Lock()
 
@@ -51,6 +50,9 @@ class ProcessRunner:
                 return True
             self.proc = None
             self._gen += 1
+            # PERF-001: clear stale line slot on new generation so old-output
+            # never surfaces after restart.
+            self._latest_line = None
             gen = self._gen
             try:
                 proc = subprocess.Popen(
@@ -75,11 +77,12 @@ class ProcessRunner:
     def _pump(self, proc, gen):
         try:
             for line in proc.stdout:
-                # Line events: enqueue a bounded deque push (thread-safe for
-                # single append, poll_log drains via snapshot).
-                self.q.put(("line", gen))
+                # PERF-001: atomically overwrite the single-slot latest line.
+                # poll_log consumes it once per tick; intermediate lines are
+                # discarded. No queue event is sent for line output.
+                text = line.rstrip("\n")
                 with self._lock:
-                    self._line_buf.append(line.rstrip("\n"))
+                    self._latest_line = (gen, text)
             self.q.put(("eof", gen))
         except ValueError:
             logger.debug("pump stream closed while draining (generation %d)", gen)
@@ -114,47 +117,74 @@ class ProcessRunner:
         return proc.poll() is not None
 
     def poll_log(self):
-        while True:
-            try:
-                item = self.q.get_nowait()
-            except queue.Empty:
-                break
+        # PERF-001: consume at most one terminal event AND one line slot.
+        # Terminal events are processed first (eof/pump_error are rare and
+        # lossless). Then atomically consume the latest line once.
+        try:
+            item = self.q.get_nowait()
+        except queue.Empty:
+            item = None
+        if item is not None:
             tag = item[0]
-            if tag == "line":
-                gen, = item[1:]
-            elif tag == "eof":
+            if tag == "eof":
                 gen, = item[1:]
             elif tag == "pump_error":
                 gen, payload = item[1], item[2]
             else:
-                continue
-            if gen != self._gen:
-                continue
-            if tag == "line":
-                # Coalesce: only show the latest N lines from the bounded buf.
-                with self._lock:
-                    latest = list(self._line_buf)
-                if latest:
-                    self.last_line_var.set(latest[-1][:80])
-            elif tag == "pump_error":
-                with self._lock:
-                    ok = self._stop_proc(self.proc)
-                    if ok:
-                        self.proc = None
-                        self.status_var.set("Error: %s" % payload)
-                    self.check_var.set(False)
-            else:  # eof
-                with self._lock:
-                    self._stop_proc(self.proc)
-                    self.proc = None
-                    self.status_var.set("Stopped")
-                    self.check_var.set(False)
+                gen = None
+            if gen is not None and gen == self._gen:
+                if tag == "pump_error":
+                    # CORE-009: only flip the monitor checkbox to OFF when the
+                    # child is PROVEN exited. If _stop_proc failed the child is
+                    # still live - reporting monitor OFF would hide a running
+                    # process, and a caller persisting monitor_enabled=False on
+                    # that signal would orphan it (W2-006).
+                    with self._lock:
+                        ok = self._stop_proc(self.proc)
+                        if ok:
+                            self.proc = None
+                            self.status_var.set("Error: %s" % payload)
+                            self.check_var.set(False)
+                else:  # eof
+                    with self._lock:
+                        ok = self._stop_proc(self.proc)
+                        if ok:
+                            self.proc = None
+                            self.status_var.set("Stopped")
+                            self.check_var.set(False)
+        # PERF-001: atomically consume the latest line slot (at most once).
+        with self._lock:
+            slot = self._latest_line
+            self._latest_line = None
+        if slot is not None:
+            slot_gen, slot_text = slot
+            if slot_gen == self._gen:
+                self.last_line_var.set(slot_text[:80])
 
     def stop(self):
+        """Stop the child process. Returns True when proven exited, False when
+        stop failed and a live child is retained.
+
+        W2-006: callers must check the return value before persisting
+        monitor_enabled=False - a failed stop means the child is still live.
+        """
         with self._lock:
             if self.is_running():
                 ok = self._stop_proc(self.proc)
                 if ok:
                     self.proc = None
+                    self.status_var.set("Stopped")
+                    self.check_var.set(False)
+                    return True
+                # stop failed: proc retained, status unchanged. Do NOT flip the
+                # monitor checkbox OFF here - the child is still live, so
+                # reporting monitor OFF would hide a running process that callers
+                # would then orphan (CORE-009 / W2-006). The caller sees False
+                # from stop() and must not persist monitor_enabled=False.
+                return False
+            else:
+                # Already exited: clear any stale reference.
+                self.proc = None
         self.status_var.set("Stopped")
         self.check_var.set(False)
+        return True

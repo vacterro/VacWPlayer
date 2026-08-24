@@ -1251,6 +1251,9 @@ def _gen_master_spammer(a, target_exe, toggles, combos):
         afk_ms = int(toggles.get("anti_afk_interval", 5000))
         a.append("    if (AntiAFK && (currentTime - LastAntiAFK >= " + str(afk_ms) + ")) {")
         a.append("        SendInput {Blind}{RButton}")
+        a.append("        MouseGetPos, MX, MY")
+        a.append('        DllCall("SetCursorPos", "Int", MX + 3, "Int", MY)')
+        a.append('        DllCall("SetCursorPos", "Int", MX, "Int", MY)')
         a.append("        LastAntiAFK := currentTime")
         a.append("    }")
     if toggles.get("space_spam", True):

@@ -299,6 +299,9 @@ def test_stop_pids_kills_only_verified_ahk_instances(monkeypatch):
     monkeypatch.setattr(ag.win32process, "GetModuleFileNameEx",
                         lambda h, i: {101: r"C:\AHK\AutoHotkeyU64.exe",
                                       202: r"C:\WINDOWS\notepad.exe"}[h])
+    # CORE-001: ownership is now verified against the pinned handle. Only our
+    # AHK script (handle 101) passes; the foreign notepad (202) does not.
+    monkeypatch.setattr(ag, "_handle_is_our_ahk", lambda h: h == 101)
     monkeypatch.setattr(ag.win32api, "TerminateProcess",
                         lambda h, c: killed.append(h))
     monkeypatch.setattr(ag.win32api, "CloseHandle", lambda h: closed.append(h))
@@ -307,6 +310,32 @@ def test_stop_pids_kills_only_verified_ahk_instances(monkeypatch):
     ag._stop_pids([101, 202])
     assert killed == [101]   # reused non-AHK pid is NEVER terminated
     assert 202 in closed     # foreign handle is closed, not killed
+
+
+def test_stop_pids_rejects_reused_foreign_ahk(monkeypatch):
+    """CORE-001: a PID reused by a foreign AutoHotkey process must NOT be
+    terminated. Image-name equality is not ownership; the command-line check on
+    the pinned handle must catch the foreign script. The stop still reports
+    KILL_FAILED because we cannot prove our own instance exited."""
+    killed, closed = [], []
+    monkeypatch.setattr(ag.win32api, "OpenProcess",
+                        lambda acc, inh, pid: pid)
+    monkeypatch.setattr(ag.win32process, "GetModuleFileNameEx",
+                        lambda h, i: r"C:\Other\AutoHotkeyU64.exe")
+    monkeypatch.setattr(ag.win32process, "GetProcessId", lambda h: 101)
+    # The (reused) pid's command line is NOT our script -> ownership fails.
+    monkeypatch.setattr(ag, "_pid_cmdline",
+                        lambda pid: "AutoHotkeyU64.exe C:\\foreign.ahk")
+    monkeypatch.setattr(ag, "_cmdline_launches_our_script", lambda cmd: False)
+    monkeypatch.setattr(ag.win32api, "TerminateProcess",
+                        lambda h, c: killed.append(h))
+    monkeypatch.setattr(ag.win32api, "CloseHandle", lambda h: closed.append(h))
+    monkeypatch.setattr(ag.win32event, "WaitForSingleObject",
+                        lambda h, ms: 0)
+    res = ag._stop_pids([101])
+    assert killed == []        # foreign AHK never terminated
+    assert 101 in closed      # foreign handle closed
+    assert res == "KILL_FAILED"
 
 
 def test_stop_pids_open_failure_skips(monkeypatch):

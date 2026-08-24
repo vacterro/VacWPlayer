@@ -5,6 +5,8 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
+
 BASE = Path(__file__).resolve().parent.parent
 if str(BASE) not in sys.path:
     sys.path.insert(0, str(BASE))
@@ -67,8 +69,9 @@ def test_pump_error_terminates_live_child(monkeypatch):
 
 
 def test_pump_error_retains_proc_on_terminate_failure(monkeypatch):
-    """When terminate raises OSError, self.proc is RETAINED so poll_log can
-    retry later - UI must never say Stopped while a child is still live."""
+    """When terminate fails, self.proc is RETAINED so poll_log can retry later,
+    and the monitor checkbox must stay ON (child still live) - UI must never
+    report monitor OFF while a child is running (CORE-009 / W2-006)."""
     status, last, check = FakeVar(), FakeVar(), FakeVar()
     pr = process_runner.ProcessRunner("_stub_engine.py", status, last, check)
     orig_proc = object()
@@ -83,11 +86,76 @@ def test_pump_error_retains_proc_on_terminate_failure(monkeypatch):
     check.value = True
     pr.q.put(("pump_error", 1, "stream broken"))
     pr.poll_log()
-    # terminate failed: proc retained, status stays Running
+    # terminate failed: proc retained, status stays Running, checkbox stays ON
     assert pr.proc is orig_proc
     assert status.value == "Running"
-    assert check.value is False
+    assert check.value is True
     assert len(failed) == 1
+
+
+def test_pump_error_keeps_checkbox_on_when_stop_fails(monkeypatch):
+    """CORE-009: a pump_error whose child CANNOT be stopped must NOT flip the
+    monitor checkbox OFF - the child is still live, so reporting monitor OFF
+    would hide a running process and let a caller orphan it (W2-006)."""
+    status, last, check = FakeVar(), FakeVar(), FakeVar()
+    pr = process_runner.ProcessRunner("_stub_engine.py", status, last, check)
+    orig_proc = object()
+
+    def fake_stop(proc):
+        return False
+    pr._stop_proc = fake_stop
+    pr.proc = orig_proc
+    pr._gen = 1
+    status.value = "Running"
+    check.value = True
+    pr.q.put(("pump_error", 1, "stream broken"))
+    pr.poll_log()
+    assert pr.proc is orig_proc
+    assert check.value is True
+
+
+def test_eof_keeps_checkbox_on_when_stop_fails(monkeypatch):
+    """CORE-009: same guarantee for the EOF path - a failed stop keeps the
+    monitor checkbox ON, not silently OFF."""
+    status, last, check = FakeVar(), FakeVar(), FakeVar()
+    pr = process_runner.ProcessRunner("_stub_engine.py", status, last, check)
+    orig_proc = object()
+
+    def fake_stop(proc):
+        return False
+    pr._stop_proc = fake_stop
+    pr.proc = orig_proc
+    pr._gen = 1
+    status.value = "Running"
+    check.value = True
+    pr.q.put(("eof", 1))
+    pr.poll_log()
+    assert pr.proc is orig_proc
+    assert check.value is True
+
+
+def test_stop_keeps_checkbox_on_when_stop_fails(monkeypatch):
+    """CORE-009: explicit stop() returning False (live child retained) must not
+    flip the monitor checkbox OFF."""
+    status, last, check = FakeVar(), FakeVar(), FakeVar()
+    pr = process_runner.ProcessRunner("_stub_engine.py", status, last, check)
+
+    class _Alive:
+        def poll(self):
+            return None  # still running
+    orig_proc = _Alive()
+
+    def fake_stop(proc):
+        return False
+    pr._stop_proc = fake_stop
+    pr.proc = orig_proc
+    pr._gen = 1
+    status.value = "Running"
+    check.value = True
+    ok = pr.stop()
+    assert ok is False
+    assert pr.proc is orig_proc
+    assert check.value is True
 
 
 def test_eof_clears_proc_even_when_child_already_gone(monkeypatch):
@@ -164,30 +232,69 @@ def test_real_child_death_triggers_done():
         pr.stop()
 
 
-# --- engine_config.mtime_changed -------------------------------------------
+# --- engine_config.mtime_changed / load_config_revision ---------------------
 
 def test_mtime_changed_no_change(tmp_path):
     cfg = tmp_path / "cfg.json"
     cfg.write_text("{}")
-    mtime = os.path.getmtime(cfg)
-    cur, changed = engine_config.mtime_changed(str(cfg), mtime)
-    assert cur == mtime
+    token = engine_config.config_revision(str(cfg))
+    rev, changed = engine_config.mtime_changed(str(cfg), token)
+    assert rev == token
     assert changed is False
 
 
 def test_mtime_changed_detects_modification(tmp_path):
     cfg = tmp_path / "cfg.json"
     cfg.write_text("{}")
-    mtime = os.path.getmtime(cfg)
+    token = engine_config.config_revision(str(cfg))
     time.sleep(0.01)
     cfg.write_text("{2}")
-    cur, changed = engine_config.mtime_changed(str(cfg), mtime)
-    assert cur != mtime
+    rev, changed = engine_config.mtime_changed(str(cfg), token)
+    assert rev != token
     assert changed is True
 
 
 def test_mtime_changed_missing_file_keeps_last(tmp_path):
     path = str(tmp_path / "nope.json")
-    cur, changed = engine_config.mtime_changed(path, 123.0)
-    assert cur == 123.0
+    token = (123000000000, 10)
+    rev, changed = engine_config.mtime_changed(path, token)
+    assert rev == token
     assert changed is False
+
+
+def test_mtime_changed_detects_size_only_change(tmp_path, monkeypatch):
+    """CORE-006: the old mtime_changed discarded file size, so a rewrite that
+    changed only the content (same mtime_ns) ran stale. The token now compares
+    BOTH mtime and size - a size flip is detected."""
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text("{}")
+    token = engine_config.config_revision(str(cfg))
+    # Same mtime_ns, different size: simulate a same-timestamp rewrite.
+    fake_stat = type("S", (), {"st_mtime_ns": token[0], "st_size": token[1] + 1})()
+
+    def _stat(p):
+        return fake_stat
+    monkeypatch.setattr(engine_config.os, "stat", _stat)
+    rev, changed = engine_config.mtime_changed(str(cfg), token)
+    assert changed is True
+    assert rev[1] == token[1] + 1
+
+
+def test_load_config_revision_binds_token_to_parsed_bytes(tmp_path):
+    """CORE-006: the revision token returned is pinned to the exact bytes read
+    (os.fstat on the open handle), not a separate post-read stat - so a
+    concurrent rewrite between read and stat cannot bind a post-rewrite token to
+    pre-rewrite bytes."""
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text('{"window_title": "X", "poll_interval_sec": 1.0}')
+    loaded, token = engine_config.load_config_revision(
+        str(cfg), "accept_config.json")
+    assert loaded["window_title"] == "X"
+    assert token == engine_config.config_revision(str(cfg))
+
+
+def test_load_config_revision_rejects_bad_json(tmp_path):
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text("{not valid json")
+    with pytest.raises(SystemExit):
+        engine_config.load_config_revision(str(cfg), "accept_config.json")

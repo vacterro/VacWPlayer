@@ -41,12 +41,36 @@ def read_raw(path: str) -> tuple[object, str | None]:
 
 def _atomic_replace_bytes(path: str, data: bytes, promote_bak: bool) -> None:
     """Low-level primitive (T-195). Temp-write EXACT bytes -> optional bak
-    promotion -> atomic replace. Raises OSError on disk failures."""
+    promotion -> atomic replace. Raises OSError on disk failures.
+
+    W2-007: backup promotion is transactional: copy current live to
+    path.bak.tmp, close successfully, then os.replace(bak.tmp, bak).
+    Only after successful backup promotion replace live with candidate.
+    This prevents a failure during backup copy from destroying the
+    previous good backup.
+    """
     tmp = path + ".tmp"
     with open(tmp, "wb") as f:
         f.write(data)
     if promote_bak and os.path.exists(path):
-        shutil.copy2(path, path + BAK_SUFFIX)
+        bak = path + BAK_SUFFIX
+        bak_tmp = bak + ".tmp"
+        try:
+            shutil.copy2(path, bak_tmp)
+            os.replace(bak_tmp, bak)
+        except OSError:
+            # Backup promotion failed: clean up temp and abort the
+            # entire transaction so the live file is never left in
+            # an inconsistent state.
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            try:
+                os.remove(bak_tmp)
+            except OSError:
+                pass
+            raise
     os.replace(tmp, path)
 
 

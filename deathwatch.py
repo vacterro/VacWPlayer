@@ -120,24 +120,28 @@ def _client_bounds_ok(hwnd, x, y):
 
 
 def _cursor_move_point(hwnd, cfg):
-    """Screen point for the post-resurrect cursor move (T-204): the
-    configured percent of the TARGET GAME CLIENT size, converted to screen
-    coords. Deriving from the game window rect (not the virtual screen) keeps
-    the point inside the game regardless of which monitor it occupies
-    (T-CORE-007). Returns None when the point would lie outside the client
-    area or the hwnd is invalid."""
+    """Screen point for the post-resurrect cursor move (T-204/T-CORE-011):
+    the configured percent of the TARGET GAME CLIENT size (excluding borders
+    and titlebar), converted to screen coords via GetClientRect + ClientToScreen.
+
+    Returns None when the point would lie outside the client area or the
+    hwnd is invalid."""
     try:
-        left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+        # T-CORE-011: use GetClientRect (client area only, no borders/titlebar)
+        # + ClientToScreen to convert to screen coordinates.
+        left, top, right, bottom = win32gui.GetClientRect(hwnd)
         w = right - left
         h = bottom - top
         if w <= 0 or h <= 0:
             return None
+        # Convert client (0,0) to screen coordinates for the offset.
+        sx, sy = win32gui.ClientToScreen(hwnd, (0, 0))
         pct_x = cfg.get("cursor_move_x_pct", 75)
         pct_y = cfg.get("cursor_move_y_pct", 25)
-        x = left + int(pct_x * w / 100)
-        y = top + int(pct_y * h / 100)
-        # Require the point lies inside the current window rect (inclusive).
-        if not (left <= x < right and top <= y < bottom):
+        x = sx + int(pct_x * w / 100)
+        y = sy + int(pct_y * h / 100)
+        # Require the point lies inside the current client area.
+        if not (sx <= x < sx + w and sy <= y < sy + h):
             return None
         return x, y
     except Exception:
@@ -183,37 +187,141 @@ def _move_cursor_tap(hwnd, x, y, hold_ms):
 def _send_key_tap(hwnd, vk):
     """Real keydown+keyup of a virtual-key code (T-204). Refuses on None and
     JIT-checks foreground immediately before DOWN (T-CORE-007). Guarantees
-    UP in finally after any successful DOWN."""
+    UP in finally after any successful DOWN (T-CORE-011)."""
     if not vk:
         return False
+    import ctypes
+    down_sent = False
     try:
-        import ctypes
         # JIT foreground check immediately before hardware DOWN.
         if win32gui.GetForegroundWindow() != hwnd:
             print("key tap skipped: game lost foreground before down")
             return False
         ctypes.windll.user32.keybd_event(vk, 0, 0, 0)
-        try:
-            ctypes.windll.user32.keybd_event(vk, 0, 2, 0)
-        finally:
-            # Guarantee UP even if exception occurs after DOWN.
-            pass
+        down_sent = True
+        time.sleep(0.05)
         return True
     except Exception as e:
         print(f"key tap failed: {e}")
         return False
+    finally:
+        # T-CORE-011: guarantee key-up in finally even if UP would raise.
+        if down_sent:
+            try:
+                ctypes.windll.user32.keybd_event(vk, 0, 2, 0)
+            except Exception:
+                pass
+
+
+# T-CORE-012 / W2-003 / W2-004: process-shared runtime PvP-trigger state.
+# Two mutually-exclusive sidecar files in BASE:
+#   _RUNTIME_TRIGGER_PATH          -> an ACTIVE PvP combo was last applied; its
+#                                     VK is published here.
+#   _RUNTIME_TRIGGER_INACTIVE_PATH -> the user EXPLICITLY stopped (or applied a
+#                                     config with no PvP combo); DeathWatch must
+#                                     never fall back to config.json and re-arm
+#                                     PvP. Presence of the file is the signal.
+# W2-003: file-absence used to mean BOTH "first run (never applied)" and
+# "explicitly stopped". Now an explicit stop persists the inactive marker so the
+# two are distinguishable and _pvp_trigger_vk returns None when inactive.
+# W2-004: publication is strict - _write_runtime_trigger returns True only on a
+# fully-published state and tears everything down (no stale sidecar survives) on
+# any failure, instead of swallowing the error and leaving an old file behind.
+_RUNTIME_TRIGGER_PATH = os.path.join(BASE, ".runtime_pvp_trigger")
+_RUNTIME_TRIGGER_INACTIVE_PATH = os.path.join(BASE, ".runtime_pvp_trigger_inactive")
+
+
+def _remove_if_present(path):
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+
+def _write_runtime_trigger(config_data):
+    """Publish the accepted PvP trigger state to a process-shared sidecar after a
+    successful AHK Apply (T-CORE-012). Returns True only when the state is fully
+    published; False (after tearing down any partial/stale sidecar) on failure
+    (W2-004), so the caller can fail safe instead of trusting a stale trigger.
+
+    Publishes exactly one of two states:
+      * active  : a PvP combo exists with a sendable trigger VK -> write the VK
+                  to _RUNTIME_TRIGGER_PATH and delete the inactive marker.
+      * inactive: no PvP combo (or no sendable VK) -> remove the active file and
+                  write _RUNTIME_TRIGGER_INACTIVE_PATH so DeathWatch never
+                  re-arms PvP from config.json after an explicit stop (W2-003).
+    """
+    try:
+        combos, _ = ahk_builder._active_combos(config_data)
+    except Exception:
+        # Cannot determine state -> fail safe: wipe any sidecar, report failure.
+        _clear_runtime_trigger()
+        return False
+    pvp = next((c for c in combos if c.get("tag", "").endswith("_pvp")), None)
+    if pvp is None:
+        return _set_runtime_inactive()
+    trig_list = pvp.get("triggers") or [pvp.get("trigger", "")]
+    trig = trig_list[0]
+    vk = _trigger_vk(trig)
+    if vk is None:
+        # A PvP combo exists but its trigger is not keybd_event-sendable, so the
+        # restart can never fire - record an explicit inactive state.
+        return _set_runtime_inactive()
+    try:
+        tmp = _RUNTIME_TRIGGER_PATH + ".tmp"
+        with open(tmp, "w") as f:
+            f.write(str(vk))
+        os.replace(tmp, _RUNTIME_TRIGGER_PATH)
+        _remove_if_present(_RUNTIME_TRIGGER_INACTIVE_PATH)
+        return True
+    except Exception:
+        # Write failed: tear down so no stale active file survives.
+        _remove_if_present(_RUNTIME_TRIGGER_PATH)
+        return False
+
+
+def _set_runtime_inactive():
+    """Persist an explicit 'PvP is inactive' sidecar (W2-003). DeathWatch checks
+    this BEFORE any config.json fallback, so an explicit Stop (or an Apply with no
+    PvP combo) is never silently overridden by a config PvP combo. Returns True on
+    success, False and a full teardown on failure (W2-004)."""
+    try:
+        _remove_if_present(_RUNTIME_TRIGGER_PATH)
+        with open(_RUNTIME_TRIGGER_INACTIVE_PATH, "w") as f:
+            f.write("")
+        return True
+    except Exception:
+        _remove_if_present(_RUNTIME_TRIGGER_INACTIVE_PATH)
+        return False
+
+
+def _clear_runtime_trigger():
+    """Hard wipe of ALL runtime-trigger sidecar state (T-CORE-012)."""
+    _remove_if_present(_RUNTIME_TRIGGER_PATH)
+    _remove_if_present(_RUNTIME_TRIGGER_INACTIVE_PATH)
 
 
 def _pvp_trigger_vk():
     """Virtual-key code of the active PvP combo's first trigger (T-204).
 
-    T-CORE-009: consumes ONE atomic runtime-owned last-applied PvP trigger
-    only, never derives it from an independently-read autosaved draft
-    config.json. The import path is kept minimal since deathwatch runs as a
-    separate process without access to main's _last_applied_config; it reads
-    the stable config.json (the closest available proxy) and validates it
-    through the canonical validator before dispatching.
+    W2-003: an explicit-inactive sidecar (written on Stop / no-PvP Apply) takes
+    precedence and returns None, so DeathWatch never re-arms PvP from config.json
+    after the user stopped. Otherwise prefer the process-shared runtime trigger
+    file written by the GUI after a successful AHK Apply; fall back to config.json
+    only when that file is absent (first run before any Apply).
     """
+    # W2-003: explicit inactive state wins over everything.
+    if os.path.exists(_RUNTIME_TRIGGER_INACTIVE_PATH):
+        return None
+    # Prefer the process-shared runtime trigger file (accepted last-applied).
+    try:
+        with open(_RUNTIME_TRIGGER_PATH) as f:
+            vk = int(f.read().strip())
+        if 0 < vk < 0x10000:
+            return vk
+    except (OSError, ValueError):
+        pass
+    # Fallback: derive from config.json (pre-Apply or file missing).
     try:
         with open(os.path.join(BASE, "config.json"), encoding="utf-8") as f:
             data = json.load(f)
@@ -260,9 +368,12 @@ def _wait_foreground(hwnd, timeout=3.0, settle=0.2):
     foreground check holds, plus a settle pause, makes every resurrect action
     land inside the game window. False = never became foreground (or a probe
     failed) - callers must skip, never force.
+
+    PERF-005: uses time.monotonic() for the timeout so Windows clock
+    adjustments cannot shorten/extend the wait.
     """
-    t_end = time.time() + timeout
-    while time.time() < t_end:
+    t_end = time.monotonic() + timeout
+    while time.monotonic() < t_end:
         try:
             if win32gui.GetForegroundWindow() == hwnd:
                 time.sleep(settle)
@@ -372,11 +483,13 @@ def handle_death(hwnd, cfg, templates):
         key_blocker.block_until_released()
         
     user_aborted = False
-    t_end = time.time() + wait
-    settle_time = time.time() + 2.0
-    while time.time() < t_end:
+    # PERF-005: use time.monotonic() for relative durations so Windows
+    # clock adjustments (NTP, manual) cannot shorten/extend waits.
+    t_end = time.monotonic() + wait
+    settle_time = time.monotonic() + 2.0
+    while time.monotonic() < t_end:
         time.sleep(1.0)
-        if time.time() > settle_time and not win32gui.IsIconic(hwnd) and win32gui.GetForegroundWindow() == hwnd:
+        if time.monotonic() > settle_time and not win32gui.IsIconic(hwnd) and win32gui.GetForegroundWindow() == hwnd:
             print("user manually focused game, aborting automation")
             user_aborted = True
             break
@@ -422,11 +535,15 @@ def handle_death(hwnd, cfg, templates):
                 # T-204: move the physical cursor to the configured 1/4-screen
                 # point (default top-right) and tap-hold LMB, so the champion
                 # starts walking there the moment the game is back.
-                cx, cy = _cursor_move_point(hwnd, cfg)
-                if _move_cursor_tap(hwnd, cx, cy, cfg.get("cursor_move_hold_ms", 250)):
-                    print(f"cursor moved to ({cx}, {cy}) and tapped for movement")
+                point = _cursor_move_point(hwnd, cfg)
+                if point is None:
+                    print("cursor move skipped: could not compute valid point")
                 else:
-                    print(f"cursor move to ({cx}, {cy}) skipped")
+                    cx, cy = point
+                    if _move_cursor_tap(hwnd, cx, cy, cfg.get("cursor_move_hold_ms", 250)):
+                        print(f"cursor moved to ({cx}, {cy}) and tapped for movement")
+                    else:
+                        print(f"cursor move to ({cx}, {cy}) skipped")
 
             if cfg.get("pvp_after_resurrect"):
                 # T-204: start the PvP combo right after resurrect by sending
@@ -455,7 +572,8 @@ def main(replace=False):
     # T-W2-001: validate config and resources BEFORE acquiring the single-instance
     # mutex so a bad candidate cannot destructively replace a healthy running engine.
     try:
-        cfg = load_config()
+        cfg, candidate_revision = engine_config.load_config_revision(
+            cfg_path, "deathwatch_config.json")
     except SystemExit:
         raise
     except Exception:
@@ -473,18 +591,26 @@ def main(replace=False):
         print("FATAL: death label template not found: %s" % cfg["death_label_template"])
         raise SystemExit(1)
     # Candidate ready: acquire ownership and start runtime side effects.
+    # W2-004/CORE-006: candidate_revision is already bound to the bytes parsed
+    # above (load_config_revision pins it to the open handle), so the reload
+    # tracker seeds from the validated file state, not a fresh post-replacement
+    # stat.
     single_instance.ensure_single_instance("deathwatch", replace=replace)
     single_instance.start_parent_watchdog()
     window_ctl.set_dpi_aware()
-    # T-W2-PERF-006: DeathWatch is the only engine with sub-16ms timing
-    # (quick-buy key burst ~5ms holds). Request high-resolution timer here
-    # instead of in the shared ensure_single_instance() which runs for every
-    # engine process.
-    single_instance.set_timer_resolution(1)
+    # T-W2-PERF-007: the 1ms timer resolution is NO LONGER requested for the
+    # process lifetime here. It is scoped to the short quick-buy input burst via
+    # window_ctl.press_key_burst's timer_resolution() context manager, so the
+    # whole system is not pinned to a 1ms quantum just because DeathWatch started.
     key_blocker.start(cfg.get("blocked_keys", []))
     try:
-        cfg_last_mtime = os.path.getmtime(cfg_path)
+        # W2-004: initialise from the candidate's proven revision token.
+        cfg_last_revision = (candidate_revision
+                             if candidate_revision
+                             else engine_config.config_revision(cfg_path))
         hwnd = None
+        hwnd_title = None
+        hwnd_pid = 0
         loaded_window_title = cfg["window_title"]
         loaded_digits_dir = cfg["digit_templates_dir"]
         loaded_label_path = cfg["death_label_template"]
@@ -495,7 +621,7 @@ def main(replace=False):
         print(f"watching hwnd={hwnd}, ctrl+c to stop")
         while True:
             try:
-                cfg_last_mtime, changed = engine_config.mtime_changed(cfg_path, cfg_last_mtime)
+                cfg_last_revision, changed = engine_config.mtime_changed(cfg_path, cfg_last_revision)
                 if changed:
                     # T-155/T-191: hot reload is transactional as a WHOLE and
                     # NEVER kills the healthy running engine over one bad edit.
@@ -548,14 +674,22 @@ def main(replace=False):
                     print(f"window title changed, now watching '{loaded_window_title}'")
 
                 if cfg.get("blocked_keys", []) != loaded_blocked_keys:
-                    key_blocker.stop()
-                    key_blocker.start(cfg.get("blocked_keys", []))
+                    # PERF-005: update the live hook in place - no stop()/start()
+                    # teardown, so there is never a gap where blocking is off.
+                    key_blocker.update_keys(cfg.get("blocked_keys", []))
                     loaded_blocked_keys = list(cfg.get("blocked_keys", []))
                     print(f"reloaded blocked keys: {loaded_blocked_keys}")
 
-                if not hwnd or not win32gui.IsWindow(hwnd):
+                # W2-002: bind the handle to the target's title + owning PID so a
+                # handle reclaimed by a foreign window (which still passes
+                # IsWindow) is detected and re-acquired instead of being watched.
+                if not capture.is_same_window(hwnd, hwnd_title, hwnd_pid):
+                    hwnd = None
+                if not hwnd:
                     try:
-                        hwnd = capture.find_window(cfg["window_title"])
+                        hwnd, hwnd_pid = capture.find_window_identity(
+                            cfg["window_title"])
+                        hwnd_title = cfg["window_title"]
                         print(f"acquired hwnd={hwnd}")
                     except RuntimeError:
                         time.sleep(1.0)

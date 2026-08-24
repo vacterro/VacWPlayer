@@ -8,6 +8,7 @@ import win32api
 import win32process
 
 from engine_config import quickbuy_key_vk
+import single_instance
 
 
 
@@ -148,20 +149,38 @@ def key_vk(letter):
 def press_key_burst(hwnd, vk_code, times=5, window_ms=150):
     """Send `times` real keydown/keyup presses spread across window_ms total.
 
-    Keyboard input has no coordinate to target like a click does - it always
-    goes to whichever window currently has keyboard focus. Sending it blind
-    risks it landing somewhere else entirely (a chat box, another app) if
-    BlueStacks isn't actually focused right now, so this refuses to fire in
-    that case rather than spam keys into whatever's in front.
-    """
+    W2-002: JIT-checks foreground immediately before every DOWN. Once focus
+    is lost, all remaining presses are aborted. Tracks whether each DOWN
+    succeeded and guarantees its UP in a finally block, even if focus
+    changes or an exception occurs during the hold.
+
+    T-W2-PERF-007: the ~5ms holds only track the configured interval when the
+    OS sleep quantum is ~1ms. That resolution is scoped to this burst via a
+    timer_resolution() context manager and restored the instant the burst ends,
+    instead of being held for the whole process lifetime."""
     if win32gui.GetForegroundWindow() != hwnd:
         return False
 
     interval = (window_ms / 1000.0) / times
     hold = min(0.005, interval / 2)
-    for _ in range(times):
-        win32api.keybd_event(vk_code, 0, 0, 0)
-        time.sleep(hold)
-        win32api.keybd_event(vk_code, 0, win32con.KEYEVENTF_KEYUP, 0)
-        time.sleep(max(0.0, interval - hold))
-    return True
+    sent_count = 0
+    with single_instance.timer_resolution(1):
+        for i in range(times):
+            # W2-002: JIT foreground check immediately before every DOWN.
+            if win32gui.GetForegroundWindow() != hwnd:
+                break  # abort remaining presses
+            down_sent = False
+            try:
+                win32api.keybd_event(vk_code, 0, 0, 0)
+                down_sent = True
+                sent_count += 1
+                time.sleep(hold)
+            finally:
+                # W2-002: guarantee UP in finally even if hold/sleep raises.
+                if down_sent:
+                    try:
+                        win32api.keybd_event(vk_code, 0, win32con.KEYEVENTF_KEYUP, 0)
+                    except Exception:
+                        pass
+            time.sleep(max(0.0, interval - hold))
+    return sent_count > 0

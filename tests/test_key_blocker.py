@@ -98,7 +98,7 @@ def test_block_until_released_tracks_pressed(monkeypatch):
 def test_block_pedals_for_and_unblock(monkeypatch):
     monkeypatch.setattr(kb, "_block_until", 0.0)
     kb.block_pedals_for(2.0)
-    assert kb._block_until > time.time()
+    assert kb._block_until > time.monotonic()  # PERF-005: monotonic
     kb.unblock()
     assert kb._block_until == 0.0
 

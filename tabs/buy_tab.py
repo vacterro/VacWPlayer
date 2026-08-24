@@ -24,7 +24,7 @@ class BuyTab(tk.Frame):
     def __init__(self, parent):
         super().__init__(parent, bg=TOKENS["background"])
         self.cfg_path = os.path.join(BASE, self.CONFIG_NAME)
-        cfg = load_json(self.cfg_path, self.CONFIG_NAME)
+        cfg, _status = load_json(self.cfg_path, self.CONFIG_NAME)
 
         head = tk.Frame(self, bg=TOKENS["background"])
         head.pack(fill="x", padx=4, pady=(4, 1))
@@ -158,5 +158,5 @@ class BuyTab(tk.Frame):
                 print(f"BuyTab save skipped: {e}", file=sys.stderr)
             else:
                 messagebox.showerror(Locale.tr("invalid_value"), str(e))
-            return
+            return False
         return ok
