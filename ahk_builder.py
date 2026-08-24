@@ -620,7 +620,7 @@ def _gen_header(a, target_exe, combos, afk, toggles):
             a.append("global P_afk_LastMove := 0")
             a.append("global P_afk_DetectorFault := false")
     a.append("")
-    a.append("global ParentPID := %1%")
+    a.append("global ParentPID := A_Args[1]")
     a.append("global hParent := 0")
     # W2-005: pin the ORIGINAL parent process instance with a SYNCHRONIZE handle
     # (0x00100000) so a recycled numeric PID can never keep the runtime alive

@@ -308,7 +308,8 @@ def _preflight_script(exe, script):
     """
     import tempfile
     probe = script
-    probe = probe.replace("global ParentPID := %1%", "global ParentPID := 0")
+    probe = probe.replace("global ParentPID := A_Args[1]",
+                          "global ParentPID := 0")
     probe = probe.replace("FileDelete, %A_ScriptDir%\\.ahk.pid",
                           "; preflight: pid-file write disabled")
     probe = probe.replace("FileAppend, %ahkPid%, %A_ScriptDir%\\.ahk.pid",
