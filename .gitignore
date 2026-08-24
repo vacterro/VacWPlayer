@@ -36,6 +36,7 @@ wr_runtime.ahk
 # tool output
 templates/burst_death/
 .ahk.pid
+.runtime_pvp_trigger
 .runtime_pvp_trigger_inactive
 .pytest_bt/
 config.local.json.txn
