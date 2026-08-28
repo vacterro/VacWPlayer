@@ -921,9 +921,10 @@ class VacWPlayer:
             return
         self.config = load_config()  # read-back; re-arms guard if disk invalid
         self._rebuild_ui()
-        # W2-002: an accepted import is a main-config transition - reconcile the
-        # target watchdog against the imported ON/OFF/target_exe state.
-        self._reconcile_target_watchdog()
+        # W2-002 + CORE-003: an accepted import is a main-config transition.
+        # Reconcile the target watchdog against the imported snapshot, not
+        # the mutable draft.
+        self._reconcile_target_watchdog(self.config)
         self.status_lbl.config(text=Locale.tr("import_ok"), fg=TOKENS["success"])
 
     def import_config(self):
@@ -1171,10 +1172,11 @@ class VacWPlayer:
         self.status_lbl.config(text=self._short_status(msg),
                                fg=TOKENS["success"] if ok else TOKENS["danger"])
         self._update_ahk_dot(running)
-        if ok:
-            # W2-002: an accepted Apply is a main-config transition - reconcile
-            # the target watchdog against the newly applied ON/OFF/target_exe.
-            self._reconcile_target_watchdog()
+        if ok and candidate is not None:
+            # W2-002 + CORE-003: an accepted Apply is a main-config transition.
+            # Reconcile the target watchdog against the accepted candidate,
+            # NOT the mutable draft (self.config).
+            self._reconcile_target_watchdog(candidate)
         self._applying = False
         self._applying_epoch = None
 
@@ -1185,7 +1187,7 @@ class VacWPlayer:
         msg = str(msg)
         return msg if len(msg) <= limit else msg[:limit - 1] + "…"
 
-    def _reconcile_target_watchdog(self):
+    def _reconcile_target_watchdog(self, cfg=None):
         """W2-002: reconcile the target-gone watchdog against the CURRENT
         accepted main-config state. Called at startup and after every accepted
         main-config transition (Apply success / import success).
@@ -1193,7 +1195,8 @@ class VacWPlayer:
         OFF cancels the running watcher; ON starts or retargets exactly one
         watcher. Old generations are invalidated so a superseded watcher can
         never fire shutdown after replacement."""
-        toggles = self.config.get("toggles", {})
+        source = cfg if cfg is not None else self.config
+        toggles = source.get("toggles", {})
         want = bool(toggles.get("exit_when_bs_gone", True))
         exes = [toggles.get("target_exe") or "HD-Player.exe"]
         current = getattr(self, "_target_watchdog", None)

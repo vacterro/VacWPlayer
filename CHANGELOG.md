@@ -1,6 +1,9 @@
 # Changelog
 
 
+
+## v0.3.37 (2026-08-28)
+- CORE-003 audit (T-221): main.pyw._reconcile_target_watchdog now takes an explicit config snapshot parameter (cfg). Cryptographic-level: callers in _apply_done pass the accepted candidate, and _build_all_tabs/import_config pass the freshly imported config, instead of silently reading the mutable self.config draft. GUI autosave and draft edits during an in-flight Apply can no longer disable or retarget the watchdog against unrelated state.
 ## v0.3.36 (2026-08-28)
 - CORE-002 audit (T-220): main.pyw transaction journal (config.local.json.txn) is now a mandatory precondition for either half-write. _txn_write returns True/False (no longer silently swallows OSError); save_config aborts with both halves untouched when the journal cannot be published. _txn_recover now returns an explicit enum (NONE/RECOVERED/PENDING_FAILED/INVALID_JOURNAL), and load_config refuses to merge live halves when a transaction is unresolved. Rollback failure no longer clears the journal, preserving evidence for the next startup. New tests/test_core_002_txn.py covers all 9 failure modes.
 ## v0.3.35 (2026-08-28)
