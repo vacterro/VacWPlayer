@@ -373,32 +373,25 @@ def test_parent_watchdog_keeps_watching_while_parent_alive(monkeypatch):
 
 # --- CORE-004 / PERF-001: target absence tri-state + early-exit scan ---
 
-def test_target_absent_incomplete_scan_returns_unknown(monkeypatch):
-    """CORE-004: when the target is absent but the scan is incomplete (some PID
-    unobservable), the result must be None/UNKNOWN, not False. Partial
-    observation cannot prove authoritative absence."""
-    monkeypatch.setattr(si, "_running_pids", lambda: [1, 2])
-    monkeypatch.setattr(si, "_image_name",
-                        lambda pid: {1: "protected.exe", 2: None}.get(pid))
+def test_target_absent_complete_snapshot_returns_false(monkeypatch):
+    """CORE-004: a successful complete name snapshot with no target image is
+    authoritative absence -> False, even with protected/system PIDs present."""
+    monkeypatch.setattr(si, "_snapshot_image_names",
+                        lambda: {"protected.exe", "system.exe", "svchost.exe"})
+    assert si._target_any_alive(["HD-Player.exe"]) is False
+
+
+def test_target_snapshot_failure_returns_none(monkeypatch):
+    """A genuinely failed snapshot enumeration stays None/UNKNOWN."""
+    monkeypatch.setattr(si, "_snapshot_image_names", lambda: None)
     assert si._target_any_alive(["HD-Player.exe"]) is None
 
 
-def test_target_observation_failure_stays_unknown(monkeypatch):
-    """A genuinely failed scan (EnumProcesses unavailable) stays UNKNOWN."""
-    monkeypatch.setattr(si, "_running_pids", lambda: None)
-    assert si._target_any_alive(["HD-Player.exe"]) is None
-
-
-def test_target_early_exit_on_first_match(monkeypatch):
-    """PERF-001: the first proven target match must return True immediately
-    without scanning remaining PIDs."""
-    scanned = []
-    monkeypatch.setattr(si, "_running_pids", lambda: [1, 2, 3])
-    monkeypatch.setattr(si, "_image_name",
-                        lambda pid: scanned.append(pid) or
-                        {1: "other.exe", 2: "hd-player.exe", 3: "other2.exe"}.get(pid))
+def test_target_present_snapshot_returns_true(monkeypatch):
+    """CORE-004: a snapshot containing the target image returns True."""
+    monkeypatch.setattr(si, "_snapshot_image_names",
+                        lambda: {"other.exe", "hd-player.exe", "svchost.exe"})
     assert si._target_any_alive(["HD-Player.exe"]) is True
-    assert scanned == [1, 2]  # stopped at PID 2 (match), never scanned PID 3
 
 
 def test_target_watchdog_fires_when_target_gone(monkeypatch):
@@ -412,10 +405,15 @@ def test_target_watchdog_fires_when_target_gone(monkeypatch):
     # One PID observed per scan. First scan: target present. Then: target gone
     # but the scan is fully observed (complete=True) -> False advances the
     # disappearance counter and eventually fires.
-    snap = ["hd-player.exe"] + ["other.exe"] * 20
+    snap = [{"hd-player.exe", "other.exe"}, {"other.exe", "system.exe"}]
     it = iter(snap)
-    monkeypatch.setattr(si, "_running_pids", lambda: [1])
-    monkeypatch.setattr(si, "_image_name", lambda pid: next(it))
+
+    def _next_snap():
+        try:
+            return next(it)
+        except StopIteration:
+            return {"other.exe", "system.exe"}  # repeat absent after exhausted
+    monkeypatch.setattr(si, "_snapshot_image_names", _next_snap)
     monkeypatch.setattr(si.time, "sleep", lambda s: sleeps_append.append(s))
     monkeypatch.setattr(si.os, "_exit",
                         lambda c: exited.append(c) or (_ for _ in ()).throw(SystemExit))
@@ -438,14 +436,13 @@ def test_target_watchdog_incomplete_scan_does_not_advance(monkeypatch):
     fired = []
     exited = []
     sleeps_append = []
-    # First scan: target present. Then: every later scan is incomplete
-    # (the single PID is unobservable -> None) -> pending_ticks stays 0.
+    # First scan: target present. Then: snapshot enumeration genuinely fails
+    # (None -> UNKNOWN) -> pending_ticks stays 0.
     calls = [0]
-    monkeypatch.setattr(si, "_running_pids", lambda: [1])
     monkeypatch.setattr(
-        si, "_image_name",
-        lambda pid: (calls.__setitem__(0, calls[0] + 1) or
-                     ("hd-player.exe" if calls[0] == 1 else None)))
+        si, "_snapshot_image_names",
+        lambda: (calls.__setitem__(0, calls[0] + 1) or
+                 ({"hd-player.exe"} if calls[0] == 1 else None)))
     monkeypatch.setattr(si.time, "sleep", lambda s: sleeps_append.append(s))
     monkeypatch.setattr(si.os, "_exit",
                         lambda c: exited.append(c) or (_ for _ in ()).throw(SystemExit))
@@ -455,6 +452,49 @@ def test_target_watchdog_incomplete_scan_does_not_advance(monkeypatch):
                              min_uptime_sec=6.0, hard_exit_timeout_sec=4.0)
     real_sleep(0.3)
     assert fired == [] and exited == [], "UNKNOWN observations must not fire"
+
+
+def test_target_unrelated_protected_process_does_not_block_absent(monkeypatch):
+    """CORE-004: unrelated protected/system processes in the snapshot do not
+    prevent a proven-absent result (False), unlike the old per-PID-open scan
+    where one unobservable PID poisoned the whole scan to UNKNOWN."""
+    monkeypatch.setattr(
+        si, "_snapshot_image_names",
+        lambda: {"system.exe", "svchost.exe", "protected.exe", "winlogon.exe"})
+    assert si._target_any_alive(["HD-Player.exe"]) is False
+
+
+def test_target_absent_ticks_fire_despite_protected_processes(monkeypatch):
+    """CORE-004: after the target was seen, two proven-absent ticks fire
+    shutdown even when protected/system processes populate the snapshot."""
+    import time as _time
+    real_sleep = _time.sleep
+    fired = []
+    exited = []
+    sleeps_append = []
+    calls = [0]
+    monkeypatch.setattr(
+        si, "_snapshot_image_names",
+        lambda: (calls.__setitem__(0, calls[0] + 1) or
+                 ({"hd-player.exe"} if calls[0] == 1
+                  else {"system.exe", "svchost.exe", "protected.exe"})))
+    monkeypatch.setattr(si.time, "sleep", lambda s: sleeps_append.append(s))
+    monkeypatch.setattr(si.os, "_exit",
+                        lambda c: exited.append(c) or (_ for _ in ()).throw(SystemExit))
+
+    si.start_target_watchdog(["HD-Player.exe"], lambda: fired.append(1),
+                             interval_sec=3.0, grace_ticks=2,
+                             min_uptime_sec=6.0, hard_exit_timeout_sec=4.0)
+    deadline = _time.time() + 3.0
+    while fired != [1] and _time.time() < deadline:
+        real_sleep(0.01)
+    assert len(fired) == 1
+
+
+def test_target_snapshot_empty_returns_false(monkeypatch):
+    """CORE-004: an empty successful snapshot is authoritative absence."""
+    monkeypatch.setattr(si, "_snapshot_image_names", lambda: set())
+    assert si._target_any_alive(["HD-Player.exe"]) is False
 
 
 def test_target_watchdog_cancel_stops_firing(monkeypatch):
@@ -469,11 +509,10 @@ def test_target_watchdog_cancel_stops_firing(monkeypatch):
     # this would fire after grace_ticks. Real interval sleep (NOT patched) so
     # stop() below deterministically lands before the first fire cycle.
     calls = [0]
-    monkeypatch.setattr(si, "_running_pids", lambda: [1])
     monkeypatch.setattr(
-        si, "_image_name",
-        lambda pid: (calls.__setitem__(0, calls[0] + 1) or
-                     ("hd-player.exe" if calls[0] == 1 else "other.exe")))
+        si, "_snapshot_image_names",
+        lambda: (calls.__setitem__(0, calls[0] + 1) or
+                 ({"hd-player.exe"} if calls[0] == 1 else {"other.exe"})))
     monkeypatch.setattr(si.os, "_exit",
                         lambda c: exited.append(c) or (_ for _ in ()).throw(SystemExit))
 

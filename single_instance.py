@@ -100,33 +100,86 @@ def _image_name(pid):
         win32api.CloseHandle(handle)
 
 
+def _snapshot_image_names():
+    """All process image names via Toolhelp snapshot.
+
+    CORE-004: enumerating names through CreateToolhelp32Snapshot(TH32CS_
+    SNAPPROCESS) + Process32First/Process32Next does NOT require opening
+    every process, so an unrelated protected/inaccessible PID cannot poison
+    the scan. Returns a set of lowercased image names on a successful complete
+    enumeration, or None when the enumeration as a whole fails (genuine
+    scanner-level failure -> UNKNOWN, fail closed)."""
+    import ctypes
+    from ctypes import wintypes
+    TH32CS_SNAPPROCESS = 0x00000002
+    INVALID_HANDLE_VALUE = -1
+
+    class PROCESSENTRY32W(ctypes.Structure):
+        _fields_ = [
+            ("dwSize", wintypes.DWORD),
+            ("cntUsage", wintypes.DWORD),
+            ("th32ProcessID", wintypes.DWORD),
+            ("th32DefaultHeapID", ctypes.POINTER(wintypes.ULONG)),
+            ("th32ModuleID", wintypes.DWORD),
+            ("cntThreads", wintypes.DWORD),
+            ("th32ParentProcessID", wintypes.DWORD),
+            ("pcPriClassBase", ctypes.c_long),
+            ("dwFlags", wintypes.DWORD),
+            ("szExeFile", ctypes.c_wchar * 260),
+        ]
+
+    kernel32 = ctypes.windll.kernel32
+    create_snapshot = kernel32.CreateToolhelp32Snapshot
+    create_snapshot.restype = wintypes.HANDLE
+    create_snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+    process32_first = kernel32.Process32FirstW
+    process32_first.argtypes = [wintypes.HANDLE, ctypes.POINTER(PROCESSENTRY32W)]
+    process32_first.restype = wintypes.BOOL
+    process32_next = kernel32.Process32NextW
+    process32_next.argtypes = [wintypes.HANDLE, ctypes.POINTER(PROCESSENTRY32W)]
+    process32_next.restype = wintypes.BOOL
+
+    snap = create_snapshot(TH32CS_SNAPPROCESS, 0)
+    if snap is None or snap == ctypes.c_void_p(INVALID_HANDLE_VALUE).value:
+        logger.warning("CreateToolhelp32Snapshot failed")
+        return None
+    try:
+        entry = PROCESSENTRY32W()
+        entry.dwSize = ctypes.sizeof(PROCESSENTRY32W)
+        if not process32_first(snap, ctypes.byref(entry)):
+            return None  # enumeration as a whole failed -> UNKNOWN
+        names = set()
+        while True:
+            name = entry.szExeFile
+            if name:
+                names.add(name.lower())
+            if not process32_next(snap, ctypes.byref(entry)):
+                break
+        return names
+    finally:
+        kernel32.CloseHandle(snap)
+
+
 def _target_any_alive(exe_names):
     """True / False / None (UNKNOWN).
 
-    CORE-004: an incomplete scan (some PID unobservable) can never prove the
-    target absent - return None. Only a fully-observed no-match returns False.
-    PERF-001: the target-name test is merged into the PID scan with an
-    early-exit on the first proven match - no full-table name-set build in the
-    healthy already-seen-alive case.
+    CORE-004: the process table is enumerated ONCE via Toolhelp snapshot, so
+    name comparison does not require opening every process. A protected or
+    inaccessible unrelated PID can no longer poison a no-match scan into
+    UNKNOWN. None is reserved for a genuine scanner-level enumeration failure.
+    PERF-001: the target-name test is merged into the snapshot scan with an
+    early-exit on the first proven match.
     """
     if not exe_names:
         return True
     lower = {n.lower() for n in exe_names if n}
     if not lower:
         return True
-    pids = _running_pids()
-    if pids is None:
-        return None
-    complete = True
-    for pid in pids:
-        name = _image_name(pid)
-        if name is None:
-            complete = False
-            continue
-        if name in lower:
-            return True  # PERF-001: early-exit on first proven match
-    if not complete:
-        return None  # CORE-004: partial observation cannot prove absence
+    names = _snapshot_image_names()
+    if names is None:
+        return None  # genuine scanner-level failure -> UNKNOWN
+    if names & lower:
+        return True
     return False
 
 

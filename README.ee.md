@@ -5,7 +5,7 @@
 
 # VacWPlayer
 
-**v0.3.35** — [Muudatused](CHANGELOG.md)
+**v0.3.38** — [Muudatused](CHANGELOG.md)
 
 Üks vanaaegse teemaga GUI kogu Wild Rifti tööriistakomplektile: pedaalide kombod, meistripõhised rotatsioonid, automaatne minimeerimine surma korral ja automaatne jätkamine pärast mängu – juhitav "super AHK" koos kasutajaliidesega, ilma skriptide käsitsi redigeerimiseta.
 

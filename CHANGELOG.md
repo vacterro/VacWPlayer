@@ -2,6 +2,9 @@
 
 
 
+
+## v0.3.38 (2026-08-28)
+- CORE-004 audit (T-222): single_instance._target_any_alive now enumerates process image names via Toolhelp CreateToolhelp32Snapshot + Process32First/Process32Next instead of opening every PID. A protected or inaccessible unrelated process can no longer poison a no-match scan into UNKNOWN, so exit_when_bs_gone fires reliably after the emulator exits. Snapshot-enumeration failure alone returns None (genuine scanner failure). Existing watchdog tri-state semantics preserved.
 ## v0.3.37 (2026-08-28)
 - CORE-003 audit (T-221): main.pyw._reconcile_target_watchdog now takes an explicit config snapshot parameter (cfg). Cryptographic-level: callers in _apply_done pass the accepted candidate, and _build_all_tabs/import_config pass the freshly imported config, instead of silently reading the mutable self.config draft. GUI autosave and draft edits during an in-flight Apply can no longer disable or retarget the watchdog against unrelated state.
 ## v0.3.36 (2026-08-28)
