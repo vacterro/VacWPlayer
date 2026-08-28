@@ -4,6 +4,9 @@
 
 
 
+
+## v0.3.40 (2026-08-28)
+- W2-001 audit (T-225): main.pyw Apply/DeathBuy/Stop is now a monotonic request stream. Every intent bumps the engine generation. A busy Apply/DeathBuy captures the latest intent as a pending request (full Apply supersedes DeathBuy, repeated requests coalesce to latest) instead of being dropped. A newer Stop bumps the generation so the older Apply/DeathBuy completion cannot kill the new runtime, and cancels any pending restart. _apply_done and _stop_engine_done drain the pending request after committing. New tests/test_main_ordering.py covers busy-retain, coalesce-to-latest, full-Apply-supersedes-DeathBuy, stop-cancels-pending, and stop-shares-_applying.
 ## v0.3.39 (2026-08-28)
 - CORE-005 audit (T-223): deathwatch.py runtime PvP sidecar publication is now crash-safe. _remove_if_present distinguishes absent (returns False) from real deletion failure (raises OSError). _set_runtime_inactive publishes the inactive marker FIRST (reader is fail-safe even if subsequent stale-active remove fails). _write_runtime_trigger requires successful removal of the inactive marker before reporting True; a failed remove reports False without erasing the active file. On active-write failure, an authoritative inactive marker is durably published. New tests/test_runtime_trigger.py covers all 6 audit regression cases.
 ## v0.3.38 (2026-08-28)

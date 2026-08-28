@@ -542,6 +542,11 @@ class VacWPlayer:
         self._engine_epoch = 0
         # W2-010: separate active-runtime truth from last-applied-for-recovery.
         self._active_runtime_config = None
+        # W2-001: pending request captured while another Apply/DeathBuy/Stop
+        # is in flight. Latest intent wins; a pending full Apply supersedes
+        # a pending DeathBuy. Drained by the next apply/stop completion.
+        # Shapes: ("apply", candidate) | ("deathbuy", base) | ("stop",)
+        self._pending_request = None
 
         self.root = TkinterDnD.Tk()
         self.root.title("VacWPlayer")
@@ -1049,13 +1054,24 @@ class VacWPlayer:
         self.ahk_dot.itemconfig(self.ahk_dot_id, fill=color)
 
     def apply_and_start(self):
+        # W2-001: an in-flight Apply captures the latest draft as a pending
+        # request instead of dropping it. A pending full Apply supersedes any
+        # pending DeathBuy refresh.
         if self._applying:
+            # W2-001: coalesce to latest state. A pending full Apply is
+            # refreshed with the newest draft; a pending DeathBuy is
+            # superseded by the full Apply.
+            self.collect_config()
+            pending_candidate = copy.deepcopy(self.config)
+            self._pending_request = ("apply", pending_candidate)
             return
+        with self._engine_lock:
+            self._engine_epoch += 1
+            epoch = self._engine_epoch
         self._applying = True
         # CORE-004: this generation owns _applying; the same epoch flows through
         # the worker and the finalization callback so a stale callback can only
         # release the flag if it is still the owning generation.
-        epoch = self._engine_epoch
         self._applying_epoch = epoch
         self.collect_config()
         # T-185: freeze ONE immutable candidate on the main thread. The same
@@ -1091,9 +1107,16 @@ class VacWPlayer:
         epoch gate, same generate_and_run.
         """
         if self._applying:
+            # A pending full Apply already covers this DeathBuy intent.
+            if not self._pending_is_apply:
+                base = (self._active_runtime_config or self._last_applied_config
+                        or self.config)
+                self._pending_request = ("deathbuy", copy.deepcopy(base))
             return
+        with self._engine_lock:
+            self._engine_epoch += 1
+            epoch = self._engine_epoch
         self._applying = True
-        epoch = self._engine_epoch
         self._applying_epoch = epoch
         base = (self._active_runtime_config or self._last_applied_config
                 or self.config)
@@ -1179,6 +1202,7 @@ class VacWPlayer:
             self._reconcile_target_watchdog(candidate)
         self._applying = False
         self._applying_epoch = None
+        self._drain_pending()
 
     @staticmethod
     def _short_status(msg, limit=64):
@@ -1223,9 +1247,18 @@ class VacWPlayer:
         # + retry) runs off-Tk. The UI paints "Stopping…" immediately and the
         # worker marshals the authoritative result back via root.after, so a
         # degraded identity path can never freeze the window.
+        if self._applying:
+            # Stop supersedes any pending restart; the in-flight op observes
+            # the new epoch and bails out without committing truth.
+            self._pending_request = ("stop",)
+            with self._engine_lock:
+                self._engine_epoch += 1
+            return
         with self._engine_lock:
             self._engine_epoch += 1
             epoch = self._engine_epoch
+        self._applying = True
+        self._applying_epoch = epoch
 
         def _worker():
             try:
@@ -1265,6 +1298,53 @@ class VacWPlayer:
                 self._update_ahk_dot("unknown")
             else:
                 self._update_ahk_dot(ahk_is)
+        self._applying = False
+        self._applying_epoch = None
+        self._drain_pending()
+
+    def _drain_pending(self):
+        """W2-001: drain pending. Safe when _pending_request is unset (test
+        fixtures that bypass __init__ still hit this path)."""
+        req = getattr(self, "_pending_request", None)
+        if req is None:
+            return
+        self._pending_request = None
+        kind, arg = req
+        with self._engine_lock:
+            self._engine_epoch += 1
+            epoch = self._engine_epoch
+        if kind == "stop":
+            self._applying = True
+            self._applying_epoch = epoch
+            self._engine_should_run = False
+
+            def _worker():
+                try:
+                    with self._engine_lock:
+                        res = ahk_generator.stop_ahk()
+                except Exception as e:
+                    print("stop_engine worker failed: %s" % e, file=sys.stderr)
+                    res = "UNKNOWN_IDENTITY"
+                try:
+                    self.root.after(0, self._stop_engine_done, res, epoch)
+                except tk.TclError:
+                    pass
+
+            threading.Thread(target=_worker, daemon=True).start()
+            return
+        # apply / deathbuy
+        self._applying = True
+        self._applying_epoch = epoch
+        self._engine_should_run = True
+        self.status_lbl.config(text=Locale.tr("generating"), fg=TOKENS["warning"])
+        threading.Thread(target=self._apply_worker, args=(arg, epoch),
+                         daemon=True).start()
+
+    @property
+    def _pending_is_apply(self):
+        """W2-001: True when the pending request is a full Apply."""
+        req = getattr(self, "_pending_request", None)
+        return req is not None and req[0] == "apply"
 
     def _engine_watchdog(self):
         # PERF-002: liveness probe runs off-Tk when the cheap fast-path
