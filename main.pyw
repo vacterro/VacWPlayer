@@ -1580,6 +1580,18 @@ class VacWPlayer:
         else:
             ahk_is = ahk_generator.is_running()
             self._update_ahk_dot(ahk_is if ahk_is is not None else "unknown")
+        # W2-002: publish inactive idempotently at shutdown. stop_ahk only
+        # stops the process; the inactive sidecar is what makes the reader
+        # fail-safe. Idempotent across atexit's second-call pattern.
+        if ahk_stopped:
+            try:
+                import deathwatch
+                if not deathwatch._set_runtime_inactive():
+                    print("config_store: WARNING - PvP runtime inactive not "
+                          "persisted at shutdown", file=sys.stderr)
+            except Exception as e:
+                print("config_store: WARNING - PvP inactive write failed at "
+                      "shutdown: %s" % e, file=sys.stderr)
         # Exit cleanup: remove orphaned temp files
         ahk_generator.cleanup_temp_ahk_files()
         return ahk_stopped and children_stopped
@@ -1668,6 +1680,13 @@ class VacWPlayer:
         if self.tray_icon:
             self.tray_icon.stop()
         self.stop_everything()
+        # W2-002: belt-and-braces inactive publish in case stop_everything
+        # bailed out before the AHK-stopped branch (force quit, etc.).
+        try:
+            import deathwatch
+            deathwatch._set_runtime_inactive()
+        except Exception:
+            pass
         self.root.after(0, self.root.destroy)
 
     def run(self):
@@ -1677,6 +1696,15 @@ class VacWPlayer:
 if __name__ == "__main__":
     import engine_config
     engine_config.setup_logging()
+    # W2-002: publish inactive fail-safe BEFORE any auto-starting DeathWatch
+    # child can read a stale sidecar from a prior session. Idempotent and
+    # safe even if deathwatch module import fails.
+    try:
+        import deathwatch
+        deathwatch._set_runtime_inactive()
+    except Exception as e:
+        print("config_store: startup inactive publish failed: %s" % e,
+              file=sys.stderr)
     single_instance.ensure_single_instance("wr_assistant", replace=True)
     app = VacWPlayer()
     atexit.register(app.stop_everything)

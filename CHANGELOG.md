@@ -5,6 +5,9 @@
 
 
 
+
+## v0.3.41 (2026-08-28)
+- W2-002 audit (T-226): main.pyw publishes the runtime-PvP inactive sidecar idempotently at startup (before any auto-starting DeathWatch child), at the end of stop_everything (after a proven AHK stop), and in quit_app. A stale active trigger from a prior session can no longer be consumed by DeathWatch before a current-session Apply succeeds; only a successful current-session Apply activates a trigger. Failed startup Apply never exposes a stale trigger; normal quit leaves inactive authoritative.
 ## v0.3.40 (2026-08-28)
 - W2-001 audit (T-225): main.pyw Apply/DeathBuy/Stop is now a monotonic request stream. Every intent bumps the engine generation. A busy Apply/DeathBuy captures the latest intent as a pending request (full Apply supersedes DeathBuy, repeated requests coalesce to latest) instead of being dropped. A newer Stop bumps the generation so the older Apply/DeathBuy completion cannot kill the new runtime, and cancels any pending restart. _apply_done and _stop_engine_done drain the pending request after committing. New tests/test_main_ordering.py covers busy-retain, coalesce-to-latest, full-Apply-supersedes-DeathBuy, stop-cancels-pending, and stop-shares-_applying.
 ## v0.3.39 (2026-08-28)
