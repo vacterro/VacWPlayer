@@ -657,20 +657,64 @@ def _stop_pids(pids, wait_ms=500):
 
 def _force_kill_ahk_processes(pids):
     """Nuclear fallback: taskkill /F for PIDs that survived TerminateProcess.
-    Only called on VERIFIED PIDs. Returns True if all targets confirmed dead."""
+    Only called on VERIFIED PIDs. Returns True if all targets confirmed dead.
+    Uses pinned-handle re-verification (CORE-001): each PID is opened as a
+    PROCESS HANDLE and re-verified as owned before the destructive call, so
+    PID reuse never targets a foreign process. Terminates through the handle,
+    never by stale PID number."""
     all_dead = True
     for pid in pids:
         if not _pid_alive(pid):
             continue
         try:
-            subprocess.run(
-                ["taskkill", "/F", "/PID", str(pid)],
-                capture_output=True, creationflags=0x08000000, timeout=5)
+            h = win32api.OpenProcess(
+                win32con.PROCESS_TERMINATE | win32con.SYNCHRONIZE
+                | win32con.PROCESS_QUERY_LIMITED_INFORMATION,
+                False, pid)
+        except pywintypes.error:
+            try:
+                h_check = win32api.OpenProcess(
+                    win32con.PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+                code = win32process.GetExitCodeProcess(h_check)
+                win32api.CloseHandle(h_check)
+                if code != 259:
+                    continue
+            except Exception:
+                pass
+            all_dead = False
+            continue
+        try:
+            own = _handle_ownership(h)
+            if own == "foreign":
+                win32api.CloseHandle(h)
+                continue
+            if own == "unknown":
+                win32api.CloseHandle(h)
+                all_dead = False
+                continue
+        except pywintypes.error:
+            win32api.CloseHandle(h)
+            all_dead = False
+            continue
+        try:
+            win32api.TerminateProcess(h, 0)
+        except pywintypes.error:
+            all_dead = False
+            try:
+                win32api.CloseHandle(h)
+            except Exception:
+                pass
+            continue
+        try:
+            rc = win32event.WaitForSingleObject(h, 500)
+            if rc != 0:
+                all_dead = False
+        except pywintypes.error:
+            all_dead = False
+        try:
+            win32api.CloseHandle(h)
         except Exception:
             pass
-        time.sleep(0.2)
-        if _pid_alive(pid):
-            all_dead = False
     return all_dead
 
 
