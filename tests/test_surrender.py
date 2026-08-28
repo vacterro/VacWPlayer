@@ -33,10 +33,9 @@ def test_usable_with_cfg_decline_mode():
     assert surrender._targets_usable_with_cfg(_t("accept"), cfg) is False
 
 
-def test_usable_with_cfg_defaults_accept():
-    # No auto_accept key defaults to accept mode.
-    assert surrender._targets_usable_with_cfg(_t("accept"), {}) is True
-    assert surrender._targets_usable_with_cfg(_t("decline"), {}) is False
+def test_usable_with_cfg_defaults_decline():
+    assert surrender._targets_usable_with_cfg(_t("decline"), {}) is True
+    assert surrender._targets_usable_with_cfg(_t("accept"), {}) is False
 
 
 def test_usable_with_cfg_empty():

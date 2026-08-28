@@ -8,6 +8,8 @@ from locales import Locale
 from tabs.tab_config import load_json, update_json, resolve_monitor_state
 from engine_config import canonical_default
 
+DEATHWATCH_DEFAULTS = canonical_default("deathwatch_config.json")
+
 
 class ToolTip:
     """Hover tip that cannot enter an Enter/Leave feedback loop.
@@ -212,9 +214,9 @@ class DeathWatchTab(tk.Frame):
         params_frame2.pack(fill="x", pady=0)
         self.max_wait = tk.StringVar(value=cfg.get("max_death_wait_sec", 90.0))
         self.max_wait.trace_add("write", self._auto_save)
-        self.pedal_block_sec = tk.StringVar(value=cfg.get("pedal_block_sec", 0))
+        self.pedal_block_sec = tk.StringVar(value=cfg.get("pedal_block_sec", DEATHWATCH_DEFAULTS["pedal_block_sec"]))
         self.pedal_block_sec.trace_add("write", self._auto_save)
-        self.blocked_keys = tk.StringVar(value=",".join(cfg.get("blocked_keys", ["F13","F14","F15"])))
+        self.blocked_keys = tk.StringVar(value=",".join(cfg.get("blocked_keys", DEATHWATCH_DEFAULTS["blocked_keys"])))
         self.blocked_keys.trace_add("write", self._auto_save)
         self._locale_widgets.extend(grid_row(params_frame2, 0,
                  ("max_wait_s", self.max_wait, 6),

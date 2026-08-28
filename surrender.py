@@ -6,10 +6,12 @@ import sys
 import cv2
 
 import capture
+import engine_config
 import poller_engine
 
 BASE = os.path.dirname(__file__)
 CONFIG_PATH = os.path.join(BASE, "surrender_config.json")
+SURRENDER_DEFAULTS = engine_config.canonical_default("surrender_config.json")
 
 
 def load_config():
@@ -21,13 +23,13 @@ def build_templates(cfg):
 
 
 def _startup(cfg, targets):
-    mode = "accept" if cfg.get("auto_accept", True) else "decline"
+    mode = "accept" if cfg.get("auto_accept", SURRENDER_DEFAULTS["auto_accept"]) else "decline"
     return ("watching for window '%s' with %d surrender template(s), mode=%s, "
             "ctrl+c to stop" % (cfg["window_title"], len(targets), mode))
 
 
 def _reload(cfg, targets):
-    mode = "accept" if cfg.get("auto_accept", True) else "decline"
+    mode = "accept" if cfg.get("auto_accept", SURRENDER_DEFAULTS["auto_accept"]) else "decline"
     return "reloaded config (%d templates, mode=%s)" % (len(targets), mode)
 
 
@@ -39,7 +41,7 @@ def targets_usable(targets, cfg=None):
 
 
 def _scan(hwnd, cfg, targets):
-    action = "accept" if cfg.get("auto_accept", True) else "decline"
+    action = "accept" if cfg.get("auto_accept", SURRENDER_DEFAULTS["auto_accept"]) else "decline"
     candidates = [e for e in targets if e.get("action") == action]
     if poller_engine.has_regions(candidates):
         return poller_engine.scan_by_region(hwnd, candidates)
@@ -56,7 +58,7 @@ def _scan(hwnd, cfg, targets):
 
 def _targets_usable_with_cfg(targets, cfg):
     """W2-003: usable only when at least one target matches configured action."""
-    auto_accept = cfg.get("auto_accept", True)
+    auto_accept = cfg.get("auto_accept", SURRENDER_DEFAULTS["auto_accept"])
     action = "accept" if auto_accept else "decline"
     return bool([e for e in targets if e.get("action") == action])
 

@@ -102,7 +102,7 @@ class SurrenderTab(tk.Frame):
 
         mode_frame = tk.Frame(config_frame, bg=TOKENS["background"])
         mode_frame.pack(fill="x", pady=1)
-        self.auto_accept_var = tk.BooleanVar(value=cfg.get("auto_accept", True))
+        self.auto_accept_var = tk.BooleanVar(value=cfg.get("auto_accept", SURRENDER_DEFAULTS["auto_accept"]))
         self.auto_accept_var.trace_add("write", self._auto_save)
         self._lbl_mode = VintageLabel(mode_frame, text=Locale.tr("surrender_mode"), font=FONT_SM)
         self._lbl_mode.pack(side="left")

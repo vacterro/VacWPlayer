@@ -7,6 +7,9 @@
 
 
 
+## v0.3.43 (2026-08-28)
+- W2-004 audit (T-228): surrender runtime and GUI now use canonical ENGINE_DEFAULTS for missing auto_accept (False/decline). DeathWatch runtime and GUI now use canonical pedal_block_sec (5.0) and blocked_keys (F13/F14/F15) fallbacks while explicit values remain unchanged. Optional-field backward compatibility is preserved.
+
 ## v0.3.42 (2026-08-28)
 - W2-003 audit (T-227): single_instance.start_parent_watchdog no longer reopens a bare parent PID after pinned-identity loss. If the initial OpenProcess fails, the engine fails closed (exits); if the wait on the pinned handle errors, it fails closed instead of reopening by PID. A recycled PID can no longer attach the child to an unrelated process. New test_single_instance.py regressions: pinned-wait-failure-exits (asserting no PID reopen), initial-OpenProcess-failure-exits.
 ## v0.3.41 (2026-08-28)

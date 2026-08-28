@@ -17,6 +17,7 @@ import ahk_builder
 
 BASE = os.path.dirname(__file__)
 CONFIG_PATH = os.path.join(BASE, "deathwatch_config.json")
+DEATHWATCH_DEFAULTS = engine_config.canonical_default("deathwatch_config.json")
 
 
 def load_config():
@@ -460,7 +461,7 @@ def handle_death(hwnd, cfg, templates, hwnd_title="", hwnd_pid=0):
     the game window."""
     print("death detected")
 
-    pedal_block_sec = cfg.get("pedal_block_sec", 1.0)
+    pedal_block_sec = cfg.get("pedal_block_sec", DEATHWATCH_DEFAULTS["pedal_block_sec"])
     wants_block = pedal_block_sec > 0
 
     # === PHASE 0: Block pedals during critical death transition ===
@@ -675,7 +676,7 @@ def main(replace=False):
     # process lifetime here. It is scoped to the short quick-buy input burst via
     # window_ctl.press_key_burst's timer_resolution() context manager, so the
     # whole system is not pinned to a 1ms quantum just because DeathWatch started.
-    key_blocker.start(cfg.get("blocked_keys", []))
+    key_blocker.start(cfg.get("blocked_keys", DEATHWATCH_DEFAULTS["blocked_keys"]))
     try:
         # W2-004: initialise from the candidate's proven revision token.
         cfg_last_revision = (candidate_revision
@@ -687,7 +688,7 @@ def main(replace=False):
         loaded_window_title = cfg["window_title"]
         loaded_digits_dir = cfg["digit_templates_dir"]
         loaded_label_path = cfg["death_label_template"]
-        loaded_blocked_keys = list(cfg.get("blocked_keys", []))
+        loaded_blocked_keys = list(cfg.get("blocked_keys", DEATHWATCH_DEFAULTS["blocked_keys"]))
 
         was_dead = False
         print(f"watching for window '{loaded_window_title}'...")
@@ -746,11 +747,11 @@ def main(replace=False):
                     hwnd = None
                     print(f"window title changed, now watching '{loaded_window_title}'")
 
-                if cfg.get("blocked_keys", []) != loaded_blocked_keys:
+                if cfg.get("blocked_keys", DEATHWATCH_DEFAULTS["blocked_keys"]) != loaded_blocked_keys:
                     # PERF-005: update the live hook in place - no stop()/start()
                     # teardown, so there is never a gap where blocking is off.
-                    key_blocker.update_keys(cfg.get("blocked_keys", []))
-                    loaded_blocked_keys = list(cfg.get("blocked_keys", []))
+                    key_blocker.update_keys(cfg.get("blocked_keys", DEATHWATCH_DEFAULTS["blocked_keys"]))
+                    loaded_blocked_keys = list(cfg.get("blocked_keys", DEATHWATCH_DEFAULTS["blocked_keys"]))
                     print(f"reloaded blocked keys: {loaded_blocked_keys}")
 
                 # W2-002: bind the handle to the target's title + owning PID so a
