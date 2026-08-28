@@ -15,14 +15,13 @@ import config_store
 
 
 @pytest.fixture(autouse=True)
-def _reset_main_globals():
+def _reset_main_globals(tmp_path):
     """main module guards are process-wide globals; a test that arms one must
-    not leak it into the next (T-169 guards are module state)."""
+    not leak it into the next (T-169 guards are module state). CORE-002:
+    _TXN_FILE must not leak a retained journal into load_config calls."""
+    import main as _m
+    _m._TXN_FILE = str(tmp_path / "config.local.json.txn")
     yield
-    try:
-        import main as _m
-    except Exception:
-        return
     _m.config_write_blocked = None
     _m.local_write_blocked = None
 
