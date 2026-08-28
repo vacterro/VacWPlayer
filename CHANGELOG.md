@@ -3,6 +3,9 @@
 
 
 
+
+## v0.3.39 (2026-08-28)
+- CORE-005 audit (T-223): deathwatch.py runtime PvP sidecar publication is now crash-safe. _remove_if_present distinguishes absent (returns False) from real deletion failure (raises OSError). _set_runtime_inactive publishes the inactive marker FIRST (reader is fail-safe even if subsequent stale-active remove fails). _write_runtime_trigger requires successful removal of the inactive marker before reporting True; a failed remove reports False without erasing the active file. On active-write failure, an authoritative inactive marker is durably published. New tests/test_runtime_trigger.py covers all 6 audit regression cases.
 ## v0.3.38 (2026-08-28)
 - CORE-004 audit (T-222): single_instance._target_any_alive now enumerates process image names via Toolhelp CreateToolhelp32Snapshot + Process32First/Process32Next instead of opening every PID. A protected or inaccessible unrelated process can no longer poison a no-match scan into UNKNOWN, so exit_when_bs_gone fires reliably after the emulator exits. Snapshot-enumeration failure alone returns None (genuine scanner failure). Existing watchdog tri-state semantics preserved.
 ## v0.3.37 (2026-08-28)

@@ -37,6 +37,113 @@ def _stub_combos(monkeypatch, combos):
 
 # --- W2-004: strict, fail-safe publication --------------------------------
 
+def test_remove_if_present_distinguishes_absent_from_failure(monkeypatch, tmp_path):
+    """CORE-005: _remove_if_present returns False on absent (no exception)
+    and raises OSError on real deletion failure (so callers can fail
+    closed instead of silently treating failure as absence)."""
+    present = str(tmp_path / "present.txt")
+    absent = str(tmp_path / "absent.txt")
+    with open(present, "w") as f:
+        f.write("")
+    assert deathwatch._remove_if_present(present) is True
+    assert deathwatch._remove_if_present(absent) is False
+    # Locked-file simulation: readonly on Windows fails Delete; Linux same.
+    locked = str(tmp_path / "locked.txt")
+    with open(locked, "w") as f:
+        f.write("x")
+    import stat
+    os.chmod(locked, stat.S_IRUSR)  # read-only
+    try:
+        if os.name != "nt":
+            with pytest.raises(OSError):
+                deathwatch._remove_if_present(locked)
+    finally:
+        os.chmod(locked, stat.S_IRUSR | stat.S_IWUSR)
+        os.remove(locked)
+
+
+def test_active_publish_inactive_remove_failure_reports_false(monkeypatch, tmp_path):
+    """CORE-005: active VK writes successfully but a stale inactive file
+    cannot be deleted -> report False, do not pretend success. The reader
+    still resolves to None because the inactive marker is still there."""
+    active, inactive = _sidecar_paths(monkeypatch, tmp_path)
+    _stub_combos(monkeypatch, [{"tag": "ryze_pvp", "triggers": ["F15"]}])
+    with open(inactive, "w") as f:
+        f.write("")
+    # Force inactive remove to fail: replace the path with an unreadable dir
+    # so os.remove raises IsADirectoryError or PermissionError.
+    import stat
+    blocker = str(tmp_path / "blocker_dir")
+    os.mkdir(blocker)
+    monkeypatch.setattr(deathwatch, "_RUNTIME_TRIGGER_INACTIVE_PATH", blocker)
+    assert deathwatch._write_runtime_trigger({"mode": "ryze"}) is False
+    # Active file was written but caller is told truth.
+    assert os.path.exists(active)
+
+
+def test_inactive_publish_active_remove_failure_still_authoritative(monkeypatch, tmp_path):
+    """CORE-005: inactive is published FIRST. A subsequent failure to
+    remove the stale active file is non-fatal: the inactive marker is
+    authoritative so the reader still returns None."""
+    active, inactive = _sidecar_paths(monkeypatch, tmp_path)
+    _stub_combos(monkeypatch, [])
+    # Pre-existing active file that we cannot remove.
+    with open(active, "w") as f:
+        f.write("999")
+    blocker = str(tmp_path / "active_dir")
+    os.mkdir(blocker)
+    monkeypatch.setattr(deathwatch, "_RUNTIME_TRIGGER_PATH", blocker)
+    assert deathwatch._set_runtime_inactive() is True
+    # Inactive marker was published and is authoritative.
+    assert os.path.exists(inactive)
+    assert deathwatch._pvp_trigger_vk() is None
+
+
+def test_interruption_never_permits_stale_active_fallback(monkeypatch, tmp_path):
+    """CORE-005: a crash-equivalent interruption between active write and
+    inactive remove must leave the reader fail-safe. We simulate by
+    publishing the active file directly, then asserting _pvp_trigger_vk
+    only honors it when no inactive marker exists."""
+    active, inactive = _sidecar_paths(monkeypatch, tmp_path)
+    # State A: only active present -> reader honors it.
+    with open(active, "w") as f:
+        f.write(str(0x7E))
+    assert deathwatch._pvp_trigger_vk() == 0x7E
+    # State B: active + inactive -> reader returns None (inactive wins).
+    with open(inactive, "w") as f:
+        f.write("")
+    assert deathwatch._pvp_trigger_vk() is None
+    # State C: inactive alone -> reader returns None.
+    os.remove(active)
+    assert deathwatch._pvp_trigger_vk() is None
+
+
+def test_successful_active_transition_only_active_visible(monkeypatch, tmp_path):
+    """CORE-005: a successful active publication leaves only the active
+    sidecar; the inactive marker is gone and the reader returns the VK."""
+    active, inactive = _sidecar_paths(monkeypatch, tmp_path)
+    _stub_combos(monkeypatch, [{"tag": "ryze_pvp", "triggers": ["F15"]}])
+    with open(inactive, "w") as f:
+        f.write("")
+    assert deathwatch._write_runtime_trigger({"mode": "ryze"}) is True
+    assert os.path.exists(active)
+    assert not os.path.exists(inactive)
+    assert deathwatch._pvp_trigger_vk() == 0x7E
+
+
+def test_successful_inactive_transition_authoritative(monkeypatch, tmp_path):
+    """CORE-005: a successful inactive publication leaves only the
+    inactive marker; the reader returns None even if a stale active file
+    happens to exist elsewhere."""
+    active, inactive = _sidecar_paths(monkeypatch, tmp_path)
+    with open(active, "w") as f:
+        f.write(str(0x7E))
+    _stub_combos(monkeypatch, [])
+    assert deathwatch._set_runtime_inactive() is True
+    assert os.path.exists(inactive)
+    assert deathwatch._pvp_trigger_vk() is None
+
+
 def test_write_active_writes_vk_and_clears_inactive(monkeypatch, tmp_path):
     active, inactive = _sidecar_paths(monkeypatch, tmp_path)
     _stub_combos(monkeypatch, [{"tag": "ryze_pvp", "triggers": ["F15"]}])

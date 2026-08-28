@@ -232,10 +232,16 @@ _RUNTIME_TRIGGER_INACTIVE_PATH = os.path.join(BASE, ".runtime_pvp_trigger_inacti
 
 
 def _remove_if_present(path):
+    """Remove a file if present. Returns True when removed, False when absent.
+    Raises OSError on real deletion failure (e.g. permission denied, file
+    locked) so the caller can distinguish absent from failure (CORE-005)."""
     try:
         os.remove(path)
+        return True
+    except FileNotFoundError:
+        return False
     except OSError:
-        pass
+        raise
 
 
 def _write_runtime_trigger(config_data):
@@ -272,27 +278,54 @@ def _write_runtime_trigger(config_data):
         with open(tmp, "w") as f:
             f.write(str(vk))
         os.replace(tmp, _RUNTIME_TRIGGER_PATH)
-        _remove_if_present(_RUNTIME_TRIGGER_INACTIVE_PATH)
-        return True
-    except Exception:
-        # Write failed: tear down so no stale active file survives.
+    except OSError:
+        # Active write failed: ensure an authoritative inactive sidecar so the
+        # reader returns None, never a stale partial state (CORE-005).
         _remove_if_present(_RUNTIME_TRIGGER_PATH)
+        try:
+            _publish_inactive_file()
+        except OSError:
+            pass
         return False
+    # Active published; require successful removal of inactive before reporting
+    # True. A deletion failure here is a real cross-state ambiguity and must
+    # not be reported as success (CORE-005).
+    try:
+        _remove_if_present(_RUNTIME_TRIGGER_INACTIVE_PATH)
+    except OSError:
+        return False
+    return True
+
+
+def _publish_inactive_file():
+    """Write the inactive marker atomically. Raises OSError on real failure.
+    CORE-005: callers must publish inactive FIRST so the reader is fail-safe
+    even if a subsequent active remove fails."""
+    tmp = _RUNTIME_TRIGGER_INACTIVE_PATH + ".tmp"
+    with open(tmp, "w") as f:
+        f.write("")
+    os.replace(tmp, _RUNTIME_TRIGGER_INACTIVE_PATH)
 
 
 def _set_runtime_inactive():
     """Persist an explicit 'PvP is inactive' sidecar (W2-003). DeathWatch checks
     this BEFORE any config.json fallback, so an explicit Stop (or an Apply with no
     PvP combo) is never silently overridden by a config PvP combo. Returns True on
-    success, False and a full teardown on failure (W2-004)."""
+    success, False and a full teardown on failure (W2-004). CORE-005: inactive
+    is published FIRST so the reader is fail-safe even if a subsequent stale
+    active remove fails."""
     try:
-        _remove_if_present(_RUNTIME_TRIGGER_PATH)
-        with open(_RUNTIME_TRIGGER_INACTIVE_PATH, "w") as f:
-            f.write("")
-        return True
-    except Exception:
+        _publish_inactive_file()
+    except OSError:
         _remove_if_present(_RUNTIME_TRIGGER_INACTIVE_PATH)
         return False
+    # Inactive now authoritative; best-effort cleanup of stale active. A
+    # failure here is not a hard error - the reader still resolves to None.
+    try:
+        _remove_if_present(_RUNTIME_TRIGGER_PATH)
+    except OSError:
+        pass
+    return True
 
 
 def _clear_runtime_trigger():
