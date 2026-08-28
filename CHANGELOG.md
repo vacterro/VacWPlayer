@@ -1,5 +1,8 @@
 # Changelog
 
+
+## v0.3.36 (2026-08-28)
+- CORE-002 audit (T-220): main.pyw transaction journal (config.local.json.txn) is now a mandatory precondition for either half-write. _txn_write returns True/False (no longer silently swallows OSError); save_config aborts with both halves untouched when the journal cannot be published. _txn_recover now returns an explicit enum (NONE/RECOVERED/PENDING_FAILED/INVALID_JOURNAL), and load_config refuses to merge live halves when a transaction is unresolved. Rollback failure no longer clears the journal, preserving evidence for the next startup. New tests/test_core_002_txn.py covers all 9 failure modes.
 ## v0.3.35 (2026-08-28)
 - CORE-001 audit (T-219): ahk_generator._force_kill_ahk_processes now opens each PID as a pinned PROCESS HANDLE and re-verifies ownership via _handle_ownership before the destructive call. PID-reuse window between _pid_alive() and taskkill no longer exposes foreign processes to termination; foreign/unknown cases are now no-ops, only verified-owned targets are killed through the handle, and failed escalation returns KILL_FAILED truthfully without erasing the PID file or verified cache. New tests/test_ahk_generator.py covers owned/foreign/unknown/openprocess-denied/wait-timeout cases.
 

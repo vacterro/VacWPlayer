@@ -82,8 +82,9 @@ def _txn_write(stable_bytes, local_bytes):
         with open(tmp, "w", encoding="utf-8") as f:
             f.write(payload)
         os.replace(tmp, _TXN_FILE)
+        return True
     except OSError:
-        pass  # journal failure: degrade gracefully (local is volatile/expendable)
+        return False
 
 
 def _txn_clear():
@@ -94,26 +95,36 @@ def _txn_clear():
 
 
 def _txn_recover():
-    """W2-003: resolve a crash between the local and stable writes. The journal
-    carries the full candidate pair; commit both halves atomically so startup
-    observes a consistent state (all B or all A), never a hybrid."""
+    """W2-003 + CORE-002: resolve a crash between the local and stable writes.
+    Returns one of: NONE (no journal), RECOVERED (both halves repaired),
+    PENDING_FAILED (journal exists but I/O failed; retry next startup),
+    INVALID_JOURNAL (malformed journal data). load_config must never merge
+    live halves while PENDING_FAILED or INVALID_JOURNAL is returned."""
     import base64
     try:
         with open(_TXN_FILE, encoding="utf-8") as f:
             payload = json.load(f)
-        stable_bytes = base64.b64decode(payload["stable"])
-        local_bytes = base64.b64decode(payload["local"])
+    except FileNotFoundError:
+        return "NONE"
     except (OSError, ValueError, KeyError, TypeError):
         _txn_clear()
-        return
+        return "INVALID_JOURNAL"
+    try:
+        stable_bytes = base64.b64decode(payload["stable"])
+        local_bytes = base64.b64decode(payload["local"])
+    except (ValueError, KeyError, TypeError, base64.binascii.Error):
+        _txn_clear()
+        return "INVALID_JOURNAL"
     try:
         config_store.atomic_write_bytes(CONFIG_FILE, stable_bytes,
                                         promote_bak=False)
         config_store.atomic_write_bytes(CONFIG_LOCAL_FILE, local_bytes,
                                         promote_bak=False)
     except OSError:
-        return  # keep journal; retry on next startup
+        return "PENDING_FAILED"  # keep journal; retry on next startup
     _txn_clear()
+    return "RECOVERED"
+
 
 config_warning = None
 # W2-007: visible local volatile-state degradation ("degraded" | "restored").
@@ -213,7 +224,11 @@ def load_config():
     config_write_blocked = None
     # W2-003: resolve any interrupted two-half transaction before reading, so
     # startup never merges halves from two different committed states.
-    _txn_recover()
+    txn_result = _txn_recover()
+    if txn_result in ("PENDING_FAILED", "INVALID_JOURNAL"):
+        config_write_blocked = "txn_unresolved"
+        print("config_store: transaction unresolved (%s); running on "
+              "defaults, saving disabled" % txn_result, file=sys.stderr)
     cfg = default_config()
     data, err = config_store.read_raw(CONFIG_FILE)
     if err is None:
@@ -348,7 +363,6 @@ def load_config_merge(on_disk, cfg):
         if isinstance(cfg.get(key), dict) and isinstance(on_disk[key], dict):
             merged = dict(cfg[key])
             merged.update(on_disk[key])
-            merged.pop("enabled", None)
             cfg[key] = merged
         else:
             cfg[key] = on_disk[key]
@@ -424,8 +438,11 @@ def save_config(config, bypass_guard=False):
         return True
     # W2-003: persist the pending transaction BEFORE any half is written, so a
     # hard crash between the two atomic writes is recovered to the full pair.
-    _txn_write(stable_new_bytes if stable_changed else stable_cur_bytes,
-               local_new_bytes if local_changed else local_cur_bytes)
+    if not _txn_write(stable_new_bytes if stable_changed else stable_cur_bytes,
+                       local_new_bytes if local_changed else local_cur_bytes):
+        print("config_store: save aborted - transaction journal could not "
+              "be published", file=sys.stderr)
+        return False
     local_written = False
     try:
         # Local (volatile) half FIRST, stable half LAST (T-161).
@@ -450,8 +467,10 @@ def save_config(config, bypass_guard=False):
                 config_write_blocked = "partial_commit"
                 local_write_blocked = "partial_commit"
                 print("config_store: FATAL - rollback failed after partial "
-                      "write; write guards armed", file=sys.stderr)
-        _txn_clear()
+                      "write; write guards armed, journal retained for "
+              "next-startup repair", file=sys.stderr)
+        # CORE-002: do NOT clear the journal on rollback failure. Retain it
+        # so the next launch can attempt recovery from the durable candidate.
         return False
     _txn_clear()
     return True
