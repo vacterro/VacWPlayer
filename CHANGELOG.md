@@ -6,6 +6,9 @@
 
 
 
+
+## v0.3.42 (2026-08-28)
+- W2-003 audit (T-227): single_instance.start_parent_watchdog no longer reopens a bare parent PID after pinned-identity loss. If the initial OpenProcess fails, the engine fails closed (exits); if the wait on the pinned handle errors, it fails closed instead of reopening by PID. A recycled PID can no longer attach the child to an unrelated process. New test_single_instance.py regressions: pinned-wait-failure-exits (asserting no PID reopen), initial-OpenProcess-failure-exits.
 ## v0.3.41 (2026-08-28)
 - W2-002 audit (T-226): main.pyw publishes the runtime-PvP inactive sidecar idempotently at startup (before any auto-starting DeathWatch child), at the end of stop_everything (after a proven AHK stop), and in quit_app. A stale active trigger from a prior session can no longer be consumed by DeathWatch before a current-session Apply succeeds; only a successful current-session Apply activates a trigger. Failed startup Apply never exposes a stale trigger; normal quit leaves inactive authoritative.
 ## v0.3.40 (2026-08-28)

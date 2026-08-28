@@ -230,47 +230,36 @@ def start_parent_watchdog(interval_sec=2.0):
         pass  # parent already gone or inaccessible
 
     def _watch():
+        # W2-003: identity is bound to the PINNED handle we opened at startup.
+        # We never reinterpret a bare parent PID after identity loss: a PID
+        # reopen between exit and reopen by Windows can land on a foreign
+        # process and we would then wait forever on the wrong instance.
         if parent_handle is not None:
             try:
-                # PERF-006: block on the pinned handle until the original parent
-                # signals exit. No periodic polling/wakeups - the waitable handle
-                # is the signal, PID reuse is irrelevant because the instance is
-                # pinned. WAIT_OBJECT_0 means the original parent exited.
+                # Block on the pinned handle until the original parent
+                # signals exit. WAIT_OBJECT_0 means the original parent
+                # exited.
                 rc = win32event.WaitForSingleObject(parent_handle,
                                                     win32event.INFINITE)
                 if rc != 0:
                     # INFINITE cannot time out; a non-zero rc is a wait error.
-                    # Fall through to the bounded fail-closed retry rather than
-                    # treating an unpinned wait as "parent alive forever".
-                    raise RuntimeError(f"parent wait rc={rc:#x}")
+                    # Fail closed - the engine must not run unowned.
+                    print(f"parent {parent} wait unresolved (rc={rc:#x}) - exiting")
+                    os._exit(0)
                 print(f"parent {parent} gone - exiting")
                 os._exit(0)
             except Exception:
-                pass
+                # Pinned wait errored (handle lost, etc.). Fail closed.
+                print(f"parent {parent} wait errored - exiting")
+                os._exit(0)
             finally:
                 try:
                     win32api.CloseHandle(parent_handle)
                 except Exception:
                     pass
-        # Handle never opened, or the wait errored: parent is either already
-        # gone or inaccessible. One bounded retry; the retry result decides.
-        try:
-            handle = win32api.OpenProcess(
-                win32con.SYNCHRONIZE | win32con.PROCESS_QUERY_LIMITED_INFORMATION,
-                False, parent)
-            rc = win32event.WaitForSingleObject(handle, win32event.INFINITE)
-            win32api.CloseHandle(handle)
-            if rc == 0:
-                print(f"parent {parent} gone - exiting")
-                os._exit(0)
-            # rc != 0: the retry wait could not resolve the parent either.
-            # Fail closed - an engine that cannot verify its parent must not
-            # keep running unowned.
-            print(f"parent {parent} gone (wait unresolved) - exiting")
-            os._exit(0)
-        except Exception:
-            pass
-        print(f"parent {parent} gone (handle unavailable) - exiting")
+        # Handle never opened (initial OpenProcess failed). The original
+        # parent cannot be proven - do not reopen by bare PID. Fail closed.
+        print(f"parent {parent} handle unavailable - exiting")
         os._exit(0)
 
     t = threading.Thread(target=_watch, daemon=True)

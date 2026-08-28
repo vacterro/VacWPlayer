@@ -352,6 +352,41 @@ def test_parent_watchdog_terminates_on_parent_death(monkeypatch):
     assert exited == [0], "engine must os._exit(0) when parent dies"
 
 
+def test_parent_watchdog_pinned_wait_failure_exits_no_pid_reopen(monkeypatch):
+    """W2-003: a wait error on the pinned handle must fail closed (exit),
+    never reopen by bare PID. The original parent's PID may be recycled by
+    Windows after exit; reopening could land on a foreign process."""
+    exited = []
+    open_calls = []
+    monkeypatch.setattr(si.win32api, "OpenProcess",
+                        lambda *a: (open_calls.append(a) or 7))
+    # Pinned wait errors (non-zero rc, INFINITE cannot time out).
+    monkeypatch.setattr(si.win32event, "WaitForSingleObject", lambda h, t: 0xFFFFFFFF)
+    monkeypatch.setattr(si.win32api, "CloseHandle", lambda h: None)
+    monkeypatch.setattr(si.os, "_exit",
+                        lambda c: exited.append(c) or (_ for _ in ()).throw(SystemExit))
+
+    t = si.start_parent_watchdog(interval_sec=1.0)
+    t.join(timeout=2.0)
+    assert exited == [0], "wait error must exit (fail closed)"
+    # Only the initial pinning OpenProcess ran - NO PID reopen retry.
+    assert len(open_calls) == 1, "must not reopen by bare PID after identity loss"
+
+
+def test_parent_watchdog_initial_openprocess_failure_exits(monkeypatch):
+    """W2-003: if the initial parent OpenProcess fails, the engine must
+    fail closed (exit) instead of retrying an unverified bare PID."""
+    exited = []
+    monkeypatch.setattr(si.win32api, "OpenProcess",
+                        lambda *a: (_ for _ in ()).throw(Exception("denied")))
+    monkeypatch.setattr(si.os, "_exit",
+                        lambda c: exited.append(c) or (_ for _ in ()).throw(SystemExit))
+
+    t = si.start_parent_watchdog(interval_sec=1.0)
+    t.join(timeout=2.0)
+    assert exited == [0], "initial pinning failure must exit (fail closed)"
+
+
 def test_parent_watchdog_keeps_watching_while_parent_alive(monkeypatch):
     """A live parent (the blocking wait does not return) must NOT terminate
     the engine."""
