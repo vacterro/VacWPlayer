@@ -1,15 +1,26 @@
-<img width="922" height="566" alt="clipboard_20260812_220242_c91e7ad6" src="https://github.com/user-attachments/assets/98550093-7335-4606-8741-04cc3a6dac33" />
-
-
-🇪🇪 [Eesti](README.ee.md) | 🇷🇺 [Русский](README.ru.md) | 🇺🇸 **English** | 👴 [Дед-Мод](README.ded.md) | 🇯🇵 [日本語](README.ja.md)
+<div align="center">
 
 # VacWPlayer
 
-**v0.3.43** — [Changelog](CHANGELOG.md)
+**A vintage Windows control panel for a Wild Rift input-automation toolkit.**
 
-One vintage-themed GUI over the whole Wild Rift toolkit: pedal combos, per-champion
-rotations, death auto-minimize, and post-game auto-continue — a controllable "super
-AHK" with a UI, no hand-editing scripts.
+![Version](https://img.shields.io/badge/version-0.3.43-D4B86A?style=flat-square)
+![Platform](https://img.shields.io/badge/platform-Windows-0078D4?style=flat-square)
+![Python](https://img.shields.io/badge/Python-3.11-3776AB?style=flat-square&logo=python&logoColor=white)
+![AutoHotkey](https://img.shields.io/badge/AutoHotkey-v1-334455?style=flat-square)
+
+[Changelog](CHANGELOG.md) · [Wiki](docs/wiki/) · [Issues](https://github.com/vacterro/VacWPlayer/issues)
+
+<img width="922" height="566" alt="VacWPlayer main interface" src="https://github.com/user-attachments/assets/98550093-7335-4606-8741-04cc3a6dac33" />
+
+**English** · [Eesti](README.ee.md) · [Русский](README.ru.md) · [日本語](README.ja.md) · [Дед-Мод](README.ded.md)
+
+</div>
+
+VacWPlayer puts pedal combos, per-champion rotations, death handling, post-game continuation, and related automation behind one configurable GUI instead of requiring hand-edited scripts.
+
+> [!WARNING]
+> This project automates game input. Using automation software with Wild Rift can violate Riot Games' Terms of Service and may result in account penalties. Review the disclaimer below before use.
 
 ## Features
 
